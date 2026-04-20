@@ -226,6 +226,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private readonly observedUserTextByPartId = new Map<string, string>();
   private readonly observedUserMessagePartIds = new Map<string, Set<string>>();
   private readonly pendingWechatPromptMirrorSuppressions: PendingWechatPromptMirrorSuppression[] = [];
+  private readonly reasoningPartIds = new Set<string>();
   private readonly recentSdkEventObservations = new Map<
     string,
     { streamName: SdkEventStreamName; observedAtMs: number }
@@ -1010,7 +1011,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       void this.outputBatcher.flushNow()
         .catch(() => undefined)
         .then(() => {
-          const summary = this.outputBatcher.getRecentSummary(500);
+          // WeChat single message limit is ~2048 chars, request up to 2000
+          const summary = this.outputBatcher.getRecentSummary(2000);
           this.setStatus("idle");
           if (summary && summary !== "(no output)") {
             this.emit({
@@ -1222,6 +1224,13 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const part = isRecord(properties.part) ? properties.part : undefined;
+
+    // Track reasoning parts to filter them out later
+    if (part && part.type === "reasoning" && part.id) {
+      this.reasoningPartIds.add(part.id);
+      return;
+    }
+
     if (this.isVisibleTextPart(part)) {
       this.trackObservedOpenCodeMessagePart({
         messageId: part.messageID,
@@ -1249,6 +1258,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     const partId = this.extractPartId(properties, part);
     if (!partId) {
+      return;
+    }
+
+    // Skip reasoning parts
+    if (this.reasoningPartIds.has(partId)) {
       return;
     }
 
@@ -1320,6 +1334,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     if (!delta || !partId || !this.syncTrackedSessionFromEvent(sessionId)) {
+      return;
+    }
+
+    // Skip reasoning part deltas
+    if (this.reasoningPartIds.has(partId)) {
       return;
     }
 

@@ -722,12 +722,15 @@ export function summarizeOutput(text: string, maxLength = 280): string {
     return "(no output)";
   }
 
-  const summary = normalized.slice(-6).join("\n");
-  if (summary.length <= maxLength) {
-    return summary;
+  let result = "";
+  for (const line of normalized) {
+    const next = result ? `${result}\n${line}` : line;
+    if (next.length > maxLength) {
+      break;
+    }
+    result = next;
   }
-
-  return summary.slice(summary.length - maxLength);
+  return result || "(output truncated)";
 }
 
 export function formatStatusReport(
@@ -893,9 +896,9 @@ export function formatMirroredUserInputMessage(
       : adapter === "claude"
         ? "Local Claude input"
         : adapter === "opencode"
-          ? "Local OpenCode input"
+          ? "Ask"
           : "Local input";
-  return `${label}:\n${truncatePreview(text, 500)}`;
+  return `${label}: ${truncatePreview(text, 500)}`;
 }
 
 export function formatFinalReplyMessage(
@@ -920,20 +923,20 @@ const OPENCODE_TRANSIENT_NOTICE_RES = [
 ];
 const OPENCODE_REASONING_LINE_RES = [
   /\bCLAUDE\.md\b/i,
-  /\bNo tool needed\.?$/i,
-  /\bThe user said\b/i,
-  /\bI need to (?:respond|reply|answer|tell the user)\b/i,
-  /\bWe need to (?:respond|reply|answer)\b/i,
-  /\bI should\b/i,
-  /\bI'll provide\b/i,
-  /^Let me (?:directly )?(?:answer|respond)\b/i,
-  /根据系统提示/i,
-  /系统提示中说/i,
-  /我需要(?:告诉用户|回答|回复)/,
-  /我们需要(?:回答|回复)/,
-  /^让我直接(?:回答|回复)/,
-  /^我要直接(?:回答|回复)/,
-  /^用户(?:说|问)了/,
+  // /\bNo tool needed\.?$/i,
+  // /\bThe user said\b/i,
+  // /\bI need to (?:respond|reply|answer|tell the user)\b/i,
+  // /\bWe need to (?:respond|reply|answer)\b/i,
+  // /\bI should\b/i,
+  // /\bI'll provide\b/i,
+  // /^Let me (?:directly )?(?:answer|respond)\b/i,
+  // /根据系统提示/i,
+  // /系统提示中说/i,
+  // /我需要(?:告诉用户|回答|回复)/,
+  // /我们需要(?:回答|回复)/,
+  // /^让我直接(?:回答|回复)/,
+  // /^我要直接(?:回答|回复)/,
+  // /^用户(?:说|问)了/,
 ];
 
 export function sanitizeWechatFinalReplyText(
@@ -945,12 +948,18 @@ export function sanitizeWechatFinalReplyText(
     return normalized;
   }
 
+  const lines = normalized.split("\n");
+  // Remove first line (user question echo)
+  if (lines.length > 1) {
+    lines.shift();
+  }
+
   const keptLines: string[] = [];
   let dropNextContextLine = false;
   let sawDroppedMeta = false;
   let tailStartIndex = 0;
 
-  for (const rawLine of normalized.split("\n")) {
+  for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) {
       keptLines.push("");
