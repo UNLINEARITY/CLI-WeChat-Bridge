@@ -169,6 +169,9 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (!arg) {
+      continue;
+    }
     const next = argv[i + 1];
 
     if (arg === "--help" || arg === "-h") {
@@ -270,7 +273,9 @@ async function stopExistingBridge(
   } catch (error) {
     if (isPidAlive(pid)) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to stop existing bridge pid=${pid}: ${message}`);
+      throw new Error(`Failed to stop existing bridge pid=${pid}: ${message}`, {
+        cause: error,
+      });
     }
   }
 

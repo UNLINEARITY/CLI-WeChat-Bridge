@@ -31,6 +31,7 @@ type CodexPendingUserInputRequest = shared.CodexPendingUserInputRequest;
 type CodexQueuedNotification = shared.CodexQueuedNotification;
 type CodexRpcPendingRequest = shared.CodexRpcPendingRequest;
 type CodexRpcRequestId = shared.CodexRpcRequestId;
+type SpawnTarget = shared.SpawnTarget;
 type CodexThreadAnnouncementSignal =
   | "status_changed"
   | "thread_started"
@@ -1002,7 +1003,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.pendingTurnThreadId = null;
       this.interruptPendingTurnStart = false;
       this.state.activeTurnOrigin = undefined;
-      if (!this.activeTurn && this.state.status === "busy") {
+      if (!this.activeTurn && this.getState().status === "busy") {
         this.setStatus("idle");
       }
       throw error;
@@ -1124,7 +1125,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     } catch (err) {
       await this.stopAppServer();
       const details = this.describeAppServerLog();
-      throw new Error(`Failed to start Codex app-server: ${String(err)}${details}`);
+      throw new Error(`Failed to start Codex app-server: ${String(err)}${details}`, {
+        cause: err,
+      });
     }
   }
 
@@ -2462,7 +2465,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return null;
     }
 
-    return deltaFallback[deltaFallback.length - 1];
+    return deltaFallback[deltaFallback.length - 1] ?? null;
   }
 
   private recordTurnActivity(turnId: string, timestamp: string | number = Date.now()): void {

@@ -30,6 +30,7 @@ import {
   truncatePreview,
 } from "./bridge-utils.ts";
 import * as shared from "./bridge-adapters.shared.ts";
+import { LOCAL_CLIENT_PROTOCOL_VERSION } from "../runtime/runtime-types.ts";
 
 type AdapterOptions = shared.AdapterOptions;
 type EventSink = shared.EventSink;
@@ -122,6 +123,8 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         }
 
         this.endpoint = {
+          protocolVersion: LOCAL_CLIENT_PROTOCOL_VERSION,
+          runtimeKind: "legacy_adapter",
           instanceId: `${process.pid}-${Date.now().toString(36)}`,
           kind: this.options.kind,
           port: address.port,
@@ -134,7 +137,8 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           transcriptPath: this.state.transcriptPath,
           startedAt: nowIso(),
         };
-        writeLocalCompanionEndpoint(this.endpoint);
+        const endpoint = this.endpoint;
+        writeLocalCompanionEndpoint(endpoint);
         resolve();
       });
     });

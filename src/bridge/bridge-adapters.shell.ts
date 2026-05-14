@@ -71,7 +71,7 @@ export class ShellAdapter extends AbstractPtyAdapter {
     return env;
   }
 
-  protected afterStart(): void {
+  protected override afterStart(): void {
     if (this.options.profile) {
       this.writeToPty(
         `${buildShellProfileCommand(this.options.profile, this.getShellRuntime().family)}\r`,

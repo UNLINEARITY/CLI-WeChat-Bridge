@@ -40,6 +40,8 @@ type ClaudePendingHookApproval = shared.ClaudePendingHookApproval;
 const {
   CLAUDE_HOOK_LISTEN_HOST,
   CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS,
+  DEFAULT_COLS,
+  DEFAULT_ROWS,
   MODULE_DIR,
   buildClaudeCliArgs,
   isClaudeInvalidResumeError,

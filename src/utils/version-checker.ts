@@ -54,7 +54,7 @@ export async function fetchLatestVersion(): Promise<string | null> {
 
     // 按版本号排序，返回最新的
     versionTags.sort((a, b) => compareVersions(b, a));
-    return versionTags[0];
+    return versionTags[0] ?? null;
   } catch (error) {
     // 如果 git 命令失败，静默返回 null
     return null;

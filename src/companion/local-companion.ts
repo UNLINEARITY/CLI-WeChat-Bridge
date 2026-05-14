@@ -37,6 +37,9 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (!arg) {
+      continue;
+    }
     const next = argv[i + 1];
 
     if (arg === "--help" || arg === "-h") {

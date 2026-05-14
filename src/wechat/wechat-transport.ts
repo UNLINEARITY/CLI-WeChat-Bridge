@@ -892,7 +892,7 @@ export class WeChatTransport {
         this.cacheContextToken(senderId, rawMessage.context_token);
       }
 
-      const createdAtMs = rawMessage.create_time_ms;
+      const createdAtMs = rawMessage.create_time_ms ?? 0;
       if (
         typeof options.minCreatedAtMs === "number" &&
         (!Number.isFinite(createdAtMs) || createdAtMs < options.minCreatedAtMs)

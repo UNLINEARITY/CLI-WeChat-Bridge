@@ -273,7 +273,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     try {
       this.serverPort = await reserveLocalPort();
-      await this.startServerProcess();
+      const serverProcess = await this.startServerProcess();
 
       await waitForTcpPort(
         OPENCODE_SERVER_HOST,
@@ -289,7 +289,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         await this.startNativeClient();
         await this.syncVisibleSessionToShared({ force: true });
       } else {
-        this.state.pid = this.serverProcess?.pid;
+        this.state.pid = serverProcess.pid;
         this.state.startedAt = nowIso();
       }
 
@@ -349,7 +349,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.settleTurnState();
       this.clearObservedMessageTracking();
       this.setStatus("idle");
-      throw new Error(`Failed to send prompt: ${describeUnknownError(err)}`);
+      throw new Error(`Failed to send prompt: ${describeUnknownError(err)}`, {
+        cause: err,
+      });
     }
   }
 
@@ -539,7 +541,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   /* ---- Server management ---- */
 
-  private async startServerProcess(): Promise<void> {
+  private async startServerProcess(): Promise<ChildProcess> {
     const env = buildCliEnvironment(this.options.kind);
     const serverArgs = [
       "serve",
@@ -595,6 +597,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         timestamp: nowIso(),
       });
     });
+
+    return server;
   }
 
   private async startNativeClient(): Promise<void> {
@@ -642,7 +646,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       const detail = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`;
       this.emit({
         type: "shutdown_requested",
-        reason: "companion_disconnected",
+        reason: "companion_closed",
         message: `OpenCode companion exited (${detail}).`,
         exitCode: typeof code === "number" ? code : 0,
         timestamp: nowIso(),
@@ -671,6 +675,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     } catch (err) {
       throw new Error(
         `Failed to load @opencode-ai/sdk. Make sure it is installed: ${describeUnknownError(err)}`,
+        { cause: err },
       );
     }
   }
@@ -1265,7 +1270,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const observed = this.getOrCreateObservedOpenCodeMessage(messageId, sessionId);
+    const observed = this.getOrCreateObservedOpenCodeMessage(messageId, sessionId ?? undefined);
     observed.updatedAtMs = Date.now();
     observed.sessionId = sessionId ?? observed.sessionId;
     observed.role = role;
@@ -1997,7 +2002,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     if (options.allowLocalTurnFollow !== false && this.shouldFollowLocalTurnSession(sessionId)) {
-      this.switchSharedSession(session, {
+      this.switchSharedSession(session ?? sessionId, {
         source: "local",
         reason: "local_turn",
         notify: true,
@@ -2016,7 +2021,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       const id =
         typeof properties.sessionID === "string"
           ? properties.sessionID
-          : properties.sessionId;
+          : String(properties.sessionId);
       return {
         id,
         workspaceID: this.extractWorkspaceId(properties) ?? undefined,
@@ -2234,9 +2239,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private matchesCurrentDirectoryEvent(event: SdkEvent): boolean {
     const payload = this.extractEventPayload(event);
+    const eventRecord = event as unknown as { directory?: unknown };
     const wrappedDirectory =
-      typeof (event as { directory?: unknown }).directory === "string"
-        ? (event as { directory: string }).directory
+      typeof eventRecord.directory === "string"
+        ? eventRecord.directory
         : undefined;
     if (wrappedDirectory) {
       const matchesWrappedDirectory =

@@ -181,7 +181,10 @@ function summarizeClaudePlan(plan: string): string {
       !/^\d+\.\s+/.test(line),
   );
 
-  return truncatePreview([heading, description].filter(Boolean).join(" - ") || lines[0], 180);
+  return truncatePreview(
+    [heading, description].filter(Boolean).join(" - ") || lines[0] || "(empty plan)",
+    180,
+  );
 }
 
 function summarizeClaudeToolInput(
@@ -322,7 +325,7 @@ export function extractClaudeTranscriptFinalReply(rawTranscript: string): string
       continue;
     }
 
-    let parsed: ClaudeTranscriptAssistantEntry | null = null;
+    let parsed: ClaudeTranscriptAssistantEntry;
     try {
       parsed = JSON.parse(line) as ClaudeTranscriptAssistantEntry;
     } catch {

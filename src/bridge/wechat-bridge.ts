@@ -1118,6 +1118,7 @@ async function handleInboundMessage(params: {
   const systemCommand = parseWechatControlCommand(message.text, {
     adapter: options.adapter,
     hasPendingConfirmation: Boolean(state.pendingConfirmation),
+    hasPendingUserInput: Boolean(state.pendingUserInput),
   });
 
   if (message.senderId !== state.authorizedUserId) {

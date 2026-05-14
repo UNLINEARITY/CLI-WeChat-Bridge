@@ -172,6 +172,7 @@ export function stripAnsi(text: string): string {
 
 export function normalizeOutput(text: string): string {
   return stripAnsi(text)
+    // eslint-disable-next-line no-control-regex
     .replace(/\u0000/g, "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n");
@@ -208,6 +209,9 @@ export function parseSystemCommand(text: string): SystemCommand | null {
   }
 
   const [rawCommand, ...rest] = trimmed.split(/\s+/);
+  if (!rawCommand) {
+    return null;
+  }
   const command = rawCommand.toLowerCase();
   const argument = rest.join(" ").trim();
 
@@ -331,7 +335,12 @@ export function parseWechatFinalReply(text: string): ParsedWechatFinalReply {
   }
 
   const attachments: WechatReplyAttachment[] = [];
-  const lines = match[1]
+  const attachmentBlock = match[1];
+  if (attachmentBlock === undefined) {
+    return extractInlineWechatAttachments(normalized);
+  }
+
+  const lines = attachmentBlock
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean);
@@ -347,7 +356,12 @@ export function parseWechatFinalReply(text: string): ParsedWechatFinalReply {
     }
 
     const kind = parsed[1] as WechatAttachmentKind;
-    const attachmentPath = resolveWechatAttachmentPath(parsed[2]);
+    const rawPath = parsed[2];
+    if (!rawPath) {
+      return extractInlineWechatAttachments(normalized);
+    }
+
+    const attachmentPath = resolveWechatAttachmentPath(rawPath);
     if (!attachmentPath) {
       return extractInlineWechatAttachments(normalized);
     }
@@ -538,7 +552,12 @@ export function getInteractiveShellCommandRejectionMessage(command: string): str
     return null;
   }
 
-  const executable = normalizeShellExecutableToken(tokens[0]);
+  const firstToken = tokens[0];
+  if (!firstToken) {
+    return null;
+  }
+
+  const executable = normalizeShellExecutableToken(firstToken);
   const args = tokens.slice(1);
   const lowerArgs = args.map((arg) => arg.toLowerCase());
 
@@ -556,7 +575,7 @@ export function getInteractiveShellCommandRejectionMessage(command: string): str
   switch (executable) {
     case "python":
     case "python3":
-    case "py":
+    case "py": {
       if (!args.length) {
         return buildInteractiveShellCommandMessage(
           executable,
@@ -587,6 +606,7 @@ export function getInteractiveShellCommandRejectionMessage(command: string): str
             executable,
             'Try "python script.py" or "python -c \\"...\\"" instead.',
           );
+    }
 
     case "node":
       if (!args.length || lowerArgs.includes("-i") || lowerArgs.includes("--interactive")) {
@@ -1278,7 +1298,7 @@ function parseSingleUserInputAnswer(
   }
 
   const separatorIndex = trimmed.indexOf("|");
-  let selection = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
+  const selection = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
   let note = separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1).trim() : "";
   const answers: string[] = [];
 
@@ -1288,7 +1308,6 @@ function parseSingleUserInputAnswer(
       answers.push(selectedLabel);
     } else if (question.isOther) {
       note = note ? `${selection}; ${note}` : selection;
-      selection = "";
     } else {
       return {
         error: `Question "${question.header}" expects an option number or label.`,
@@ -1326,6 +1345,11 @@ export function parsePendingUserInputAnswerCommand(
 
   if (pending.questions.length === 1) {
     const question = pending.questions[0];
+    if (!question) {
+      return {
+        error: "No pending user input question was found.",
+      };
+    }
     const parsed = parseSingleUserInputAnswer(question, input);
     if ("error" in parsed) {
       return parsed;
@@ -1422,6 +1446,9 @@ export function formatUserInputRequestMessage(
   lines.push("");
   if (pending.questions.length === 1) {
     const question = pending.questions[0];
+    if (!question) {
+      return lines.join("\n");
+    }
     if (question.options?.length) {
       lines.push("Reply with /answer <option number or exact label>.");
       if (question.isOther) {
@@ -1446,6 +1473,9 @@ export function formatPendingUserInputReminder(
 ): string {
   if (pending.questions.length === 1) {
     const question = pending.questions[0];
+    if (!question) {
+      return "Codex is waiting for user input. Reply with /answer and your response, or use /stop to interrupt.";
+    }
     return `Codex is waiting for user input for ${question.header}. Reply with /answer and your response, or use /stop to interrupt.`;
   }
 

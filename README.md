@@ -1,12 +1,12 @@
 # CLI WeChat Bridge
 
-![alt text](docs/images/logo.png)
+<p align='center'><img src='docs/images/logo.png' width=90%></p> 
 
 **命令行工具的微信桥接**：本项目用于桥接微信消息与本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、`OpenCode` 或持久化 `powershell.exe` 会话，并将本地输出、审批请求与运行状态同步回微信。
 
 当前实现以本地工作流为中心展开，重点是保留本地原生终端体验，并在此基础上提供微信侧的远程输入、结果回流与状态同步能力。
 
-![使用示例](docs/images/animation.webp)
+<p align='center'><img src='docs/images/animation.webp' width=90%></p> 
 
 ## 这个项目解决什么问题
 
