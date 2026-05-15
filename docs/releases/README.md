@@ -4,6 +4,15 @@
 
 ## 版本列表
 
+### [v1.0.4](./1.0.4.md) / [中文说明](./1.0.4_CN.md)
+**桥接回复可靠性 + 真实全局安装烟测 + 源码质量门禁** - 修复 OpenCode/Codex 回复回传边界，补上 lint/typecheck/quality 基础设施，并让本地构建包可以安装到真实 npm 全局环境做人工验证
+- **OpenCode 回复正确性**：最终回复改为优先取 session 中最新可见 assistant 内容，过滤 reasoning delta 与 prompt 回显，并保留长回复整段发送体验
+- **Codex 启动隔离**：shared session 只在同 adapter、同工作区恢复，避免 OpenCode `ses_...` 串入 Codex，并阻止启动时历史本地 session 内容回放到微信
+- **源码质量门禁**：新增 ESLint flat config、`typecheck:src` 和 `quality`，让 lint、源代码 TS 检查、测试与 build 形成统一发布前验证
+- **真实全局烟测**：`npm run smoke:global` 现在用当前源码打 tarball，再 `npm install -g` 到真实全局 prefix，并从用户主目录验证 `wechat-*` shim
+- **README 刷新**：补齐 npm 安装、`wechat-setup`、单命令启动器、OpenCode 支持和手动双终端调试说明
+- **统计**：36 个文件，新增 3,354 行，删除 1,009 行
+
 ### [v1.0.3](./1.0.3.md) / [中文说明](./1.0.3_CN.md)
 **Codex 回复恢复 + OpenCode 新会话跟随** - 修复 Codex 已生成回答但未回传微信，以及 OpenCode 本地 `new` 后微信仍进入旧会话的问题
 - **Codex final reply 恢复**：app-server 状态不健康时仍可从 session 日志恢复 `task_complete` 与 `final_reply`
@@ -93,6 +102,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.4 | 2026-05-16 | 桥接回复可靠性、源码质量门禁、真实全局 npm 安装烟测与 README 工作流刷新 | 36 个文件，+3,354/-1,009 |
 | 1.0.3 | 2026-05-11 | Codex final reply 恢复、OpenCode `/new` 与本地新会话跟随修复 | 13 个文件，+849/-26 |
 | 1.0.2 | 2026-05-11 | npm 全局安装后的微信首次鉴权、过期会话恢复与 setup 提示修复 | 12 个文件，+511/-126 |
 | 1.0.0 | 2026-05-10 | 稳定版、npm 上架准备、多适配器 companion、Codex 隔离与 Windows 可靠性 | 61 个文件，+12,252/-423 |

@@ -1,6 +1,6 @@
 {
   "name": "@unlinearity/cli-wechat-bridge",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and PowerShell over WeChat",
   "type": "module",
   "files": [
