@@ -87,6 +87,11 @@ type SdkPart = {
   text?: string;
 } & Record<string, unknown>;
 
+type SdkMessageRecord = {
+  info: Record<string, unknown>;
+  parts: SdkPart[];
+};
+
 type OpenCodeSdkClient = {
   session: {
     list(parameters?: Record<string, unknown>): Promise<SdkResult<SdkSession[]>>;
@@ -107,6 +112,12 @@ type OpenCodeSdkClient = {
       workspace?: string;
       parts: Array<{ type: string; text: string }>;
     }): Promise<SdkResult<void>>;
+    messages?(parameters: {
+      sessionID: string;
+      directory?: string;
+      workspace?: string;
+      limit?: number;
+    }): Promise<SdkResult<SdkMessageRecord[]>>;
   };
   permission: {
     respond(parameters: {
@@ -180,6 +191,12 @@ type ObservedOpenCodeMessage = {
   updatedAtMs: number;
 };
 
+type VisibleReplyPart = {
+  sessionId: string;
+  messageId?: string;
+  text: string;
+};
+
 type PendingWechatPromptMirrorSuppression = {
   sessionId: string;
   text: string;
@@ -224,6 +241,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private readonly loggedUnknownEventTypes = new Set<string>();
   private readonly emittedTextByPartId = new Map<string, string>();
   private readonly partTypeByPartId = new Map<string, string>();
+  private readonly visibleReplyPartsByPartId = new Map<string, VisibleReplyPart>();
+  private readonly visibleReplyMessageIds = new Set<string>();
   private readonly observedOpenCodeMessages = new Map<string, ObservedOpenCodeMessage>();
   private readonly observedUserTextByPartId = new Map<string, string>();
   private readonly observedUserMessagePartIds = new Map<string, Set<string>>();
@@ -1062,15 +1081,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.hasAcceptedInput = false;
       const completedPreview = this.currentPreview;
 
+      const turnStartedAtMs = this.lastBusyAtMs;
       void this.outputBatcher.flushNow()
         .catch(() => undefined)
-        .then(() => {
-          const summary = this.outputBatcher.getRecentSummary(500);
+        .then(async () => {
+          const finalReplyText = await this.resolveFinalReplyText(sessionId, turnStartedAtMs);
           this.setStatus("idle");
-          if (summary && summary !== "(no output)") {
+          if (finalReplyText) {
             this.emit({
               type: "final_reply",
-              text: summary,
+              text: finalReplyText,
               timestamp: nowIso(),
             });
           }
@@ -1341,12 +1361,29 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       typeof part.messageID === "string"
         ? this.observedOpenCodeMessages.get(part.messageID)?.text
         : undefined;
+    const observedRole =
+      typeof part.messageID === "string"
+        ? this.observedOpenCodeMessages.get(part.messageID)?.role
+        : undefined;
+    if (
+      observedRole !== "assistant" &&
+      this.matchesRecentLocalPromptMirror(observedText || partText || delta || text, {
+        allowPrefix: true,
+      })
+    ) {
+      return;
+    }
     if (
       this.matchesRecentWechatPromptMirror(part.sessionID, observedText || partText || delta || text, {
         allowPrefix: true,
       })
     ) {
       return;
+    }
+    if (partText) {
+      this.recordVisibleReplyPartSnapshot(partId, part.sessionID, part.messageID, partText);
+    } else if (text) {
+      this.recordVisibleReplyPartDelta(partId, part.sessionID, part.messageID, text);
     }
     this.pushVisibleOutput(text);
   }
@@ -1416,6 +1453,18 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       typeof properties.messageID === "string"
         ? this.observedOpenCodeMessages.get(properties.messageID)?.text
         : undefined;
+    const observedRole =
+      typeof properties.messageID === "string"
+        ? this.observedOpenCodeMessages.get(properties.messageID)?.role
+        : undefined;
+    if (
+      observedRole !== "assistant" &&
+      this.matchesRecentLocalPromptMirror(observedText || delta || text, {
+        allowPrefix: true,
+      })
+    ) {
+      return;
+    }
     if (
       this.matchesRecentWechatPromptMirror(sessionId, observedText || delta || text, {
         allowPrefix: true,
@@ -1423,6 +1472,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     ) {
       return;
     }
+    this.recordVisibleReplyPartDelta(partId, sessionId, properties.messageID, text);
     this.pushVisibleOutput(text);
   }
 
@@ -1438,6 +1488,212 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     this.emittedTextByPartId.delete(partId);
     this.partTypeByPartId.delete(partId);
+    this.visibleReplyPartsByPartId.delete(partId);
+  }
+
+  private recordVisibleReplyPartSnapshot(
+    partId: string,
+    sessionId: string | undefined,
+    messageId: unknown,
+    text: string,
+  ): void {
+    const normalizedText = normalizeOutput(text);
+    if (!normalizedText) {
+      return;
+    }
+
+    const resolvedSessionId = sessionId ?? this.activeSessionId ?? undefined;
+    if (!resolvedSessionId) {
+      return;
+    }
+
+    const resolvedMessageId = typeof messageId === "string" ? messageId : undefined;
+    this.visibleReplyPartsByPartId.set(partId, {
+      sessionId: resolvedSessionId,
+      messageId: resolvedMessageId,
+      text: normalizedText,
+    });
+    if (resolvedMessageId) {
+      this.visibleReplyMessageIds.add(resolvedMessageId);
+    }
+  }
+
+  private recordVisibleReplyPartDelta(
+    partId: string,
+    sessionId: string | undefined,
+    messageId: unknown,
+    delta: string,
+  ): void {
+    const normalizedDelta = normalizeOutput(delta);
+    if (!normalizedDelta) {
+      return;
+    }
+
+    const previous = this.visibleReplyPartsByPartId.get(partId);
+    this.recordVisibleReplyPartSnapshot(
+      partId,
+      sessionId ?? previous?.sessionId,
+      messageId ?? previous?.messageId,
+      `${previous?.text ?? ""}${normalizedDelta}`,
+    );
+  }
+
+  private async resolveFinalReplyText(
+    sessionId: string | null,
+    turnStartedAtMs: number,
+  ): Promise<string> {
+    const sessionReply = sessionId
+      ? await this.fetchLatestAssistantVisibleReply(sessionId, turnStartedAtMs)
+      : "";
+    if (sessionReply.trim()) {
+      return sessionReply.trim();
+    }
+
+    const streamedReply = this.getBufferedVisibleReplyText(sessionId ?? undefined);
+    if (streamedReply.trim()) {
+      return streamedReply.trim();
+    }
+
+    const summary = this.outputBatcher.getRecentSummary(500);
+    return summary && summary !== "(no output)" ? summary : "";
+  }
+
+  private getBufferedVisibleReplyText(sessionId: string | undefined): string {
+    const chunks: string[] = [];
+    for (const part of this.visibleReplyPartsByPartId.values()) {
+      if (sessionId && part.sessionId !== sessionId) {
+        continue;
+      }
+      if (part.text) {
+        chunks.push(part.text);
+      }
+    }
+    return normalizeOutput(chunks.join(""));
+  }
+
+  private async fetchLatestAssistantVisibleReply(
+    sessionId: string,
+    turnStartedAtMs: number,
+  ): Promise<string> {
+    const sessionClient = this.client?.session;
+    if (!sessionClient?.messages) {
+      return "";
+    }
+
+    const queryVariants = this.activeWorkspaceId
+      ? [
+          {
+            sessionID: sessionId,
+            directory: this.options.cwd,
+            workspace: this.activeWorkspaceId,
+            limit: 20,
+          },
+          {
+            sessionID: sessionId,
+            directory: this.options.cwd,
+            limit: 20,
+          },
+        ]
+      : [
+          {
+            sessionID: sessionId,
+            directory: this.options.cwd,
+            limit: 20,
+          },
+        ];
+
+    for (const query of queryVariants) {
+      try {
+        const result = await sessionClient.messages(query);
+        if (result.error !== undefined || !Array.isArray(result.data)) {
+          continue;
+        }
+
+        const text = this.extractLatestAssistantVisibleReply(
+          result.data,
+          turnStartedAtMs,
+          this.visibleReplyMessageIds,
+        );
+        if (text) {
+          return text;
+        }
+      } catch {
+        // Fall back to the streamed visible text buffer.
+      }
+    }
+
+    return "";
+  }
+
+  private extractLatestAssistantVisibleReply(
+    messages: SdkMessageRecord[],
+    turnStartedAtMs: number,
+    expectedMessageIds: ReadonlySet<string>,
+  ): string {
+    let best: { text: string; timeMs: number; index: number } | null = null;
+    const minTimeMs = turnStartedAtMs > 0 ? turnStartedAtMs - 5_000 : 0;
+
+    for (const [index, message] of messages.entries()) {
+      if (!isRecord(message) || !isRecord(message.info)) {
+        continue;
+      }
+      if (message.info.role !== "assistant") {
+        continue;
+      }
+
+      const messageId = typeof message.info.id === "string" ? message.info.id : "";
+      if (expectedMessageIds.size > 0 && !expectedMessageIds.has(messageId)) {
+        continue;
+      }
+
+      const timeMs = this.extractMessageTimeMs(message.info);
+      if (expectedMessageIds.size === 0 && (!timeMs || timeMs < minTimeMs)) {
+        continue;
+      }
+
+      const text = this.extractVisibleTextFromParts(message.parts);
+      if (!text.trim()) {
+        continue;
+      }
+
+      const candidate = { text, timeMs: timeMs ?? 0, index };
+      if (
+        !best ||
+        candidate.timeMs > best.timeMs ||
+        (candidate.timeMs === best.timeMs && candidate.index > best.index)
+      ) {
+        best = candidate;
+      }
+    }
+
+    return best?.text ?? "";
+  }
+
+  private extractVisibleTextFromParts(parts: unknown): string {
+    if (!Array.isArray(parts)) {
+      return "";
+    }
+
+    return normalizeOutput(
+      parts
+        .filter((part): part is SdkPart => this.isVisibleTextPart(isRecord(part) ? part : undefined))
+        .map((part) => part.text ?? "")
+        .join(""),
+    );
+  }
+
+  private extractMessageTimeMs(info: Record<string, unknown>): number | null {
+    const time = isRecord(info.time) ? info.time : undefined;
+    const rawTime =
+      typeof time?.completed === "number"
+        ? time.completed
+        : typeof time?.created === "number"
+          ? time.created
+          : undefined;
+    if (typeof rawTime !== "number" || !Number.isFinite(rawTime) || rawTime <= 0) {
+      return null;
+    }
+    return rawTime < 1_000_000_000_000 ? rawTime * 1_000 : rawTime;
   }
 
   private handleTuiPromptAppend(properties: unknown): void {
@@ -1755,7 +2011,14 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   private wasRecentlyMirroredLocalPrompt(text: string): boolean {
-    const normalizedText = normalizeOutput(text).trim();
+    return this.matchesRecentLocalPromptMirror(text);
+  }
+
+  private matchesRecentLocalPromptMirror(
+    text: string | undefined,
+    options: { allowPrefix?: boolean } = {},
+  ): boolean {
+    const normalizedText = normalizeOutput(text ?? "").trim();
     if (!normalizedText) {
       return false;
     }
@@ -1765,7 +2028,13 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.hasAcceptedInput &&
       this.lastMirroredLocalPrompt &&
       this.lastMirroredLocalPrompt.createdAtMs >= Date.now() - OPENCODE_RECENT_LOCAL_PROMPT_TTL_MS &&
-      this.lastMirroredLocalPrompt.text === normalizedText
+      (
+        this.lastMirroredLocalPrompt.text === normalizedText ||
+        (
+          options.allowPrefix === true &&
+          this.lastMirroredLocalPrompt.text.startsWith(normalizedText)
+        )
+      )
     ) {
       return true;
     }
@@ -2475,6 +2744,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private clearStreamedPartState(): void {
     this.emittedTextByPartId.clear();
     this.partTypeByPartId.clear();
+    this.visibleReplyPartsByPartId.clear();
+    this.visibleReplyMessageIds.clear();
   }
 
   private cleanupObservedOpenCodeMessage(messageId: string): void {

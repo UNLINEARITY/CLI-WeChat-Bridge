@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  assertWechatApiResponseOk,
   assertMediaUploadSizeAllowed,
   buildInboundMessageClaimPath,
   clearInboundMessageClaims,
@@ -110,6 +111,19 @@ describe("wechat upload limits", () => {
         errmsg: "other failure",
       }),
     ).toBe(false);
+  });
+
+  test("throws on app-level sendmessage failures even when HTTP succeeded", () => {
+    expect(() =>
+      assertWechatApiResponseOk(
+        "sendmessage",
+        JSON.stringify({ ret: 1, errcode: 45009, errmsg: "rate limited" }),
+      ),
+    ).toThrow("sendmessage failed: ret=1 errcode=45009 errmsg=rate limited");
+
+    expect(() =>
+      assertWechatApiResponseOk("sendmessage", JSON.stringify({ ret: 0 })),
+    ).not.toThrow();
   });
 
   test("claims each inbound message key only once across processes", () => {

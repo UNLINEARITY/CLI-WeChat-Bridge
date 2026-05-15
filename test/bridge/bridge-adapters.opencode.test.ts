@@ -701,6 +701,39 @@ describe("OpenCode session.idle handling", () => {
     expect(internal.outputBatcher.getRecentSummary(500)).toBe("(no output)");
   });
 
+  test("emits the full visible answer instead of a 500 character tail summary", async () => {
+    const { events, internal } = createBusyAdapter();
+    const fullAnswer = [
+      "FIRST_VISIBLE_SENTENCE",
+      "x".repeat(700),
+      "LAST_VISIBLE_SENTENCE",
+    ].join(" ");
+
+    internal.handleSseEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "p_idle_long",
+          sessionID: "session_idle_1",
+          messageID: "m_idle_long",
+          type: "text",
+          text: fullAnswer,
+        },
+      },
+    });
+
+    internal.handleSseEvent({
+      type: "session.idle",
+      properties: { sessionID: "session_idle_1" },
+    });
+
+    await wait(1_800);
+
+    const finalReplyEvents = events.filter((e) => e.type === "final_reply");
+    expect(finalReplyEvents).toHaveLength(1);
+    expect(finalReplyEvents[0]?.text).toBe(fullAnswer);
+  });
+
   test("ignores session idle when not in busy status", () => {
     const { events, internal } = createBusyAdapter();
     internal.state.status = "idle";
@@ -2532,6 +2565,79 @@ describe("OpenCode message.part.updated handling", () => {
         origin: "local",
       }),
     ]);
+  });
+
+  test("does not include local prompt echoes in the final reply buffer", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; text?: string; origin?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as unknown as { type: string; text?: string; origin?: string });
+    });
+    const internal = adapter as unknown as {
+      state: { status: string; activeTurnOrigin?: string };
+      activeSessionId: string | null;
+      outputBatcher: { flushNow(): Promise<void>; getRecentSummary(maxLength?: number): string };
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.state.status = "idle";
+    internal.activeSessionId = "session_local_echo";
+
+    internal.handleSseEvent({
+      type: "tui.prompt.append",
+      properties: { text: "我希望你是女孩" },
+    });
+    internal.handleSseEvent({
+      type: "tui.command.execute",
+      properties: { command: "prompt.submit" },
+    });
+    internal.handleSseEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "p_user_local_echo",
+          sessionID: "session_local_echo",
+          messageID: "m_user_local_echo",
+          type: "text",
+          text: "我希望你是女孩",
+        },
+      },
+    });
+    internal.handleSseEvent({
+      type: "message.updated",
+      properties: {
+        sessionID: "session_local_echo",
+        info: { id: "m_user_local_echo", sessionID: "session_local_echo", role: "user" },
+      },
+    });
+    internal.handleSseEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "p_assistant_local_echo",
+          sessionID: "session_local_echo",
+          messageID: "m_assistant_local_echo",
+          type: "text",
+          text: "好的呀，那我就当你的贴心女孩助手。",
+        },
+      },
+    });
+
+    await internal.outputBatcher.flushNow();
+
+    expect(events.filter((event) => event.type === "mirrored_user_input")).toEqual([
+      expect.objectContaining({
+        text: "我希望你是女孩",
+        origin: "local",
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "stdout").map((event) => event.text).join(""))
+      .toBe("好的呀，那我就当你的贴心女孩助手。");
+    expect(internal.outputBatcher.getRecentSummary(500)).toBe("好的呀，那我就当你的贴心女孩助手。");
   });
 
   test("does not mirror wechat-origin user messages back to WeChat", async () => {

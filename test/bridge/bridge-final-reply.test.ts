@@ -6,6 +6,62 @@ import {
 } from "../../src/bridge/bridge-final-reply.ts";
 
 describe("forwardWechatFinalReply", () => {
+  test("sends long visible replies as one WeChat text message", async () => {
+    const calls: string[] = [];
+    const rawText = "a".repeat(1800);
+
+    await forwardWechatFinalReply({
+      adapter: "codex",
+      rawText,
+      sender: {
+        sendText: async (text) => {
+          calls.push(text);
+          return true;
+        },
+        sendImage: async () => undefined,
+        sendFile: async () => undefined,
+        sendVoice: async () => undefined,
+        sendVideo: async () => undefined,
+      },
+    });
+
+    expect(calls).toEqual([rawText]);
+  });
+
+  test("stops final reply forwarding after the visible text send fails", async () => {
+    const calls: string[] = [];
+
+    await forwardWechatFinalReply({
+      adapter: "codex",
+      rawText: [
+        "Visible text.",
+        "```wechat-attachments",
+        "image C:\\Users\\unlin\\Desktop\\photo.jpg",
+        "```",
+      ].join("\n"),
+      sender: {
+        sendText: async (text) => {
+          calls.push(`text:${text}`);
+          return false;
+        },
+        sendImage: async (imagePath) => {
+          calls.push(`image:${imagePath}`);
+        },
+        sendFile: async (filePath) => {
+          calls.push(`file:${filePath}`);
+        },
+        sendVoice: async (voicePath) => {
+          calls.push(`voice:${voicePath}`);
+        },
+        sendVideo: async (videoPath) => {
+          calls.push(`video:${videoPath}`);
+        },
+      },
+    });
+
+    expect(calls).toEqual(["text:Visible text."]);
+  });
+
   test("sends stripped text before attachments in listed order", async () => {
     const calls: string[] = [];
 

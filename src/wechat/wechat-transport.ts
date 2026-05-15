@@ -241,6 +241,64 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+function readNumericResponseField(
+  response: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = response[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function readStringResponseField(
+  response: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = response[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function assertWechatApiResponseOk(endpoint: string, raw: string): void {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  let response: unknown;
+  try {
+    response = JSON.parse(trimmed);
+  } catch {
+    return;
+  }
+  if (!isRecord(response)) {
+    return;
+  }
+
+  const ret = readNumericResponseField(response, "ret");
+  const errcode = readNumericResponseField(response, "errcode");
+  const failed =
+    (ret !== undefined && ret !== 0) ||
+    (errcode !== undefined && errcode !== 0);
+  if (!failed) {
+    return;
+  }
+
+  const errmsg =
+    readStringResponseField(response, "errmsg") ??
+    readStringResponseField(response, "message") ??
+    readStringResponseField(response, "msg") ??
+    "";
+  throw new Error(
+    `${endpoint} failed: ret=${ret} errcode=${errcode} errmsg=${errmsg}`,
+  );
+}
+
 function describeErrorNode(value: unknown): string {
   if (value instanceof Error) {
     const error = value as ErrorWithCause;
@@ -1133,7 +1191,7 @@ export class WeChatTransport {
     contextToken: string,
     itemList: unknown[],
   ): Promise<void> {
-    await apiFetch({
+    const raw = await apiFetch({
       baseUrl: account.baseUrl,
       endpoint: "ilink/bot/sendmessage",
       body: JSON.stringify({
@@ -1151,6 +1209,7 @@ export class WeChatTransport {
       token: account.token,
       timeoutMs: SEND_TIMEOUT_MS,
     });
+    assertWechatApiResponseOk("sendmessage", raw);
   }
 
   private async prepareUpload(

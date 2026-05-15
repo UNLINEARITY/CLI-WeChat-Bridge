@@ -82,6 +82,8 @@ type WechatSendContext =
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 const PARENT_PROCESS_POLL_MS = 5_000;
+const WECHAT_SEND_MAX_ATTEMPTS = 3;
+const WECHAT_SEND_RETRY_BASE_MS = 750;
 
 function log(message: string): void {
   process.stderr.write(`[wechat-bridge] ${message}\n`);
@@ -168,6 +170,31 @@ export function formatWechatSendFailureLogEntry(params: {
   error: unknown;
 }): string {
   return `wechat_send_failed: context=${params.context} recipient=${params.recipientId} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
+}
+
+function formatWechatSendRetryLogEntry(params: {
+  context: WechatSendContext;
+  recipientId: string;
+  attempt: number;
+  delayMs: number;
+  error: unknown;
+}): string {
+  return `wechat_send_retry: context=${params.context} recipient=${params.recipientId} attempt=${params.attempt} delay_ms=${params.delayMs} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
+}
+
+function isRetryableWechatSendError(error: unknown): boolean {
+  const classification = classifyWechatTransportError(error);
+  if (classification.retryable) {
+    return true;
+  }
+
+  const details = describeWechatTransportError(error);
+  return /^Error: sendmessage failed:/i.test(details) &&
+    !/errcode=-14\b.*session timeout/i.test(details);
+}
+
+function computeWechatSendRetryDelayMs(attempt: number): number {
+  return WECHAT_SEND_RETRY_BASE_MS * attempt;
 }
 
 export function shouldWatchParentProcess(options: {
@@ -423,6 +450,7 @@ async function main(): Promise<void> {
   stateStore.appendLog(`Cleared stale companion endpoint for ${options.cwd} before adapter start.`);
   let textSendChain = Promise.resolve();
   let attachmentSendChain = Promise.resolve();
+  const pendingWechatForwardTasks = new Set<Promise<void>>();
   let activeTask: ActiveTask | null = null;
   const deferredInboundMessages: DeferredInboundMessage[] = [];
   let drainingDeferredInboundMessages = false;
@@ -453,16 +481,64 @@ async function main(): Promise<void> {
     text: string,
     context: WechatSendContext = "message",
   ) => {
-    return queueWechatTextAction(() => transport.sendText(senderId, text)).catch((err) => {
-      logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(err)}`);
-      stateStore.appendLog(
-        formatWechatSendFailureLogEntry({
-          context,
-          recipientId: senderId,
-          error: err,
-        }),
-      );
+    return queueWechatTextAction(async () => {
+      for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await transport.sendText(senderId, text);
+          return true;
+        } catch (err) {
+          if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(err)) {
+            const delayMs = computeWechatSendRetryDelayMs(attempt);
+            logError(
+              `Failed to send WeChat ${context} (attempt ${attempt}). Retrying in ${formatDuration(delayMs)}. ${describeWechatTransportError(err)}`,
+            );
+            stateStore.appendLog(
+              formatWechatSendRetryLogEntry({
+                context,
+                recipientId: senderId,
+                attempt,
+                delayMs,
+                error: err,
+              }),
+            );
+            await delay(delayMs);
+            continue;
+          }
+
+          logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(err)}`);
+          stateStore.appendLog(
+            formatWechatSendFailureLogEntry({
+              context,
+              recipientId: senderId,
+              error: err,
+            }),
+          );
+          return false;
+        }
+      }
+
+      return false;
     });
+  };
+
+  const trackWechatForwardTask = (task: Promise<void>): void => {
+    const tracked = task
+      .catch((error) => {
+        logError(`WeChat forward task failed: ${describeWechatTransportError(error)}`);
+        stateStore.appendLog(
+          `wechat_forward_failed: error=${truncatePreview(describeWechatTransportError(error), 400)}`,
+        );
+      })
+      .finally(() => {
+        pendingWechatForwardTasks.delete(tracked);
+      });
+    pendingWechatForwardTasks.add(tracked);
+  };
+
+  const waitForPendingWechatForwardTasks = async (): Promise<void> => {
+    while (pendingWechatForwardTasks.size > 0) {
+      await Promise.allSettled([...pendingWechatForwardTasks]);
+    }
   };
 
   const outputBatcher = new OutputBatcher(async (text) => {
@@ -561,12 +637,14 @@ async function main(): Promise<void> {
     }
     try {
       await outputBatcher.flushNow();
+      await waitForPendingWechatForwardTasks();
     } catch {
       // Best effort flush.
     }
     try {
       await textSendChain;
       await attachmentSendChain;
+      await waitForPendingWechatForwardTasks();
     } catch {
       // Best effort flush.
     }
@@ -643,6 +721,7 @@ async function main(): Promise<void> {
       outputBatcher,
       queueWechatAttachmentAction,
       queueWechatMessage,
+      trackWechatForwardTask,
       maybeDrainDeferredInboundMessages,
       getActiveTask: () => activeTask,
       clearActiveTask: () => {
@@ -868,7 +947,8 @@ function wireAdapterEvents(params: {
     senderId: string,
     text: string,
     context?: WechatSendContext,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
+  trackWechatForwardTask: (task: Promise<void>) => void;
   maybeDrainDeferredInboundMessages: () => Promise<void>;
   getActiveTask: () => ActiveTask | null;
   clearActiveTask: () => void;
@@ -885,6 +965,7 @@ function wireAdapterEvents(params: {
     outputBatcher,
     queueWechatAttachmentAction,
     queueWechatMessage,
+    trackWechatForwardTask,
     maybeDrainDeferredInboundMessages,
     getActiveTask,
     clearActiveTask,
@@ -914,7 +995,7 @@ function wireAdapterEvents(params: {
         break;
       case "final_reply":
         stateStore.appendLog(`final_reply: ${truncatePreview(event.text)}`);
-        void outputBatcher.flushNow().then(async () => {
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           await forwardWechatFinalReply({
             adapter: options.adapter,
             rawText: event.text,
@@ -924,8 +1005,19 @@ function wireAdapterEvents(params: {
               );
             },
             sender: {
-              sendText: (text) =>
-                queueWechatMessage(authorizedUserId, text, "final_reply"),
+              sendText: async (text) => {
+                const sent = await queueWechatMessage(
+                  authorizedUserId,
+                  text,
+                  "final_reply",
+                );
+                if (sent) {
+                  stateStore.appendLog(
+                    `final_reply_sent: chars=${Array.from(text).length}`,
+                  );
+                }
+                return sent;
+              },
               sendImage: (imagePath) =>
                 queueWechatAttachmentAction(() =>
                   transport.sendImage(imagePath, { recipientId: authorizedUserId }),
@@ -944,7 +1036,7 @@ function wireAdapterEvents(params: {
                 ),
             },
           });
-        });
+        }));
         break;
       case "status":
         if (event.message) {
@@ -957,13 +1049,13 @@ function wireAdapterEvents(params: {
         updateLastOutputAt();
         stateStore.appendLog(`${event.level}_notice: ${truncatePreview(event.text)}`);
         if (shouldForwardBridgeEventToWechat(options.adapter, event.type, { text: event.text })) {
-          void outputBatcher.flushNow().then(async () => {
+          trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(authorizedUserId, event.text, "notice");
-          });
+          }));
         }
         break;
       case "approval_required":
-        void outputBatcher.flushNow().then(async () => {
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           const pending = toPendingApproval(event.request);
           stateStore.setPendingConfirmation(pending);
           stateStore.appendLog(
@@ -974,18 +1066,18 @@ function wireAdapterEvents(params: {
             formatApprovalMessage(pending, adapterState),
             "approval_required",
           );
-        });
+        }));
         break;
       case "mirrored_user_input":
         stateStore.appendLog(`mirrored_local_input: ${truncatePreview(event.text)}`);
         if (shouldForwardBridgeEventToWechat(options.adapter, event.type, { text: event.text })) {
-          void outputBatcher.flushNow().then(async () => {
+          trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(
               authorizedUserId,
               formatMirroredUserInputMessage(options.adapter, event.text),
               "mirrored_user_input",
             );
-          });
+          }));
         }
         break;
       case "session_switched":
@@ -993,7 +1085,7 @@ function wireAdapterEvents(params: {
           `session_switched: ${event.sessionId} source=${event.source} reason=${event.reason}`,
         );
         if (shouldForwardBridgeEventToWechat(options.adapter, event.type)) {
-          void outputBatcher.flushNow().then(async () => {
+          trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(
               authorizedUserId,
               formatSessionSwitchMessage({
@@ -1004,7 +1096,7 @@ function wireAdapterEvents(params: {
               }),
               "session_switched",
             );
-          });
+          }));
         }
         break;
       case "thread_switched":
@@ -1012,7 +1104,7 @@ function wireAdapterEvents(params: {
           `thread_switched: ${event.threadId} source=${event.source} reason=${event.reason}`,
         );
         if (shouldForwardBridgeEventToWechat(options.adapter, event.type)) {
-          void outputBatcher.flushNow().then(async () => {
+          trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(
               authorizedUserId,
               formatSessionSwitchMessage({
@@ -1023,12 +1115,12 @@ function wireAdapterEvents(params: {
               }),
               "thread_switched",
             );
-          });
+          }));
         }
         void maybeDrainDeferredInboundMessages();
         break;
       case "task_complete":
-        void outputBatcher.flushNow().then(async () => {
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           if (options.adapter === "shell") {
             const summary = buildCompletionSummary({
@@ -1041,10 +1133,10 @@ function wireAdapterEvents(params: {
           }
           clearActiveTask();
           await maybeDrainDeferredInboundMessages();
-        });
+        }));
         break;
       case "task_failed":
-        void outputBatcher.flushNow().then(async () => {
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           clearActiveTask();
           await queueWechatMessage(
@@ -1053,21 +1145,21 @@ function wireAdapterEvents(params: {
             "task_failed",
           );
           await maybeDrainDeferredInboundMessages();
-        });
+        }));
         break;
       case "fatal_error":
         logError(event.message);
         stateStore.appendLog(`fatal_error: ${event.message}`);
         stateStore.clearPendingConfirmation();
         clearActiveTask();
-        void outputBatcher.flushNow().then(async () => {
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           await queueWechatMessage(
             authorizedUserId,
             formatUserFacingBridgeFatalError(event.message),
             "fatal_error",
           );
           await maybeDrainDeferredInboundMessages();
-        });
+        }));
         break;
       case "shutdown_requested":
         stateStore.appendLog(`shutdown_requested: ${event.reason}`);
@@ -1106,7 +1198,7 @@ async function handleInboundMessage(params: {
     senderId: string,
     text: string,
     context?: WechatSendContext,
-  ) => Promise<void>;
+  ) => Promise<boolean>;
   outputBatcher: OutputBatcher;
   deferInboundMessage: (message: InboundWechatMessage) => Promise<void>;
 }): Promise<ActiveTask | null> {

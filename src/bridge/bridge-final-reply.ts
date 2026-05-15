@@ -6,7 +6,7 @@ import {
 } from "./bridge-utils.ts";
 
 export type WechatFinalReplySender = {
-  sendText: (text: string) => Promise<void>;
+  sendText: (text: string) => Promise<boolean | void>;
   sendImage: (imagePath: string) => Promise<unknown>;
   sendFile: (filePath: string) => Promise<unknown>;
   sendVoice: (voicePath: string) => Promise<unknown>;
@@ -31,13 +31,19 @@ export async function forwardWechatFinalReply(params: {
   const visibleText = formatFinalReplyMessage(adapter, sanitizedText).trim();
 
   if (visibleText) {
-    await sender.sendText(visibleText);
+    const sent = await sender.sendText(visibleText);
+    if (sent === false) {
+      return;
+    }
   } else if (adapter === "opencode" && parsed.visibleText.trim()) {
     onEmptyVisibleReply?.({
       adapter,
       rawVisibleText: parsed.visibleText,
     });
-    await sender.sendText(OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE);
+    const sent = await sender.sendText(OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE);
+    if (sent === false) {
+      return;
+    }
   }
 
   for (const attachment of parsed.attachments) {
