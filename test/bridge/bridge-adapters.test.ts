@@ -1604,6 +1604,94 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.state.status).toBe("idle");
   });
 
+  test("does not replay historical local session entries on startup", async () => {
+    const home = makeTempDirectory();
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+
+    const cwd = path.join(home, "project");
+    const threadId = "019e1505-1c23-7fb1-aee3-c24f89836864";
+    const turnId = "019e1506-4c13-74c0-9991-664bc4e60f04";
+    const sessionFilePath = path.join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "05",
+      "11",
+      `rollout-2026-05-11T11-11-56-${threadId}.jsonl`,
+    );
+    writeTextFile(
+      sessionFilePath,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:09.281Z",
+          type: "session_meta",
+          payload: {
+            id: threadId,
+            timestamp: "2026-05-11T03:11:56.963Z",
+            cwd,
+            source: "vscode",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:10.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_started",
+            turn_id: turnId,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:11.000Z",
+          type: "event_msg",
+          payload: {
+            type: "user_message",
+            message: "old local input",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:12.000Z",
+          type: "event_msg",
+          payload: {
+            type: "agent_message",
+            phase: "final_answer",
+            message: "old local final",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:13.000Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            turn_id: turnId,
+            last_agent_message: "old local final",
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd,
+      renderMode: "headless",
+    }) as any;
+    const events: Array<{ type: string; text?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string }) => events.push(event));
+    adapter.sharedThreadId = threadId;
+    adapter.state.sharedThreadId = threadId;
+    adapter.state.sharedSessionId = threadId;
+    adapter.state.startedAt = "2026-05-11T03:13:00.000Z";
+    adapter.state.status = "idle";
+    adapter.appServer = {};
+
+    await adapter.pollSessionLog();
+
+    expect(events).toEqual([]);
+  });
+
   test("session task_complete clears the in-memory active turn and returns to idle", () => {
     const adapter = createBridgeAdapter({
       kind: "codex",

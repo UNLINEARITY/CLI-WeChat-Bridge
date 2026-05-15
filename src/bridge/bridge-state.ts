@@ -56,6 +56,24 @@ export type BridgeRuntimeOwnership =
 const ORPHAN_LOCK_RECLAIM_TIMEOUT_MS = 2_000;
 const ORPHAN_LOCK_RECLAIM_POLL_MS = 100;
 
+export function resolveRestorableSharedSessionId(
+  persisted: Partial<BridgeState> | null | undefined,
+  options: {
+    adapter: BridgeAdapterKind;
+    cwd: string;
+  },
+): string | undefined {
+  if (
+    !persisted ||
+    persisted.cwd !== options.cwd ||
+    persisted.adapter !== options.adapter
+  ) {
+    return undefined;
+  }
+
+  return persisted.sharedSessionId ?? persisted.sharedThreadId;
+}
+
 function cloneState(state: BridgeState): BridgeState {
   return JSON.parse(JSON.stringify(state)) as BridgeState;
 }
@@ -266,10 +284,10 @@ export class BridgeStateStore {
     this.acquireLock();
 
     const persisted = this.readStateFile();
-    const persistedSharedSessionId =
-      persisted?.cwd === options.cwd
-        ? persisted.sharedSessionId ?? persisted.sharedThreadId
-        : undefined;
+    const persistedSharedSessionId = resolveRestorableSharedSessionId(
+      persisted,
+      options,
+    );
     const persistedResumeConversationId =
       options.adapter === "claude" &&
       persisted?.cwd === options.cwd &&

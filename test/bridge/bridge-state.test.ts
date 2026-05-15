@@ -3,10 +3,55 @@ import { describe, expect, test } from "bun:test";
 import {
   evaluateBridgeRuntimeOwnership,
   normalizeBridgeLockPayload,
+  resolveRestorableSharedSessionId,
   shouldAutoReclaimBridgeLock,
 } from "../../src/bridge/bridge-state.ts";
 
 describe("bridge-state lock helpers", () => {
+  test("restores shared sessions only for the same adapter and workspace", () => {
+    expect(
+      resolveRestorableSharedSessionId(
+        {
+          adapter: "codex",
+          cwd: "C:\\workspace",
+          sharedSessionId: "thread-codex",
+        },
+        {
+          adapter: "codex",
+          cwd: "C:\\workspace",
+        },
+      ),
+    ).toBe("thread-codex");
+
+    expect(
+      resolveRestorableSharedSessionId(
+        {
+          adapter: "opencode",
+          cwd: "C:\\workspace",
+          sharedSessionId: "ses_opencode",
+        },
+        {
+          adapter: "codex",
+          cwd: "C:\\workspace",
+        },
+      ),
+    ).toBeUndefined();
+
+    expect(
+      resolveRestorableSharedSessionId(
+        {
+          adapter: "codex",
+          cwd: "C:\\other",
+          sharedSessionId: "thread-other",
+        },
+        {
+          adapter: "codex",
+          cwd: "C:\\workspace",
+        },
+      ),
+    ).toBeUndefined();
+  });
+
   test("normalizeBridgeLockPayload defaults old lock files to persistent lifecycle", () => {
     const payload = normalizeBridgeLockPayload({
       pid: 123,

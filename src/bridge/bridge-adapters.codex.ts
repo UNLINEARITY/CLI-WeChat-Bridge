@@ -625,6 +625,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       }
       this.sessionReadOffset = 0;
       this.sessionPartialLine = "";
+      this.seedSessionReplayCutoff(startedAtMs);
     }
 
     let content: string;
@@ -652,6 +653,21 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     for (const line of lines) {
       this.handleSessionLogLine(line);
+    }
+  }
+
+  private seedSessionReplayCutoff(startedAtMs: number): void {
+    if (
+      this.sessionIgnoreBeforeMs !== null ||
+      this.pendingTurnStart ||
+      this.activeTurn ||
+      this.state.activeTurnId
+    ) {
+      return;
+    }
+
+    if (Number.isFinite(startedAtMs)) {
+      this.sessionIgnoreBeforeMs = startedAtMs;
     }
   }
 
@@ -702,6 +718,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.sessionReadOffset = 0;
       this.sessionPartialLine = "";
       this.sessionFinalText = null;
+      this.seedSessionReplayCutoff(startedAtMs);
     }
   }
 
