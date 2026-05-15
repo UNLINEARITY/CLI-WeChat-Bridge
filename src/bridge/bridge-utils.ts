@@ -996,6 +996,10 @@ function stripInlineOpenCodeReasoningPrefix(text: string): string {
   return current;
 }
 
+function isOpenCodeReasoningResidue(text: string): boolean {
+  return !text.replace(/[\s"'“”‘’`.,!?;:()[\]{}<>…。！？；：（）【】《》、，-]/g, "");
+}
+
 export function sanitizeWechatFinalReplyText(
   adapter: BridgeAdapterKind,
   text: string,
@@ -1063,7 +1067,8 @@ export function sanitizeWechatFinalReplyText(
   }
 
   const tail = cleanupVisibleWechatReplyText(keptLines.slice(tailStartIndex).join("\n"));
-  return tail || cleaned;
+  const resolved = tail || cleaned;
+  return isOpenCodeReasoningResidue(resolved) ? "" : resolved;
 }
 
 function extractInlineWechatAttachments(text: string): ParsedWechatFinalReply {

@@ -2305,6 +2305,68 @@ describe("OpenCode message.part.updated handling", () => {
     expect(internal.outputBatcher.getRecentSummary(500)).toBe("(no output)");
   });
 
+  test("ignores text deltas that belong to known reasoning parts", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; text?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as unknown as { type: string; text?: string });
+    });
+    const internal = adapter as unknown as {
+      state: { status: string; lastOutputAt?: string };
+      activeSessionId: string | null;
+      outputBatcher: { flushNow(): Promise<void>; getRecentSummary(maxLength?: number): string };
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.state.status = "busy";
+    internal.activeSessionId = "s1";
+
+    internal.handleSseEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "p_reasoning_delta",
+          sessionID: "s1",
+          messageID: "m_assistant_1",
+          type: "reasoning",
+          text: "The user is sending an emoji.",
+        },
+      },
+    });
+    internal.handleSseEvent({
+      type: "message.part.delta",
+      properties: {
+        sessionID: "s1",
+        messageID: "m_assistant_1",
+        partID: "p_reasoning_delta",
+        field: "text",
+        delta: "I should answer briefly.",
+      },
+    });
+    internal.handleSseEvent({
+      type: "message.part.updated",
+      properties: {
+        part: {
+          id: "p_visible_answer",
+          sessionID: "s1",
+          messageID: "m_assistant_1",
+          type: "text",
+          text: "真正可发送的回复",
+        },
+      },
+    });
+
+    await internal.outputBatcher.flushNow();
+
+    expect(events.filter((event) => event.type === "stdout").map((event) => event.text).join(""))
+      .toBe("真正可发送的回复");
+    expect(internal.outputBatcher.getRecentSummary(500)).toBe("真正可发送的回复");
+  });
+
   test("ignores non-text message.part.delta fields", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",

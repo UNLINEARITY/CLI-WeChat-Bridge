@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 
-import { forwardWechatFinalReply } from "../../src/bridge/bridge-final-reply.ts";
+import {
+  OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE,
+  forwardWechatFinalReply,
+} from "../../src/bridge/bridge-final-reply.ts";
 
 describe("forwardWechatFinalReply", () => {
   test("sends stripped text before attachments in listed order", async () => {
@@ -171,6 +174,42 @@ describe("forwardWechatFinalReply", () => {
     });
 
     expect(calls).toEqual(["text:Hello! How can I help?"]);
+  });
+
+  test("sends an OpenCode diagnostic when reasoning cleanup leaves no visible reply", async () => {
+    const calls: string[] = [];
+    const emptyVisibleReplies: string[] = [];
+
+    await forwardWechatFinalReply({
+      adapter: "opencode",
+      rawText:
+        'The user said "好" (okay/good) with an OK hand gesture. This seems like just an acknowledgment. I should keep it brief and ask if they nee...',
+      onEmptyVisibleReply: ({ rawVisibleText }) => {
+        emptyVisibleReplies.push(rawVisibleText);
+      },
+      sender: {
+        sendText: async (text) => {
+          calls.push(`text:${text}`);
+        },
+        sendImage: async (imagePath) => {
+          calls.push(`image:${imagePath}`);
+        },
+        sendFile: async (filePath) => {
+          calls.push(`file:${filePath}`);
+        },
+        sendVoice: async (voicePath) => {
+          calls.push(`voice:${voicePath}`);
+        },
+        sendVideo: async (videoPath) => {
+          calls.push(`video:${videoPath}`);
+        },
+      },
+    });
+
+    expect(calls).toEqual([`text:${OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE}`]);
+    expect(emptyVisibleReplies).toEqual([
+      'The user said "好" (okay/good) with an OK hand gesture. This seems like just an acknowledgment. I should keep it brief and ask if they nee...',
+    ]);
   });
 
   test("sanitizes noisy OpenCode final replies before sending to WeChat", async () => {

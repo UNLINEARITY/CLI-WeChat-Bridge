@@ -223,6 +223,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private localPromptNoticeSent = false;
   private readonly loggedUnknownEventTypes = new Set<string>();
   private readonly emittedTextByPartId = new Map<string, string>();
+  private readonly partTypeByPartId = new Map<string, string>();
   private readonly observedOpenCodeMessages = new Map<string, ObservedOpenCodeMessage>();
   private readonly observedUserTextByPartId = new Map<string, string>();
   private readonly observedUserMessagePartIds = new Map<string, Set<string>>();
@@ -1289,11 +1290,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const part = isRecord(properties.part) ? properties.part : undefined;
+    const partId = this.extractPartId(properties, part);
+    if (partId && typeof part?.type === "string") {
+      this.partTypeByPartId.set(partId, part.type);
+    }
+
     if (this.isVisibleTextPart(part)) {
       this.trackObservedOpenCodeMessagePart({
         messageId: part.messageID,
         sessionId: part.sessionID,
-        partId: part.id,
+        partId: partId ?? part.id,
         snapshotText: typeof part.text === "string" ? part.text : undefined,
         deltaText: typeof properties.delta === "string" ? properties.delta : undefined,
       });
@@ -1314,7 +1320,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const partId = this.extractPartId(properties, part);
     if (!partId) {
       return;
     }
@@ -1371,6 +1376,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
+    const sessionId =
+      typeof properties.sessionID === "string"
+        ? properties.sessionID
+        : undefined;
+    const partId = this.extractPartId(properties);
+    const knownPartType = partId ? this.partTypeByPartId.get(partId) : undefined;
+    if (knownPartType && knownPartType !== "text") {
+      return;
+    }
+
     if (properties.field !== "text") {
       return;
     }
@@ -1379,11 +1394,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       typeof properties.delta === "string"
         ? properties.delta
         : undefined;
-    const sessionId =
-      typeof properties.sessionID === "string"
-        ? properties.sessionID
-        : undefined;
-    const partId = this.extractPartId(properties);
 
     if (typeof properties.messageID === "string" && partId && delta) {
       this.trackObservedOpenCodeMessagePart({
@@ -1427,6 +1437,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.emittedTextByPartId.delete(partId);
+    this.partTypeByPartId.delete(partId);
   }
 
   private handleTuiPromptAppend(properties: unknown): void {
@@ -2463,6 +2474,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private clearStreamedPartState(): void {
     this.emittedTextByPartId.clear();
+    this.partTypeByPartId.clear();
   }
 
   private cleanupObservedOpenCodeMessage(messageId: string): void {

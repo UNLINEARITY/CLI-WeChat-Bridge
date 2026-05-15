@@ -918,6 +918,11 @@ function wireAdapterEvents(params: {
           await forwardWechatFinalReply({
             adapter: options.adapter,
             rawText: event.text,
+            onEmptyVisibleReply: ({ rawVisibleText }) => {
+              stateStore.appendLog(
+                `empty_visible_final_reply: adapter=${options.adapter} raw=${truncatePreview(rawVisibleText)}`,
+              );
+            },
             sender: {
               sendText: (text) =>
                 queueWechatMessage(authorizedUserId, text, "final_reply"),

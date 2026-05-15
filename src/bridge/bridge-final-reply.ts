@@ -13,20 +13,31 @@ export type WechatFinalReplySender = {
   sendVideo: (videoPath: string) => Promise<unknown>;
 };
 
+export const OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE =
+  "OpenCode 没有产生可发送到微信的可见回复。请查看本地终端输出，或重试这条消息。";
+
 export async function forwardWechatFinalReply(params: {
   adapter: BridgeAdapterKind;
   rawText: string;
   sender: WechatFinalReplySender;
+  onEmptyVisibleReply?: (details: {
+    adapter: BridgeAdapterKind;
+    rawVisibleText: string;
+  }) => void;
 }): Promise<void> {
-  const { adapter, rawText, sender } = params;
+  const { adapter, rawText, sender, onEmptyVisibleReply } = params;
   const parsed = parseWechatFinalReply(rawText);
-  const visibleText = formatFinalReplyMessage(
-    adapter,
-    sanitizeWechatFinalReplyText(adapter, parsed.visibleText),
-  ).trim();
+  const sanitizedText = sanitizeWechatFinalReplyText(adapter, parsed.visibleText);
+  const visibleText = formatFinalReplyMessage(adapter, sanitizedText).trim();
 
   if (visibleText) {
     await sender.sendText(visibleText);
+  } else if (adapter === "opencode" && parsed.visibleText.trim()) {
+    onEmptyVisibleReply?.({
+      adapter,
+      rawVisibleText: parsed.visibleText,
+    });
+    await sender.sendText(OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE);
   }
 
   for (const attachment of parsed.attachments) {
