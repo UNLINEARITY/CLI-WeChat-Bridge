@@ -70,6 +70,23 @@ npm link
 - `npm link` 会让全局命令直接指向当前仓库源码；
 - `npm install -g .` 会安装一份当前仓库的复制版本；后续代码更新后需要重新执行一次。
 
+如果你想把当前本地源码构建出的包安装到真实全局环境，并在任意目录人工验证，可以直接运行：
+
+```bash
+npm run smoke:global
+```
+
+这个脚本会先用当前源码打出真实 npm tarball，再执行 `npm install -g <tarball>` 安装到真实全局环境；脚本结束后，你可以离开仓库目录运行 `wechat-codex-start` 等命令。如果你想先清理缓存、卸载当前全局包，或者顺便跑完整质量门禁，可以加上这些参数：
+
+```bash
+npm run smoke:global -- --purge-global --clean-cache --full
+```
+
+- `--clean-cache`：先执行 `npm cache clean --force`
+- `--purge-global`：先卸载当前真实全局包
+- `--full`：额外执行 `npm run quality`
+- `--keep-tarball`：保留生成的 tarball，方便排查
+
 ### 3. 完成微信登录
 
 npm 全局安装后可以直接运行：
