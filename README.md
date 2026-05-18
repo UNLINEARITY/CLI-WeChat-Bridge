@@ -2,9 +2,18 @@
 
 <p align='center'><img src='docs/images/logo.png' width=90%></p> 
 
+<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=600&amp;duration=4000&amp;pause=500&amp;color=06C763&amp;center=true&amp;vCenter=true&amp;width=660&amp;lines=CLI+WeChat+Bridge+%E5%BE%AE%E4%BF%A1%E6%A1%A5%E6%8E%A5;%E7%9C%9F%E6%AD%A3%E7%9A%84%E2%80%9C%E7%BB%88%E7%AB%AF-%E5%BE%AE%E4%BF%A1%E2%80%9D%E5%8E%9F%E7%94%9F%E5%8F%8C%E5%90%91%E4%BA%A4%E4%BA%92"></p>
+
+<p align="center">
+  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/CLI-WeChat-Bridge?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;color=0891b2&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/@unlinearity/cli-wechat-bridge?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@unlinearity/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
+  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/blob/main/LICENSE.txt"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/CLI-WeChat-Bridge?label=License&amp;style=for-the-badge&amp;color=7c3aed&amp;labelColor=1c1917"></a>
+</p>
+
 **命令行工具的微信桥接**：本项目用于桥接微信消息与本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、`OpenCode` 或持久化 `powershell.exe` 会话，并将本地输出、审批请求与运行状态同步回微信。
 
-当前实现以本地工作流为中心展开，重点是保留本地原生终端体验，并在此基础上提供微信侧的远程输入、结果回流与状态同步能力。
+当前实现以本地工作流为中心展开，重点是保留**本地原生终端体验**，支持原生使用以及高级参数注入，并在此基础上提供微信侧的远程输入、结果回流与状态同步能力。
 
 <p align='center'><img src='docs/images/animation.webp' width=90%></p> 
 
@@ -26,9 +35,8 @@
 
 ### 1. 环境要求
 
-- Windows 为当前主要验证环境
 - [Node.js](https://nodejs.org/en/download) `>= 24.0.0`（建议直接安装官网 LTS 版本）
-- [Bun](https://bun.sh/docs/installation) `>= 1.0.0`
+- [Bun](https://bun.sh/docs/installation) `>= 1.0.0` （开发者需要，普通用户无需安装）
 - 已安装以下至少一种本地 CLI：（最好更新至最新版本）
   - [Codex](https://github.com/openai/codex)
   - [Claude Code](https://code.claude.com/docs/en/overview)
@@ -291,6 +299,17 @@ wechat-opencode-start --cwd D:\work\my-project
 - `--cwd <path>`：显式指定 bridge / companion 对应的工作目录；
 - `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-codex` / `wechat-bridge-claude` / `wechat-bridge-opencode`；
 - `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`。
+
+高级用法：除上述启动器参数外，未知参数会继续透传给可见的底层 CLI。这样可以在保留微信登录、工作区切换与 bridge 生命周期管理的同时，启用 Codex / Claude Code 自己的高级启动模式。
+
+```bash
+wechat-codex-start --yolo
+wechat-codex-start --model gpt-5.2 --yolo
+wechat-claude-start --dangerously-skip-permissions
+wechat-claude-start --model sonnet --dangerously-skip-permissions
+```
+
+其中 `--yolo` 会传给 Codex；`--dangerously-skip-permissions` 会传给 Claude Code。它们只影响本地可见 CLI，不会覆盖 bridge 托管的 Codex remote 连接参数、Claude settings、微信登录状态或当前工作区锁。由于这两类参数会降低审批保护，建议只在可信工作区中使用。
 
 ## 微信侧支持的指令
 
