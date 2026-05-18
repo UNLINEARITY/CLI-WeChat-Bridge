@@ -168,6 +168,40 @@ export type WechatTransportErrorClassification = {
   statusCode?: number;
 };
 
+export class WechatApiResponseError extends Error {
+  readonly endpoint: string;
+  readonly ret?: number;
+  readonly errcode?: number;
+  readonly errmsg: string;
+
+  constructor(params: {
+    endpoint: string;
+    ret?: number;
+    errcode?: number;
+    errmsg?: string;
+  }) {
+    const errmsg = params.errmsg ?? "";
+    super(
+      `${params.endpoint} failed: ret=${params.ret} errcode=${params.errcode} errmsg=${errmsg}`,
+    );
+    this.name = "WechatApiResponseError";
+    this.endpoint = params.endpoint;
+    this.ret = params.ret;
+    this.errcode = params.errcode;
+    this.errmsg = errmsg;
+  }
+}
+
+export function isWechatContextTokenStaleError(
+  error: unknown,
+): error is WechatApiResponseError {
+  return (
+    error instanceof WechatApiResponseError &&
+    error.endpoint === "sendmessage" &&
+    error.ret === -2
+  );
+}
+
 const DEFAULT_MEDIA_UPLOAD_LIMIT_MB: Record<UploadLabel, number> = {
   image: 20,
   file: 50,
@@ -294,9 +328,7 @@ export function assertWechatApiResponseOk(endpoint: string, raw: string): void {
     readStringResponseField(response, "message") ??
     readStringResponseField(response, "msg") ??
     "";
-  throw new Error(
-    `${endpoint} failed: ret=${ret} errcode=${errcode} errmsg=${errmsg}`,
-  );
+  throw new WechatApiResponseError({ endpoint, ret, errcode, errmsg });
 }
 
 function describeErrorNode(value: unknown): string {
@@ -1371,6 +1403,17 @@ export class WeChatTransport {
     if (fs.existsSync(CONTEXT_CACHE_FILE)) {
       fs.rmSync(CONTEXT_CACHE_FILE, { force: true });
     }
+  }
+
+  clearCachedContextToken(recipientId: string): boolean {
+    const normalizedRecipientId = recipientId.trim();
+    if (!normalizedRecipientId || !this.contextTokenCache.has(normalizedRecipientId)) {
+      return false;
+    }
+
+    this.contextTokenCache.delete(normalizedRecipientId);
+    writeJsonFile(CONTEXT_CACHE_FILE, Object.fromEntries(this.contextTokenCache));
+    return true;
   }
 
   private generateClientId(): string {

@@ -11,9 +11,11 @@ import {
   classifyWechatTransportError,
   describeWechatTransportError,
   formatByteSize,
+  isWechatContextTokenStaleError,
   isWechatSyncSessionTimeout,
   resolveMediaUploadLimitBytes,
   tryClaimInboundMessage,
+  WechatApiResponseError,
 } from "../../src/wechat/wechat-transport.ts";
 
 describe("wechat upload limits", () => {
@@ -124,6 +126,47 @@ describe("wechat upload limits", () => {
     expect(() =>
       assertWechatApiResponseOk("sendmessage", JSON.stringify({ ret: 0 })),
     ).not.toThrow();
+  });
+
+  test("classifies sendmessage ret=-2 as stale WeChat context", () => {
+    let thrown: unknown;
+
+    try {
+      assertWechatApiResponseOk("sendmessage", JSON.stringify({ ret: -2 }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(WechatApiResponseError);
+    expect(thrown).toMatchObject({
+      endpoint: "sendmessage",
+      ret: -2,
+      errcode: undefined,
+      errmsg: "",
+    });
+    expect(isWechatContextTokenStaleError(thrown)).toBe(true);
+    expect(describeWechatTransportError(thrown)).toContain(
+      "WechatApiResponseError: sendmessage failed: ret=-2 errcode=undefined errmsg=",
+    );
+  });
+
+  test("does not classify other app-level failures as stale WeChat context", () => {
+    expect(
+      isWechatContextTokenStaleError(
+        new WechatApiResponseError({
+          endpoint: "getupdates",
+          ret: -2,
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      isWechatContextTokenStaleError(
+        new WechatApiResponseError({
+          endpoint: "sendmessage",
+          ret: 1,
+        }),
+      ),
+    ).toBe(false);
   });
 
   test("claims each inbound message key only once across processes", () => {

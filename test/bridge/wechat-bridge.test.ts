@@ -3,15 +3,18 @@ import { describe, expect, test } from "bun:test";
 import {
   canDrainDeferredCodexInboundQueue,
   formatDeferredCodexInboundQueueMessage,
+  formatWechatContextTokenStaleLogEntry,
   formatUserFacingInboundError,
   formatWechatSendFailureLogEntry,
   isRetryableDeferredCodexDrainError,
+  isRetryableWechatSendError,
   formatUserFacingBridgeFatalError,
   parseCliArgs,
   shouldDeferCodexInboundMessage,
   shouldForwardBridgeEventToWechat,
   shouldWatchParentProcess,
 } from "../../src/bridge/wechat-bridge.ts";
+import { WechatApiResponseError } from "../../src/wechat/wechat-transport.ts";
 
 describe("wechat-bridge cli helpers", () => {
   test("parseCliArgs keeps persistent lifecycle by default", () => {
@@ -79,6 +82,44 @@ describe("wechat-bridge cli helpers", () => {
     ).toBe(
       "wechat_send_failed: context=thread_switched recipient=owner@im.wechat error=Error: HTTP 503: upstream unavailable",
     );
+  });
+
+  test("formats stale WeChat context token failures separately", () => {
+    expect(
+      formatWechatContextTokenStaleLogEntry({
+        context: "final_reply",
+        recipientId: "owner@im.wechat",
+        error: new WechatApiResponseError({
+          endpoint: "sendmessage",
+          ret: -2,
+        }),
+      }),
+    ).toBe(
+      "wechat_context_token_stale: context=final_reply recipient=owner@im.wechat action=wechat_message_required error=WechatApiResponseError: sendmessage failed: ret=-2 errcode=undefined errmsg=",
+    );
+  });
+
+  test("does not retry stale WeChat context token send failures", () => {
+    expect(
+      isRetryableWechatSendError(
+        new WechatApiResponseError({
+          endpoint: "sendmessage",
+          ret: -2,
+        }),
+      ),
+    ).toBe(false);
+
+    expect(isRetryableWechatSendError(new Error("HTTP 503: upstream unavailable"))).toBe(true);
+    expect(
+      isRetryableWechatSendError(
+        new WechatApiResponseError({
+          endpoint: "sendmessage",
+          ret: 1,
+          errcode: 45009,
+          errmsg: "rate limited",
+        }),
+      ),
+    ).toBe(true);
   });
 
   test("formats opencode companion disconnects as a cleaner user-facing message", () => {

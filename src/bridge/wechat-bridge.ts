@@ -43,6 +43,7 @@ import {
   DEFAULT_LONG_POLL_TIMEOUT_MS,
   WeChatTransport,
   describeWechatTransportError,
+  isWechatContextTokenStaleError,
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
 import {
@@ -172,6 +173,14 @@ export function formatWechatSendFailureLogEntry(params: {
   return `wechat_send_failed: context=${params.context} recipient=${params.recipientId} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
 }
 
+export function formatWechatContextTokenStaleLogEntry(params: {
+  context: WechatSendContext;
+  recipientId: string;
+  error: unknown;
+}): string {
+  return `wechat_context_token_stale: context=${params.context} recipient=${params.recipientId} action=wechat_message_required error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
+}
+
 function formatWechatSendRetryLogEntry(params: {
   context: WechatSendContext;
   recipientId: string;
@@ -182,14 +191,18 @@ function formatWechatSendRetryLogEntry(params: {
   return `wechat_send_retry: context=${params.context} recipient=${params.recipientId} attempt=${params.attempt} delay_ms=${params.delayMs} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
 }
 
-function isRetryableWechatSendError(error: unknown): boolean {
+export function isRetryableWechatSendError(error: unknown): boolean {
+  if (isWechatContextTokenStaleError(error)) {
+    return false;
+  }
+
   const classification = classifyWechatTransportError(error);
   if (classification.retryable) {
     return true;
   }
 
   const details = describeWechatTransportError(error);
-  return /^Error: sendmessage failed:/i.test(details) &&
+  return /^(?:Error|WechatApiResponseError): sendmessage failed:/i.test(details) &&
     !/errcode=-14\b.*session timeout/i.test(details);
 }
 
@@ -487,6 +500,21 @@ async function main(): Promise<void> {
           await transport.sendText(senderId, text);
           return true;
         } catch (err) {
+          if (isWechatContextTokenStaleError(err)) {
+            transport.clearCachedContextToken(senderId);
+            const hint =
+              "WeChat conversation context is stale. Ask the WeChat owner to send any message first, then local terminal replies can sync back to WeChat.";
+            logError(`Failed to send WeChat ${context}: ${hint}`);
+            stateStore.appendLog(
+              formatWechatContextTokenStaleLogEntry({
+                context,
+                recipientId: senderId,
+                error: err,
+              }),
+            );
+            return false;
+          }
+
           if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(err)) {
             const delayMs = computeWechatSendRetryDelayMs(attempt);
             logError(
