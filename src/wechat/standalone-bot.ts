@@ -9,10 +9,17 @@
  *   bun run src/wechat/standalone-bot.ts
  */
 
-import fs from "node:fs";
-import os from "node:os";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+
+import {
+  CHANNEL_DATA_DIR,
+  CREDENTIALS_FILE,
+  migrateLegacyChannelFiles,
+  SYNC_BUF_FILE,
+} from "./channel-config.ts";
 
 // Types
 type AccountData = {
@@ -61,10 +68,7 @@ interface GetUpdatesResp {
 }
 
 // Constants
-const HOME_DIR = os.homedir();
-const CREDENTIALS_FILE = `${HOME_DIR}/.claude/channels/wechat/account.json`;
-const SYNC_BUF_FILE = `${HOME_DIR}/.claude/channels/wechat/sync_buf.txt`;
-const LOG_DIR = `${HOME_DIR}/.claude/channels/wechat/logs`;
+const LOG_DIR = path.join(CHANNEL_DATA_DIR, "logs");
 const BOT_TYPE = "3";
 const CHANNEL_VERSION = "0.1.0";
 const LONG_POLL_TIMEOUT_MS = 35_000;
@@ -451,6 +455,7 @@ async function startPolling(account: AccountData): Promise<never> {
 async function main() {
   log("=== WeChat + Claude 独立机器人 ===");
   log("");
+  migrateLegacyChannelFiles(log);
 
   // Load WeChat credentials
   log(`正在加载微信凭据: ${CREDENTIALS_FILE}`);

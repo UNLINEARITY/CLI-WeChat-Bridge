@@ -11,15 +11,15 @@ export const DEFAULT_BASE_URL =
   process.env.WECHAT_ILINK_BASE_URL?.trim() || "https://ilinkai.weixin.qq.com";
 export const BOT_TYPE = "3";
 
-export const CHANNEL_DATA_DIR = process.env.CLAUDE_WECHAT_CHANNEL_DATA_DIR?.trim()
-  ? path.resolve(process.env.CLAUDE_WECHAT_CHANNEL_DATA_DIR.trim())
-  : path.join(os.homedir(), ".claude", "channels", "wechat");
-export const GLOBAL_CHANNEL_DATA_DIR = path.join(
-  os.homedir(),
-  ".claude",
-  "channels",
-  "wechat",
-);
+export function resolveChannelDataDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homeDir = os.homedir(),
+): string {
+  const configured = env.CLI_BRIDGE_DATA_DIR?.trim();
+  return configured ? path.resolve(configured) : path.join(homeDir, ".cli-bridge");
+}
+
+export const CHANNEL_DATA_DIR = resolveChannelDataDir();
 
 export const CREDENTIALS_FILE = path.join(CHANNEL_DATA_DIR, "account.json");
 export const SYNC_BUF_FILE = path.join(CHANNEL_DATA_DIR, "sync_buf.txt");
@@ -36,7 +36,7 @@ export const CODEX_PANEL_ENDPOINT_FILE = path.join(
 );
 export const WORKSPACES_DIR = path.join(CHANNEL_DATA_DIR, "workspaces");
 export const INBOUND_MESSAGE_CLAIMS_DIR = path.join(
-  GLOBAL_CHANNEL_DATA_DIR,
+  CHANNEL_DATA_DIR,
   "inbound-message-claims",
 );
 export const INBOUND_ATTACHMENTS_DIR = path.join(
@@ -50,15 +50,91 @@ export type WorkspaceChannelPaths = {
   endpointFile: string;
 };
 
-const LEGACY_CHANNEL_DATA_DIR = path.join(
+type LegacyChannelSource = {
+  dataDir: string;
+};
+
+export type LegacyChannelMigrationOptions = {
+  channelDataDir?: string;
+  legacyDataDirs?: string[];
+};
+
+type LegacyMigrationItem = {
+  label: string;
+  sourceName: string;
+  targetName: string;
+  kind: "file" | "directory";
+};
+
+const LEGACY_GLOBAL_CHANNEL_DATA_DIR = path.join(
+  os.homedir(),
+  ".claude",
+  "channels",
+  "wechat",
+);
+const LEGACY_REPO_CHANNEL_DATA_DIR = path.join(
   PROJECT_DIR,
   "~",
   ".claude",
   "channels",
   "wechat",
 );
-const LEGACY_CREDENTIALS_FILE = path.join(LEGACY_CHANNEL_DATA_DIR, "account.json");
-const LEGACY_SYNC_BUF_FILE = path.join(LEGACY_CHANNEL_DATA_DIR, "sync_buf.txt");
+const LEGACY_ENV_CHANNEL_DATA_DIR = process.env.CLAUDE_WECHAT_CHANNEL_DATA_DIR?.trim()
+  ? path.resolve(process.env.CLAUDE_WECHAT_CHANNEL_DATA_DIR.trim())
+  : "";
+const LEGACY_CHANNEL_SOURCE_DIRS = [
+  LEGACY_ENV_CHANNEL_DATA_DIR,
+  LEGACY_GLOBAL_CHANNEL_DATA_DIR,
+  LEGACY_REPO_CHANNEL_DATA_DIR,
+].filter(Boolean);
+const LEGACY_CHANNEL_SOURCES: LegacyChannelSource[] = LEGACY_CHANNEL_SOURCE_DIRS.map((dataDir) => ({
+  dataDir,
+}));
+
+const LEGACY_MIGRATION_ITEMS: LegacyMigrationItem[] = [
+  {
+    label: "credentials",
+    sourceName: "account.json",
+    targetName: "account.json",
+    kind: "file",
+  },
+  {
+    label: "sync state",
+    sourceName: "sync_buf.txt",
+    targetName: "sync_buf.txt",
+    kind: "file",
+  },
+  {
+    label: "context tokens",
+    sourceName: "context_tokens.json",
+    targetName: "context_tokens.json",
+    kind: "file",
+  },
+  {
+    label: "update check cache",
+    sourceName: "update-check.json",
+    targetName: "update-check.json",
+    kind: "file",
+  },
+  {
+    label: "workspace state",
+    sourceName: "workspaces",
+    targetName: "workspaces",
+    kind: "directory",
+  },
+  {
+    label: "inbound attachments",
+    sourceName: "inbound-attachments",
+    targetName: "inbound-attachments",
+    kind: "directory",
+  },
+  {
+    label: "legacy bridge log",
+    sourceName: "bridge.log",
+    targetName: "legacy-bridge.log",
+    kind: "file",
+  },
+];
 
 export function ensureChannelDataDir(): void {
   fs.mkdirSync(CHANNEL_DATA_DIR, { recursive: true });
@@ -108,60 +184,95 @@ export function ensureWorkspaceChannelDir(cwd: string): WorkspaceChannelPaths {
   return paths;
 }
 
-function channelDataDirHasState(): boolean {
-  try {
-    if (!fs.existsSync(CHANNEL_DATA_DIR)) {
-      return false;
-    }
-    return fs.readdirSync(CHANNEL_DATA_DIR).length > 0;
-  } catch {
-    return true;
-  }
+function isSamePath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
 }
 
-export function shouldMigrateLegacyCredentials(params: {
-  channelDataDirHadState: boolean;
-  credentialsExists: boolean;
-  legacyCredentialsExists: boolean;
-}): boolean {
+function legacySourceHasMigratableData(source: LegacyChannelSource): boolean {
+  return LEGACY_MIGRATION_ITEMS.some((item) => {
+    const sourcePath = path.join(source.dataDir, item.sourceName);
+    if (!fs.existsSync(sourcePath)) {
+      return false;
+    }
+    try {
+      const stat = fs.statSync(sourcePath);
+      return item.kind === "directory" ? stat.isDirectory() : stat.isFile();
+    } catch {
+      return false;
+    }
+  });
+}
+
+function findLegacyChannelSource(
+  channelDataDir = CHANNEL_DATA_DIR,
+  legacySources = LEGACY_CHANNEL_SOURCES,
+): LegacyChannelSource | null {
   return (
-    params.legacyCredentialsExists &&
-    !params.credentialsExists &&
-    !params.channelDataDirHadState
+    legacySources.find(
+      (source) =>
+        !isSamePath(source.dataDir, channelDataDir) &&
+        legacySourceHasMigratableData(source),
+    ) ?? null
   );
 }
 
 export function migrateLegacyChannelFiles(
   log?: (message: string) => void,
+  options: LegacyChannelMigrationOptions = {},
 ): string[] {
+  const channelDataDir = options.channelDataDir ?? CHANNEL_DATA_DIR;
+  const legacySources = (options.legacyDataDirs ?? LEGACY_CHANNEL_SOURCE_DIRS).map(
+    (dataDir) => ({ dataDir }),
+  );
   const migrated: string[] = [];
-  const channelDataDirHadState = channelDataDirHasState();
+  const skippedExisting: string[] = [];
+  const legacySource = findLegacyChannelSource(channelDataDir, legacySources);
 
-  if (
-    !fs.existsSync(LEGACY_CREDENTIALS_FILE) &&
-    !fs.existsSync(LEGACY_SYNC_BUF_FILE)
-  ) {
+  if (!legacySource) {
     return migrated;
   }
 
-  ensureChannelDataDir();
+  fs.mkdirSync(channelDataDir, { recursive: true });
 
-  if (
-    shouldMigrateLegacyCredentials({
-      channelDataDirHadState,
-      credentialsExists: fs.existsSync(CREDENTIALS_FILE),
-      legacyCredentialsExists: fs.existsSync(LEGACY_CREDENTIALS_FILE),
-    })
-  ) {
-    fs.copyFileSync(LEGACY_CREDENTIALS_FILE, CREDENTIALS_FILE);
-    migrated.push("credentials");
+  for (const item of LEGACY_MIGRATION_ITEMS) {
+    const sourcePath = path.join(legacySource.dataDir, item.sourceName);
+    const targetPath = path.join(channelDataDir, item.targetName);
+    if (!fs.existsSync(sourcePath)) {
+      continue;
+    }
+    if (fs.existsSync(targetPath)) {
+      skippedExisting.push(item.label);
+      continue;
+    }
+
+    const stat = fs.statSync(sourcePath);
+    if (item.kind === "directory") {
+      if (!stat.isDirectory()) {
+        continue;
+      }
+      fs.cpSync(sourcePath, targetPath, { recursive: true });
+    } else {
+      if (!stat.isFile()) {
+        continue;
+      }
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+    migrated.push(item.label);
   }
 
   if (migrated.length && log) {
+    const skippedText = skippedExisting.length
+      ? ` Skipped existing: ${skippedExisting.join(", ")}.`
+      : "";
     log(
-      `Migrated legacy ${migrated.join(
-        " and ",
-      )} from ${LEGACY_CHANNEL_DATA_DIR} to ${CHANNEL_DATA_DIR}.`,
+      `Migrated legacy ${migrated.join(", ")} from ${
+        legacySource.dataDir
+      } to ${channelDataDir}.${skippedText}`,
     );
   }
 

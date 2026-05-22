@@ -121,10 +121,12 @@ bun run setup # 绑定微信 ClawBot
 默认凭据文件路径：
 
 ```text
-~/.claude/channels/wechat/account.json
+~/.cli-bridge/account.json
 ```
 
 登录成功后会清理旧的 `sync_buf.txt` 和 `context_tokens.json`，避免旧会话状态污染新的登录状态。
+
+从旧版本升级时，bridge 会自动从旧的 `~/.claude/channels/wechat` 迁移数据到 `~/.cli-bridge`，包括登录凭据、同步游标、上下文 token、工作区状态和已接收附件；已有的新目录文件不会被覆盖，旧目录也会原样保留。旧运行锁不会迁移，旧 `bridge.log` 会保存为 `legacy-bridge.log`，避免覆盖新的运行日志。
 
 如果是首次安装或微信登录已过期，`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 也会在前台提示扫码登录。
 
@@ -184,7 +186,7 @@ cd D:\work\your-project
 
 微信发来的图片和普通文件也会被接收并保存到本地数据目录：
 
-- 保存位置：`~/.claude/channels/wechat/inbound-attachments/<日期>/`
+- 保存位置：`~/.cli-bridge/inbound-attachments/<日期>/`
 - bridge 会把本地路径追加到转发给 Codex / Claude Code / OpenCode 的 prompt 中，模型可按需读取或解析这些文件；
 - 当前不会自动 OCR 图片，也不会自动抽取 PDF / DOCX 正文；解析动作由本地 CLI 根据路径完成。
 
@@ -361,7 +363,7 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 默认数据目录：
 
 ```text
-~/.claude/channels/wechat
+~/.cli-bridge
 ```
 
 主要文件如下：
@@ -382,7 +384,7 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | 变量名 | 说明 |
 | --- | --- |
 | `WECHAT_ILINK_BASE_URL` | 覆盖默认 iLink API 地址 |
-| `CLAUDE_WECHAT_CHANNEL_DATA_DIR` | 覆盖默认数据目录 |
+| `CLI_BRIDGE_DATA_DIR` | 覆盖默认数据目录 |
 | `WECHAT_MAX_IMAGE_MB` | 覆盖图片上传大小限制，默认 20 MB |
 | `WECHAT_MAX_FILE_MB` | 覆盖普通文件上传大小限制，默认 50 MB |
 | `WECHAT_MAX_VOICE_MB` | 覆盖语音上传大小限制，默认 20 MB |
@@ -390,6 +392,8 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | `WECHAT_MAX_INBOUND_IMAGE_MB` | 覆盖微信入站图片下载大小限制，默认 20 MB |
 | `WECHAT_MAX_INBOUND_FILE_MB` | 覆盖微信入站普通文件下载大小限制，默认 50 MB |
 | `WECHAT_OPENCODE_DEBUG` | 开启 OpenCode 适配器调试输出 |
+
+旧版 `CLAUDE_WECHAT_CHANNEL_DATA_DIR` 不再作为活动数据目录配置项；如旧环境中设置过该变量，它只会被视为一次性旧数据迁移来源。新的自定义目录请使用 `CLI_BRIDGE_DATA_DIR`。
 
 ## 版本更新
 
@@ -476,7 +480,7 @@ npm link
 3. 检查：
 
 ```text
-~/.claude/channels/wechat/bridge.log
+~/.cli-bridge/bridge.log
 ```
 
 ### 6. 本地 `/resume` 后微信不同步
@@ -490,7 +494,7 @@ npm link
 如果 `bridge-state.json` 看起来正常，但微信仍然没有收到回复，优先检查：
 
 ```text
-~/.claude/channels/wechat/bridge.log
+~/.cli-bridge/bridge.log
 ```
 
 如果日志中出现 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT` 或 `ilinkai.weixin.qq.com:443`，通常是 bridge 到 iLink 的出站网络或代理问题，而不是本地 CLI 没有完成任务。请确认当前终端是否继承 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`，以及 Node 是否需要 `NODE_OPTIONS=--use-env-proxy`。

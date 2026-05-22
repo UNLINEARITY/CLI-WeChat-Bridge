@@ -1189,14 +1189,15 @@ export class WeChatTransport {
   private readonly logger: TransportLogger;
   private readonly recentMessageKeys = new Set<string>();
   private readonly recentMessageOrder: string[] = [];
-  private readonly contextTokenCache = new Map<string, string>(
-    Object.entries(readJsonFile<ContextTokenState>(CONTEXT_CACHE_FILE) ?? {}),
-  );
+  private readonly contextTokenCache: Map<string, string>;
   private syncBuffer = "";
 
   constructor(logger: TransportLogger) {
     this.logger = logger;
     migrateLegacyChannelFiles((message) => this.logger.log(message));
+    this.contextTokenCache = new Map<string, string>(
+      Object.entries(readJsonFile<ContextTokenState>(CONTEXT_CACHE_FILE) ?? {}),
+    );
     this.syncBuffer = this.readSyncBuffer();
   }
 

@@ -222,7 +222,7 @@ describe("wechat inbound prompt injection", () => {
     const prompt = buildWechatInboundPrompt("Please summarize this file.", [
       {
         kind: "file",
-        path: "C:\\Users\\unlin\\.claude\\channels\\wechat\\inbound-attachments\\2026-05-22\\report.pdf",
+        path: "C:\\Users\\unlin\\.cli-bridge\\inbound-attachments\\2026-05-22\\report.pdf",
         fileName: "report.pdf",
         sizeBytes: 1536,
       },
@@ -237,7 +237,7 @@ describe("wechat inbound prompt injection", () => {
     const prompt = buildWechatInboundPrompt("", [
       {
         kind: "image",
-        path: "C:\\Users\\unlin\\.claude\\channels\\wechat\\inbound-attachments\\2026-05-22\\photo.jpg",
+        path: "C:\\Users\\unlin\\.cli-bridge\\inbound-attachments\\2026-05-22\\photo.jpg",
         fileName: "photo.jpg",
       },
     ]);
