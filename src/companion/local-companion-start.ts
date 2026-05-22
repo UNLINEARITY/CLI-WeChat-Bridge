@@ -21,6 +21,14 @@ import {
 import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
 import { runCodexRemoteClient } from "./codex-remote-client.ts";
 import { runLocalCompanion } from "./local-companion.ts";
+import {
+  clearDaemonEndpoint,
+  isDaemonEndpointAlive,
+  readDaemonEndpoint,
+  sendDaemonRequest,
+  type DaemonEndpoint,
+  type DaemonResponse,
+} from "../daemon/daemon-link.ts";
 
 type LocalCompanionLaunchAdapter = Exclude<BridgeAdapterKind, "shell">;
 
@@ -69,6 +77,10 @@ type VisibleClientRunners = {
 };
 
 type EnsureWechatCredentialsFn = typeof ensureWechatCredentials;
+type DaemonEndpointReader = typeof readDaemonEndpoint;
+type DaemonEndpointAliveChecker = typeof isDaemonEndpointAlive;
+type DaemonRequestSender = typeof sendDaemonRequest;
+type DaemonEndpointClearer = typeof clearDaemonEndpoint;
 
 const MODULE_FILE = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_FILE);
@@ -283,7 +295,11 @@ async function stopExistingBridge(
     throw new Error(`Timed out waiting for existing bridge pid=${pid} to exit.`);
   }
 
-  clearLocalCompanionEndpoint(cwd);
+  if (lock.adapter === "codex" || lock.adapter === "claude" || lock.adapter === "opencode") {
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: lock.adapter });
+  } else {
+    clearLocalCompanionEndpoint(cwd);
+  }
   log(
     requestedAdapter,
     `Cleared stale local companion endpoint for previous workspace ${cwd}.`,
@@ -321,7 +337,7 @@ async function readUsableEndpoint(
   cwd: string,
   adapter: LocalCompanionLaunchAdapter,
 ): Promise<EndpointReadResult> {
-  const endpoint = readLocalCompanionEndpoint(cwd);
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
   if (!endpoint || endpoint.kind !== adapter) {
     return { endpoint: null };
   }
@@ -330,7 +346,7 @@ async function readUsableEndpoint(
     return { endpoint };
   }
 
-  clearLocalCompanionEndpoint(cwd, endpoint.instanceId);
+  clearLocalCompanionEndpoint(cwd, endpoint.instanceId, { adapter });
   log(adapter, `Removed stale local companion endpoint for ${cwd}.`);
   return { endpoint: null };
 }
@@ -344,7 +360,9 @@ function isCompanionAlive(endpoint: LocalCompanionEndpoint | null): boolean {
     return true;
   }
 
-  clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
+  clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId, {
+    adapter: endpoint.kind,
+  });
   return false;
 }
 
@@ -426,7 +444,9 @@ async function ensureBridgeReady(
   if (!lock || !lockProcessAlive) {
     if (lock && !lockProcessAlive) {
       log(options.adapter, `Found stale lock for ${options.cwd} (pid=${lock.pid} dead). Clearing.`);
-      clearLocalCompanionEndpoint(options.cwd);
+      clearLocalCompanionEndpoint(options.cwd, undefined, {
+        adapter: options.adapter,
+      });
     }
 
     log(options.adapter, `Starting bridge in background for ${options.cwd}...`);
@@ -477,6 +497,54 @@ async function ensureBridgeReady(
   return { shouldOpenVisibleClient: true };
 }
 
+export async function tryDelegateToDaemon(
+  options: LocalCompanionStartCliOptions,
+  deps: {
+    readEndpoint?: DaemonEndpointReader;
+    isEndpointAlive?: DaemonEndpointAliveChecker;
+    sendRequest?: DaemonRequestSender;
+    clearEndpoint?: DaemonEndpointClearer;
+  } = {},
+): Promise<boolean> {
+  const readEndpoint = deps.readEndpoint ?? readDaemonEndpoint;
+  const isEndpointAlive = deps.isEndpointAlive ?? isDaemonEndpointAlive;
+  const sendRequest = deps.sendRequest ?? sendDaemonRequest;
+  const clearEndpoint = deps.clearEndpoint ?? clearDaemonEndpoint;
+  const endpoint: DaemonEndpoint | null = readEndpoint();
+  if (!endpoint) {
+    return false;
+  }
+
+  if (!(await isEndpointAlive(endpoint))) {
+    clearEndpoint(endpoint.pid);
+    return false;
+  }
+
+  if (!isSameWorkspaceCwd(endpoint.cwd, options.cwd)) {
+    throw new Error(
+      `wechat-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}; v1 daemon switching is limited to its startup cwd.`,
+    );
+  }
+
+  const response: DaemonResponse = await sendRequest(endpoint, {
+    command: "ensure_slot",
+    adapter: options.adapter,
+    cwd: options.cwd,
+    profile: options.profile,
+    cliArgs: options.cliArgs,
+    openVisible: true,
+  });
+  if (!response.ok) {
+    throw new Error(response.error);
+  }
+
+  log(
+    options.adapter,
+    `Delegated to running wechat-daemon for ${options.cwd}.`,
+  );
+  return true;
+}
+
 export async function runVisibleClient(
   options: LocalCompanionStartCliOptions,
   runners: VisibleClientRunners = {},
@@ -513,6 +581,10 @@ export async function runLocalCompanionStart(
 ): Promise<number> {
   const options = parseCliArgs(argv);
   await ensureCompanionStartWechatCredentials(options.adapter);
+
+  if (await tryDelegateToDaemon(options)) {
+    return 0;
+  }
 
   const ready = await ensureBridgeReady(options);
   if (!ready.shouldOpenVisibleClient) {

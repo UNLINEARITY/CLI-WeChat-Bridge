@@ -67,7 +67,7 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
 }
 
 export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
-  const endpoint = readLocalCompanionEndpoint(cwd);
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
   if (!endpoint || endpoint.kind !== "codex") {
     throw new Error(
       `No active Codex bridge endpoint was found for ${cwd}. Start "wechat-bridge-codex" in that directory first.`,
@@ -138,15 +138,19 @@ export async function runCodexRemoteClientFromEndpoint(
       updateLocalCompanionOccupancy(endpoint.cwd, {
         companionPid: child.pid,
         companionConnectedAt: new Date().toISOString(),
-      }, endpoint.instanceId);
+      }, endpoint.instanceId, { adapter: "codex" });
     }
 
     child.once("error", (error) => {
-      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
+      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId, {
+        adapter: "codex",
+      });
       reject(error);
     });
     child.once("exit", (code, signal) => {
-      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
+      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId, {
+        adapter: "codex",
+      });
       if (signal) {
         process.kill(process.pid, signal);
         return;

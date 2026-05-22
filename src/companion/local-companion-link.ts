@@ -4,6 +4,7 @@ import type net from "node:net";
 
 import {
   ensureWorkspaceChannelDir,
+  getWorkspaceAdapterEndpointFile,
   getWorkspaceChannelPaths,
 } from "../wechat/channel-config.ts";
 import type {
@@ -37,6 +38,14 @@ export type LocalCompanionCloseReason =
   | "worker_exit";
 
 export type LocalCompanionEndpoint = LocalClientEndpoint;
+
+type EndpointReadOptions = {
+  adapter?: BridgeAdapterKind;
+};
+
+type EndpointWriteOptions = {
+  writeLegacy?: boolean;
+};
 
 export type LocalCompanionMessage =
   | {
@@ -159,9 +168,8 @@ export function buildLocalCompanionToken(): string {
   return crypto.randomBytes(18).toString("hex");
 }
 
-export function writeLocalCompanionEndpoint(endpoint: LocalCompanionEndpoint): void {
-  const { endpointFile } = ensureWorkspaceChannelDir(endpoint.cwd);
-  const payload: LocalCompanionEndpoint = {
+function serializeEndpoint(endpoint: LocalCompanionEndpoint): LocalCompanionEndpoint {
+  return {
     ...endpoint,
     protocolVersion: endpoint.protocolVersion ?? LOCAL_CLIENT_PROTOCOL_VERSION,
     sharedThreadId:
@@ -169,46 +177,100 @@ export function writeLocalCompanionEndpoint(endpoint: LocalCompanionEndpoint): v
         ? endpoint.sharedSessionId ?? endpoint.sharedThreadId
         : undefined,
   };
-
-  fs.writeFileSync(endpointFile, JSON.stringify(payload, null, 2), "utf8");
 }
 
-export function readLocalCompanionEndpoint(cwd: string): LocalCompanionEndpoint | null {
+function readEndpointFile(filePath: string): LocalCompanionEndpoint | null {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  return normalizeEndpoint(JSON.parse(fs.readFileSync(filePath, "utf8")));
+}
+
+export function writeLocalCompanionEndpoint(
+  endpoint: LocalCompanionEndpoint,
+  options: EndpointWriteOptions = {},
+): void {
+  const { endpointFile } = ensureWorkspaceChannelDir(endpoint.cwd);
+  const payload: LocalCompanionEndpoint = {
+    ...serializeEndpoint(endpoint),
+  };
+
+  fs.writeFileSync(
+    getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind),
+    JSON.stringify(payload, null, 2),
+    "utf8",
+  );
+  if (options.writeLegacy !== false) {
+    fs.writeFileSync(endpointFile, JSON.stringify(payload, null, 2), "utf8");
+  }
+}
+
+export function readLocalCompanionEndpoint(
+  cwd: string,
+  options: EndpointReadOptions = {},
+): LocalCompanionEndpoint | null {
   try {
     const { endpointFile } = getWorkspaceChannelPaths(cwd);
-    if (!fs.existsSync(endpointFile)) {
-      return null;
+    if (options.adapter) {
+      const scoped = readEndpointFile(
+        getWorkspaceAdapterEndpointFile(cwd, options.adapter),
+      );
+      if (scoped) {
+        return scoped;
+      }
+      const legacy = readEndpointFile(endpointFile);
+      return legacy?.kind === options.adapter ? legacy : null;
     }
-    return normalizeEndpoint(JSON.parse(fs.readFileSync(endpointFile, "utf8")));
+    return readEndpointFile(endpointFile);
   } catch {
     return null;
   }
 }
 
-export function clearLocalCompanionEndpoint(cwd: string, instanceId?: string): void {
+export function clearLocalCompanionEndpoint(
+  cwd: string,
+  instanceId?: string,
+  options: EndpointReadOptions = {},
+): void {
   try {
     const { endpointFile } = getWorkspaceChannelPaths(cwd);
-    if (!fs.existsSync(endpointFile)) {
-      return;
-    }
+    const files = options.adapter
+      ? [getWorkspaceAdapterEndpointFile(cwd, options.adapter), endpointFile]
+      : [
+          endpointFile,
+          getWorkspaceAdapterEndpointFile(cwd, "codex"),
+          getWorkspaceAdapterEndpointFile(cwd, "claude"),
+          getWorkspaceAdapterEndpointFile(cwd, "opencode"),
+          getWorkspaceAdapterEndpointFile(cwd, "shell"),
+        ];
 
-    if (!instanceId) {
-      fs.rmSync(endpointFile, { force: true });
-      return;
-    }
+    for (const filePath of files) {
+      if (!fs.existsSync(filePath)) {
+        continue;
+      }
 
-    const endpoint = readLocalCompanionEndpoint(cwd);
-    if (!endpoint || endpoint.instanceId === instanceId) {
-      fs.rmSync(endpointFile, { force: true });
+      if (!instanceId) {
+        fs.rmSync(filePath, { force: true });
+        continue;
+      }
+
+      const endpoint = readEndpointFile(filePath);
+      if (!endpoint || endpoint.instanceId === instanceId) {
+        fs.rmSync(filePath, { force: true });
+      }
     }
   } catch {
     // Best effort cleanup.
   }
 }
 
-export function clearLocalCompanionOccupancy(cwd: string, instanceId?: string): void {
+export function clearLocalCompanionOccupancy(
+  cwd: string,
+  instanceId?: string,
+  options: EndpointReadOptions = {},
+): void {
   try {
-    const endpoint = readLocalCompanionEndpoint(cwd);
+    const endpoint = readLocalCompanionEndpoint(cwd, options);
     if (!endpoint) {
       return;
     }
@@ -238,9 +300,10 @@ export function updateLocalCompanionHealth(
     companionWorkerPid?: number;
   },
   instanceId?: string,
+  options: EndpointReadOptions = {},
 ): void {
   try {
-    const endpoint = readLocalCompanionEndpoint(cwd);
+    const endpoint = readLocalCompanionEndpoint(cwd, options);
     if (!endpoint) {
       return;
     }
@@ -267,9 +330,10 @@ export function updateLocalCompanionOccupancy(
     companionConnectedAt?: string;
   },
   instanceId?: string,
+  options: EndpointReadOptions = {},
 ): void {
   try {
-    const endpoint = readLocalCompanionEndpoint(cwd);
+    const endpoint = readLocalCompanionEndpoint(cwd, options);
     if (!endpoint) {
       return;
     }

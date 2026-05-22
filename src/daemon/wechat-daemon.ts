@@ -1,0 +1,1686 @@
+#!/usr/bin/env bun
+
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+
+import {
+  resolveDefaultAdapterCommand,
+} from "../bridge/bridge-adapters.ts";
+import {
+  delay,
+  quoteWindowsCommandArg,
+} from "../bridge/bridge-adapters.shared.ts";
+import { BridgeController } from "../bridge/bridge-controller.ts";
+import { forwardWechatFinalReply } from "../bridge/bridge-final-reply.ts";
+import {
+  readBridgeLockFile,
+  type BridgeLockPayload,
+} from "../bridge/bridge-state.ts";
+import {
+  killProcessTreeSync,
+  reapOrphanedOpencodeProcesses,
+  reapPeerBridgeProcesses,
+} from "../bridge/bridge-process-reaper.ts";
+import type {
+  BridgeAdapter,
+  BridgeEvent,
+  PendingApproval,
+  PendingUserInputRequest,
+  UserInputRequest,
+} from "../bridge/bridge-types.ts";
+import {
+  buildOneTimeCode,
+  buildWechatInboundPrompt,
+  formatApprovalMessage,
+  formatDuration,
+  formatMirroredUserInputMessage,
+  formatPendingApprovalReminder,
+  formatPendingUserInputReminder,
+  formatSessionSwitchMessage,
+  formatTaskFailedMessage,
+  formatUserInputRequestMessage,
+  MESSAGE_START_GRACE_MS,
+  nowIso,
+  OutputBatcher,
+  parsePendingUserInputAnswerCommand,
+  parseWechatControlCommand,
+  truncatePreview,
+} from "../bridge/bridge-utils.ts";
+import {
+  formatUserFacingBridgeFatalError,
+  formatUserFacingInboundError,
+  formatWechatContextTokenStaleLogEntry,
+  formatWechatSendFailureLogEntry,
+  isRetryableWechatSendError,
+  shouldForwardBridgeEventToWechat,
+} from "../bridge/wechat-bridge.ts";
+import {
+  BRIDGE_LOCK_FILE,
+  BRIDGE_LOG_FILE,
+  ensureChannelDataDir,
+  migrateLegacyChannelFiles,
+} from "../wechat/channel-config.ts";
+import { ensureWechatCredentials } from "../wechat/setup.ts";
+import {
+  classifyWechatTransportError,
+  DEFAULT_LONG_POLL_TIMEOUT_MS,
+  describeWechatTransportError,
+  isWechatContextTokenStaleError,
+  WeChatTransport,
+  type InboundWechatMessage,
+} from "../wechat/wechat-transport.ts";
+import {
+  createRuntimeHost,
+} from "../runtime/create-runtime-host.ts";
+import {
+  clearLocalCompanionEndpoint,
+  clearLocalCompanionOccupancy,
+  readLocalCompanionEndpoint,
+} from "../companion/local-companion-link.ts";
+import {
+  attachDaemonRequestListener,
+  buildDaemonToken,
+  clearDaemonEndpoint,
+  DAEMON_PROTOCOL_VERSION,
+  isDaemonEndpointAlive,
+  isPidAlive,
+  readDaemonEndpoint,
+  sendDaemonResponse,
+  writeDaemonEndpoint,
+  type DaemonAdapterKind,
+  type DaemonRequest,
+  type DaemonSlotSummary,
+  type DaemonStatus,
+} from "./daemon-link.ts";
+
+type DaemonCliOptions = {
+  cwd: string;
+  profile?: string;
+  initialAdapter?: DaemonAdapterKind;
+  openVisible: boolean;
+};
+
+type ActiveTask = {
+  startedAt: number;
+  inputPreview: string;
+};
+
+type WechatSendContext =
+  | "final_reply"
+  | "message"
+  | "notice"
+  | "approval_required"
+  | "mirrored_user_input"
+  | "session_switched"
+  | "thread_switched"
+  | "task_failed"
+  | "fatal_error"
+  | "inbound_error";
+
+type DaemonSlot = {
+  adapter: DaemonAdapterKind;
+  runtime: BridgeAdapter;
+  controller: BridgeController;
+  outputBatcher: OutputBatcher;
+  pendingConfirmation: PendingApproval | null;
+  pendingUserInput: PendingUserInputRequest | null;
+  activeTask: ActiveTask | null;
+  lastOutputAt: number;
+};
+
+const MODULE_FILE = fileURLToPath(import.meta.url);
+const MODULE_DIR = path.dirname(MODULE_FILE);
+const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".js";
+const DAEMON_HOST = "127.0.0.1";
+const POLL_RETRY_BASE_MS = 1_000;
+const POLL_RETRY_MAX_MS = 30_000;
+const WECHAT_SEND_MAX_ATTEMPTS = 3;
+const WECHAT_SEND_RETRY_BASE_MS = 750;
+const SINGLE_BRIDGE_STOP_TIMEOUT_MS = 10_000;
+const SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS = 3_000;
+const SINGLE_BRIDGE_STOP_POLL_MS = 250;
+const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode"];
+
+function log(message: string): void {
+  process.stderr.write(`[wechat-daemon] ${message}\n`);
+}
+
+function logError(message: string): void {
+  process.stderr.write(`[wechat-daemon] ERROR: ${message}\n`);
+}
+
+function appendDaemonLog(message: string): void {
+  ensureChannelDataDir();
+  fs.appendFileSync(
+    BRIDGE_LOG_FILE,
+    `[${new Date().toISOString()}] daemon: ${message}\n`,
+    "utf8",
+  );
+}
+
+function computePollRetryDelayMs(consecutiveFailures: number): number {
+  const normalizedFailures = Math.max(1, consecutiveFailures);
+  const exponent = Math.min(normalizedFailures - 1, 5);
+  return Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * 2 ** exponent);
+}
+
+function computeWechatSendRetryDelayMs(attempt: number): number {
+  return WECHAT_SEND_RETRY_BASE_MS * attempt;
+}
+
+function isDaemonAdapterKind(value: string | undefined): value is DaemonAdapterKind {
+  return value === "codex" || value === "claude" || value === "opencode";
+}
+
+function isSameWorkspaceCwd(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function sleep(ms: number): Promise<void> {
+  if (ms <= 0) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
+  let cwd = process.cwd();
+  let profile: string | undefined;
+  let initialAdapter: DaemonAdapterKind | undefined;
+  let openVisible = true;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    if (!arg) {
+      continue;
+    }
+    const next = argv[i + 1];
+
+    if (arg === "--help" || arg === "-h") {
+      process.stdout.write(
+        [
+          "Usage: wechat-daemon [--cwd <path>] [--adapter <codex|claude|opencode>] [--profile <name-or-path>] [--no-open]",
+          "",
+          "Keeps one WeChat connection alive and switches between Codex, Claude Code, and OpenCode from WeChat.",
+          "Send /codex, /claude, or /opencode in WeChat to switch the active terminal.",
+          "",
+        ].join("\n"),
+      );
+      process.exit(0);
+    }
+
+    if (arg === "--cwd") {
+      if (!next) {
+        throw new Error("--cwd requires a value");
+      }
+      cwd = path.resolve(next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--adapter") {
+      if (!isDaemonAdapterKind(next)) {
+        throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
+      }
+      initialAdapter = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--profile") {
+      if (!next) {
+        throw new Error("--profile requires a value");
+      }
+      profile = next;
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--no-open") {
+      openVisible = false;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${arg}`);
+  }
+
+  return { cwd, profile, initialAdapter, openVisible };
+}
+
+export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null {
+  const normalized = text.trim().toLowerCase();
+  switch (normalized) {
+    case "/codex":
+      return "codex";
+    case "/claude":
+      return "claude";
+    case "/opencode":
+      return "opencode";
+    default:
+      return null;
+  }
+}
+
+function toPendingApproval(request: BridgeEvent & { type: "approval_required" }): PendingApproval {
+  const rawRequest = request.request;
+  if (typeof (rawRequest as PendingApproval).code === "string") {
+    return rawRequest as PendingApproval;
+  }
+
+  return {
+    ...rawRequest,
+    code: buildOneTimeCode(),
+    createdAt: nowIso(),
+  };
+}
+
+function toPendingUserInput(request: UserInputRequest | PendingUserInputRequest): PendingUserInputRequest {
+  if (typeof (request as PendingUserInputRequest).createdAt === "string") {
+    return request as PendingUserInputRequest;
+  }
+
+  return {
+    ...request,
+    createdAt: nowIso(),
+  };
+}
+
+function prefixDaemonAdapterMessage(adapter: DaemonAdapterKind, text: string): string {
+  const trimmed = text.trim();
+  return trimmed ? `[${adapter}]\n${trimmed}` : `[${adapter}]`;
+}
+
+export function buildVisibleClientLaunchArgs(params: {
+  adapter: DaemonAdapterKind;
+  cwd: string;
+  cliArgs?: string[];
+}): string[] {
+  const entryPath =
+    params.adapter === "codex"
+      ? path.resolve(
+          MODULE_DIR,
+          "..",
+          "companion",
+          `codex-remote-client${RUNTIME_ENTRY_EXTENSION}`,
+        )
+      : path.resolve(
+          MODULE_DIR,
+          "..",
+          "companion",
+          `local-companion${RUNTIME_ENTRY_EXTENSION}`,
+        );
+  const args = ["--no-warnings"];
+  if (path.extname(entryPath) === ".ts") {
+    args.push("--experimental-strip-types");
+  }
+  args.push(entryPath);
+  if (params.adapter !== "codex") {
+    args.push("--adapter", params.adapter);
+  }
+  args.push("--cwd", params.cwd, ...(params.cliArgs ?? []));
+  return args;
+}
+
+export function buildWindowsVisibleClientLaunchCommand(params: {
+  adapter: DaemonAdapterKind;
+  args: string[];
+}): string {
+  return [
+    "start",
+    quoteWindowsCommandArg(`wechat-${params.adapter}`),
+    quoteWindowsCommandArg(process.execPath),
+    ...params.args.map((arg) => quoteWindowsCommandArg(arg)),
+  ].join(" ");
+}
+
+function openVisibleClient(params: {
+  adapter: DaemonAdapterKind;
+  cwd: string;
+  cliArgs?: string[];
+}): void {
+  const args = buildVisibleClientLaunchArgs(params);
+  if (process.platform === "win32") {
+    const child = spawn(
+      process.env.ComSpec || "cmd.exe",
+      [
+        "/d",
+        "/s",
+        "/c",
+        buildWindowsVisibleClientLaunchCommand({
+          adapter: params.adapter,
+          args,
+        }),
+      ],
+      {
+        cwd: params.cwd,
+        env: process.env,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
+    child.unref();
+    return;
+  }
+
+  const child = spawn(process.execPath, args, {
+    cwd: params.cwd,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false,
+  });
+  child.unref();
+}
+
+function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean {
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
+  if (!endpoint?.companionPid) {
+    return false;
+  }
+  if (isPidAlive(endpoint.companionPid)) {
+    return true;
+  }
+
+  clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter });
+  return false;
+}
+
+function formatInboundMessagePreview(message: InboundWechatMessage): string {
+  if (message.text.trim()) {
+    return message.text;
+  }
+
+  if (message.attachments.length > 0) {
+    return message.attachments
+      .map((attachment) => `${attachment.kind}: ${attachment.path}`)
+      .join("\n");
+  }
+
+  return "(empty)";
+}
+
+function formatNoActiveAdapterMessage(): string {
+  return [
+    "No active terminal is selected.",
+    "Send /codex, /claude, or /opencode to choose one.",
+  ].join("\n");
+}
+
+export function formatDaemonStatus(status: DaemonStatus): string {
+  const lines = [
+    "wechat-daemon status",
+    `cwd: ${status.cwd}`,
+    `active: ${status.activeAdapter ?? "(none)"}`,
+    `started_at: ${status.startedAt}`,
+  ];
+
+  for (const adapter of DAEMON_ADAPTERS) {
+    const slot = status.slots.find((entry) => entry.adapter === adapter);
+    if (!slot) {
+      lines.push(`${adapter}: not started`);
+      continue;
+    }
+    const flags = [
+      slot.pendingApproval ? "pending_approval" : "",
+      slot.pendingUserInput ? "pending_input" : "",
+      slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
+    ].filter(Boolean);
+    lines.push(`${adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`);
+  }
+
+  return lines.join("\n");
+}
+
+class WechatDaemon {
+  private readonly cwd: string;
+  private readonly profile?: string;
+  private readonly authorizedUserId: string;
+  private readonly transport: WeChatTransport;
+  private readonly slots = new Map<DaemonAdapterKind, DaemonSlot>();
+  private readonly startedAt = new Date().toISOString();
+  private readonly bridgeStartedAtMs = Date.now();
+  private activeAdapter: DaemonAdapterKind | null = null;
+  private textSendChain = Promise.resolve();
+  private attachmentSendChain = Promise.resolve();
+  private readonly pendingWechatForwardTasks = new Set<Promise<void>>();
+  private shutdownPromise: Promise<void> | null = null;
+  private ipcServer: net.Server | null = null;
+  private endpointToken = "";
+
+  constructor(params: {
+    cwd: string;
+    profile?: string;
+    authorizedUserId: string;
+    transport: WeChatTransport;
+  }) {
+    this.cwd = params.cwd;
+    this.profile = params.profile;
+    this.authorizedUserId = params.authorizedUserId;
+    this.transport = params.transport;
+  }
+
+  async startIpcServer(): Promise<void> {
+    this.endpointToken = buildDaemonToken();
+    await new Promise<void>((resolve, reject) => {
+      const server = net.createServer((socket) => {
+        socket.setNoDelay(true);
+        let detach: (() => void) | null = null;
+        detach = attachDaemonRequestListener(socket, (frame) => {
+          if (frame.token !== this.endpointToken) {
+            sendDaemonResponse(socket, frame.id, {
+              ok: false,
+              error: "Invalid daemon IPC token.",
+            });
+            return;
+          }
+
+          void this.handleDaemonRequest(frame.payload).then(
+            (result) => {
+              sendDaemonResponse(socket, frame.id, { ok: true, result });
+            },
+            (error) => {
+              sendDaemonResponse(socket, frame.id, {
+                ok: false,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            },
+          );
+        });
+        socket.once("close", () => {
+          detach?.();
+          detach = null;
+        });
+        socket.once("error", () => {
+          socket.destroy();
+        });
+      });
+      this.ipcServer = server;
+      server.once("error", reject);
+      server.listen(0, DAEMON_HOST, () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Failed to allocate daemon IPC port."));
+          return;
+        }
+
+        writeDaemonEndpoint({
+          protocolVersion: DAEMON_PROTOCOL_VERSION,
+          pid: process.pid,
+          port: address.port,
+          token: this.endpointToken,
+          cwd: this.cwd,
+          startedAt: this.startedAt,
+        });
+        resolve();
+      });
+    });
+  }
+
+  getStatus(): DaemonStatus {
+    return {
+      cwd: this.cwd,
+      activeAdapter: this.activeAdapter ?? undefined,
+      startedAt: this.startedAt,
+      slots: Array.from(this.slots.values()).map((slot): DaemonSlotSummary => {
+        const endpoint = readLocalCompanionEndpoint(this.cwd, {
+          adapter: slot.adapter,
+        });
+        return {
+          adapter: slot.adapter,
+          status: slot.runtime.getState().status,
+          cwd: this.cwd,
+          companionPid: endpoint?.companionPid,
+          pendingApproval: Boolean(slot.pendingConfirmation),
+          pendingUserInput: Boolean(slot.pendingUserInput),
+        };
+      }),
+    };
+  }
+
+  async runInitialAdapter(options: DaemonCliOptions): Promise<void> {
+    if (!options.initialAdapter) {
+      return;
+    }
+
+    await this.ensureSlot(options.initialAdapter, {
+      profile: options.profile,
+      openVisible: options.openVisible,
+    });
+  }
+
+  async runPollLoop(): Promise<void> {
+    let consecutivePollFailures = 0;
+    log("WeChat daemon is ready.");
+    log(`Working directory: ${this.cwd}`);
+    log("Switch from WeChat with /codex, /claude, or /opencode.");
+    appendDaemonLog(`started: cwd=${this.cwd}`);
+
+    while (!this.shutdownPromise) {
+      let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
+      try {
+        pollResult = await this.transport.pollMessages({
+          timeoutMs: DEFAULT_LONG_POLL_TIMEOUT_MS,
+          minCreatedAtMs: this.bridgeStartedAtMs - MESSAGE_START_GRACE_MS,
+        });
+      } catch (error) {
+        const classification = classifyWechatTransportError(error);
+        if (!classification.retryable) {
+          throw error;
+        }
+
+        consecutivePollFailures += 1;
+        const delayMs = computePollRetryDelayMs(consecutivePollFailures);
+        const errorText = describeWechatTransportError(error);
+        const statusDetails =
+          typeof classification.statusCode === "number"
+            ? ` status=${classification.statusCode}`
+            : "";
+        logError(
+          `WeChat long poll failed (${classification.kind}${statusDetails}, attempt ${consecutivePollFailures}). Retrying in ${formatDuration(delayMs)}. ${errorText}`,
+        );
+        appendDaemonLog(
+          `poll_retry: kind=${classification.kind}${statusDetails} attempt=${consecutivePollFailures} delay_ms=${delayMs} error=${truncatePreview(errorText, 400)}`,
+        );
+        await delay(delayMs);
+        continue;
+      }
+
+      if (consecutivePollFailures > 0) {
+        log(`WeChat long poll recovered after ${consecutivePollFailures} transient error(s).`);
+        appendDaemonLog(`poll_recovered: failures=${consecutivePollFailures}`);
+        consecutivePollFailures = 0;
+      }
+
+      if (pollResult.ignoredBacklogCount > 0) {
+        appendDaemonLog(`ignored_startup_backlog: count=${pollResult.ignoredBacklogCount}`);
+      }
+
+      for (const message of pollResult.messages) {
+        try {
+          await this.handleInboundMessage(message);
+        } catch (error) {
+          const errorText = error instanceof Error ? error.message : String(error);
+          const isUserFacingShellRejection =
+            error instanceof Error && error.name === "ShellCommandRejectedError";
+          logError(errorText);
+          appendDaemonLog(
+            `${isUserFacingShellRejection ? "inbound_rejected" : "inbound_error"}: ${errorText}`,
+          );
+          await this.queueWechatMessage(
+            message.senderId,
+            formatUserFacingInboundError({
+              adapter: this.activeAdapter ?? "codex",
+              cwd: this.cwd,
+              errorText,
+              isUserFacingShellRejection,
+            }),
+            "inbound_error",
+          );
+        }
+      }
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    if (!this.shutdownPromise) {
+      this.shutdownPromise = this.cleanup();
+    }
+    await this.shutdownPromise;
+  }
+
+  private async cleanup(): Promise<void> {
+    appendDaemonLog("shutdown_started");
+    for (const slot of this.slots.values()) {
+      try {
+        await slot.outputBatcher.flushNow();
+      } catch {
+        // Best effort flush.
+      }
+    }
+    await this.waitForPendingWechatForwardTasks();
+    await this.textSendChain.catch(() => undefined);
+    await this.attachmentSendChain.catch(() => undefined);
+
+    for (const slot of this.slots.values()) {
+      try {
+        await slot.runtime.dispose();
+      } catch {
+        // Best effort shutdown.
+      }
+      slot.controller.clearLocalClientEndpoint();
+    }
+    this.slots.clear();
+
+    if (this.ipcServer) {
+      const server = this.ipcServer;
+      this.ipcServer = null;
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+    clearDaemonEndpoint();
+    appendDaemonLog("shutdown_complete");
+  }
+
+  private async handleDaemonRequest(request: DaemonRequest): Promise<unknown> {
+    switch (request.command) {
+      case "status":
+        return this.getStatus();
+      case "shutdown":
+        setTimeout(() => {
+          void this.shutdown().finally(() => process.exit(0));
+        }, 0);
+        return { shuttingDown: true };
+      case "ensure_slot":
+        if (!isSameWorkspaceCwd(request.cwd, this.cwd)) {
+          throw new Error(
+            `wechat-daemon is bound to ${this.cwd}; requested cwd was ${request.cwd}.`,
+          );
+        }
+        return await this.ensureSlot(request.adapter, {
+          profile: request.profile,
+          cliArgs: request.cliArgs,
+          openVisible: request.openVisible ?? true,
+        });
+      case "switch_adapter":
+        return await this.ensureSlot(request.adapter, {
+          profile: request.profile,
+          cliArgs: request.cliArgs,
+          openVisible: request.openVisible ?? true,
+        });
+    }
+  }
+
+  private async ensureSlot(
+    adapter: DaemonAdapterKind,
+    options: {
+      profile?: string;
+      cliArgs?: string[];
+      openVisible?: boolean;
+    } = {},
+  ): Promise<{
+    activeAdapter: DaemonAdapterKind;
+    created: boolean;
+    openedVisible: boolean;
+  }> {
+    let slot = this.slots.get(adapter);
+    let created = false;
+    if (!slot) {
+      slot = await this.createSlot(adapter, {
+        profile: options.profile ?? this.profile,
+      });
+      this.slots.set(adapter, slot);
+      created = true;
+    }
+
+    this.activeAdapter = adapter;
+    let openedVisible = false;
+    if (options.openVisible !== false && !isVisibleClientAlive(this.cwd, adapter)) {
+      openVisibleClient({
+        adapter,
+        cwd: this.cwd,
+        cliArgs: options.cliArgs,
+      });
+      openedVisible = true;
+    }
+
+    appendDaemonLog(
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible}`,
+    );
+    return {
+      activeAdapter: adapter,
+      created,
+      openedVisible,
+    };
+  }
+
+  private async createSlot(
+    adapter: DaemonAdapterKind,
+    options: { profile?: string },
+  ): Promise<DaemonSlot> {
+    clearLocalCompanionEndpoint(this.cwd, undefined, { adapter });
+    const runtime = createRuntimeHost({
+      kind: adapter,
+      command: resolveDefaultAdapterCommand(adapter),
+      cwd: this.cwd,
+      profile: options.profile,
+      lifecycle: "persistent",
+    });
+    const controller = new BridgeController(runtime, this.cwd);
+    const slot: DaemonSlot = {
+      adapter,
+      runtime,
+      controller,
+      outputBatcher: new OutputBatcher(async (text) => {
+        await this.queueWechatMessage(
+          this.authorizedUserId,
+          prefixDaemonAdapterMessage(adapter, text),
+        );
+      }),
+      pendingConfirmation: null,
+      pendingUserInput: null,
+      activeTask: null,
+      lastOutputAt: 0,
+    };
+
+    runtime.setEventSink((event) => {
+      this.handleSlotEvent(slot, event);
+    });
+    await runtime.start();
+    controller.syncLocalClientEndpoint();
+    appendDaemonLog(
+      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.cwd}`,
+    );
+    return slot;
+  }
+
+  private handleSlotEvent(slot: DaemonSlot, event: BridgeEvent): void {
+    slot.controller.syncLocalClientEndpoint();
+    const adapterState = slot.runtime.getState();
+    if (slot.pendingConfirmation && !adapterState.pendingApproval) {
+      slot.pendingConfirmation = null;
+    }
+    if (slot.pendingUserInput && !adapterState.pendingUserInput) {
+      slot.pendingUserInput = null;
+    }
+
+    switch (event.type) {
+      case "stdout":
+      case "stderr":
+        slot.lastOutputAt = Date.now();
+        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
+          slot.outputBatcher.push(event.text);
+        }
+        break;
+      case "final_reply":
+        appendDaemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(event.text)}`);
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          await forwardWechatFinalReply({
+            adapter: slot.adapter,
+            rawText: event.text,
+            onEmptyVisibleReply: ({ rawVisibleText }) => {
+              appendDaemonLog(
+                `empty_visible_final_reply: adapter=${slot.adapter} raw=${truncatePreview(rawVisibleText)}`,
+              );
+            },
+            sender: {
+              sendText: async (text) => {
+                const sent = await this.queueWechatMessage(
+                  this.authorizedUserId,
+                  prefixDaemonAdapterMessage(slot.adapter, text),
+                  "final_reply",
+                );
+                if (sent) {
+                  appendDaemonLog(
+                    `final_reply_sent: adapter=${slot.adapter} chars=${Array.from(text).length}`,
+                  );
+                }
+                return sent;
+              },
+              sendImage: (imagePath) =>
+                this.queueWechatAttachmentAction(() =>
+                  this.transport.sendImage(imagePath, {
+                    recipientId: this.authorizedUserId,
+                  }),
+                ),
+              sendFile: (filePath) =>
+                this.queueWechatAttachmentAction(() =>
+                  this.transport.sendFile(filePath, {
+                    recipientId: this.authorizedUserId,
+                  }),
+                ),
+              sendVoice: (voicePath) =>
+                this.queueWechatAttachmentAction(() =>
+                  this.transport.sendVoice(voicePath, this.authorizedUserId),
+                ),
+              sendVideo: (videoPath) =>
+                this.queueWechatAttachmentAction(() =>
+                  this.transport.sendVideo(videoPath, {
+                    recipientId: this.authorizedUserId,
+                  }),
+                ),
+            },
+          });
+        }));
+        break;
+      case "status":
+        if (event.message) {
+          log(`${slot.adapter} ${event.status}: ${event.message}`);
+          appendDaemonLog(`${slot.adapter}_${event.status}: ${event.message}`);
+        }
+        break;
+      case "notice":
+        slot.lastOutputAt = Date.now();
+        appendDaemonLog(`${slot.adapter}_${event.level}_notice: ${truncatePreview(event.text)}`);
+        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type, { text: event.text })) {
+          this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+            await this.queueWechatMessage(
+              this.authorizedUserId,
+              prefixDaemonAdapterMessage(slot.adapter, event.text),
+              "notice",
+            );
+          }));
+        }
+        break;
+      case "approval_required":
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          const pending = toPendingApproval(event);
+          slot.pendingConfirmation = pending;
+          appendDaemonLog(
+            `approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`,
+          );
+          await this.queueWechatMessage(
+            this.authorizedUserId,
+            prefixDaemonAdapterMessage(
+              slot.adapter,
+              formatApprovalMessage(pending, adapterState),
+            ),
+            "approval_required",
+          );
+        }));
+        break;
+      case "user_input_required":
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          const pending = toPendingUserInput(event.request);
+          slot.pendingUserInput = pending;
+          appendDaemonLog(
+            `user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`,
+          );
+          await this.queueWechatMessage(
+            this.authorizedUserId,
+            prefixDaemonAdapterMessage(
+              slot.adapter,
+              formatUserInputRequestMessage(pending, adapterState),
+            ),
+            "approval_required",
+          );
+        }));
+        break;
+      case "mirrored_user_input":
+        appendDaemonLog(
+          `mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(event.text)}`,
+        );
+        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type, { text: event.text })) {
+          this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+            await this.queueWechatMessage(
+              this.authorizedUserId,
+              prefixDaemonAdapterMessage(
+                slot.adapter,
+                formatMirroredUserInputMessage(slot.adapter, event.text),
+              ),
+              "mirrored_user_input",
+            );
+          }));
+        }
+        break;
+      case "session_switched":
+        appendDaemonLog(
+          `session_switched: adapter=${slot.adapter} session=${event.sessionId} source=${event.source} reason=${event.reason}`,
+        );
+        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
+          this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+            await this.queueWechatMessage(
+              this.authorizedUserId,
+              prefixDaemonAdapterMessage(
+                slot.adapter,
+                formatSessionSwitchMessage({
+                  adapter: slot.adapter,
+                  sessionId: event.sessionId,
+                  source: event.source,
+                  reason: event.reason,
+                }),
+              ),
+              "session_switched",
+            );
+          }));
+        }
+        break;
+      case "thread_switched":
+        appendDaemonLog(
+          `thread_switched: adapter=${slot.adapter} thread=${event.threadId} source=${event.source} reason=${event.reason}`,
+        );
+        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
+          this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+            await this.queueWechatMessage(
+              this.authorizedUserId,
+              prefixDaemonAdapterMessage(
+                slot.adapter,
+                formatSessionSwitchMessage({
+                  adapter: slot.adapter,
+                  sessionId: event.threadId,
+                  source: event.source,
+                  reason: event.reason,
+                }),
+              ),
+              "thread_switched",
+            );
+          }));
+        }
+        break;
+      case "task_complete":
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(() => {
+          slot.pendingConfirmation = null;
+          slot.pendingUserInput = null;
+          slot.activeTask = null;
+        }));
+        break;
+      case "task_failed":
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          slot.pendingConfirmation = null;
+          slot.pendingUserInput = null;
+          slot.activeTask = null;
+          await this.queueWechatMessage(
+            this.authorizedUserId,
+            prefixDaemonAdapterMessage(
+              slot.adapter,
+              formatTaskFailedMessage(slot.adapter, event.message),
+            ),
+            "task_failed",
+          );
+        }));
+        break;
+      case "fatal_error":
+        logError(`${slot.adapter}: ${event.message}`);
+        appendDaemonLog(`fatal_error: adapter=${slot.adapter} message=${event.message}`);
+        slot.pendingConfirmation = null;
+        slot.pendingUserInput = null;
+        slot.activeTask = null;
+        this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          await this.queueWechatMessage(
+            this.authorizedUserId,
+            prefixDaemonAdapterMessage(
+              slot.adapter,
+              formatUserFacingBridgeFatalError(event.message),
+            ),
+            "fatal_error",
+          );
+        }));
+        break;
+      case "shutdown_requested":
+        appendDaemonLog(
+          `slot_shutdown_requested: adapter=${slot.adapter} reason=${event.reason}`,
+        );
+        break;
+    }
+  }
+
+  private async handleInboundMessage(message: InboundWechatMessage): Promise<void> {
+    if (message.senderId !== this.authorizedUserId) {
+      await this.queueWechatMessage(
+        message.senderId,
+        "Unauthorized. This daemon only accepts messages from the configured WeChat owner.",
+      );
+      return;
+    }
+
+    const switchAdapter = parseDaemonSwitchCommand(message.text);
+    if (switchAdapter) {
+      const result = await this.ensureSlot(switchAdapter, {
+        openVisible: true,
+      });
+      const detail = result.created
+        ? result.openedVisible
+          ? "Started a new visible CLI."
+          : "Started the bridge slot."
+        : result.openedVisible
+          ? "Opened a visible CLI for the existing slot."
+          : "Reused the existing visible CLI.";
+      await this.queueWechatMessage(
+        message.senderId,
+        `Active terminal: ${switchAdapter}.\n${detail}`,
+      );
+      return;
+    }
+
+    if (message.text.trim().toLowerCase() === "/daemon-stop") {
+      await this.queueWechatMessage(message.senderId, "Stopping wechat-daemon...");
+      setTimeout(() => {
+        void this.shutdown().finally(() => process.exit(0));
+      }, 0);
+      return;
+    }
+
+    const slot = this.getActiveSlot();
+    if (!slot) {
+      await this.queueWechatMessage(message.senderId, formatNoActiveAdapterMessage());
+      return;
+    }
+
+    const command = parseWechatControlCommand(message.text, {
+      adapter: slot.adapter,
+      hasPendingConfirmation: Boolean(slot.pendingConfirmation),
+      hasPendingUserInput: Boolean(slot.pendingUserInput),
+    });
+
+    if (command) {
+      await this.handleSystemCommand(message, slot, command);
+      return;
+    }
+
+    if (slot.pendingConfirmation) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          formatPendingApprovalReminder(
+            slot.pendingConfirmation,
+            slot.runtime.getState(),
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (slot.pendingUserInput) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          formatPendingUserInputReminder(slot.pendingUserInput),
+        ),
+      );
+      return;
+    }
+
+    const adapterState = slot.runtime.getState();
+    if (adapterState.status === "busy" || adapterState.status === "awaiting_approval") {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          `${slot.adapter} is still working. Wait for the current reply or use /stop.`,
+        ),
+      );
+      return;
+    }
+
+    await this.dispatchInboundWechatText(message, slot);
+  }
+
+  private async handleSystemCommand(
+    message: InboundWechatMessage,
+    activeSlot: DaemonSlot,
+    command: NonNullable<ReturnType<typeof parseWechatControlCommand>>,
+  ): Promise<void> {
+    switch (command.type) {
+      case "status":
+        await this.queueWechatMessage(
+          message.senderId,
+          formatDaemonStatus(this.getStatus()),
+        );
+        return;
+      case "resume":
+        await this.queueWechatMessage(
+          message.senderId,
+          `WeChat /resume is disabled in daemon mode. Use /resume directly inside the visible ${activeSlot.adapter} terminal; WeChat will follow that local session.`,
+        );
+        return;
+      case "new_session":
+        if (!activeSlot.runtime.createSession) {
+          await this.queueWechatMessage(
+            message.senderId,
+            `/new is not available in ${activeSlot.adapter} mode.`,
+          );
+          return;
+        }
+        await activeSlot.outputBatcher.flushNow();
+        activeSlot.outputBatcher.clear();
+        activeSlot.pendingConfirmation = null;
+        activeSlot.pendingUserInput = null;
+        await activeSlot.runtime.createSession();
+        appendDaemonLog(`new_session: adapter=${activeSlot.adapter}`);
+        return;
+      case "stop": {
+        const interrupted = await activeSlot.runtime.interrupt();
+        await this.queueWechatMessage(
+          message.senderId,
+          prefixDaemonAdapterMessage(
+            activeSlot.adapter,
+            interrupted
+              ? "Interrupt signal sent to the active worker."
+              : "No running worker was available to interrupt.",
+          ),
+        );
+        return;
+      }
+      case "reset":
+        await activeSlot.outputBatcher.flushNow();
+        activeSlot.outputBatcher.clear();
+        activeSlot.pendingConfirmation = null;
+        activeSlot.pendingUserInput = null;
+        await activeSlot.runtime.reset();
+        appendDaemonLog(`reset: adapter=${activeSlot.adapter}`);
+        await this.queueWechatMessage(
+          message.senderId,
+          prefixDaemonAdapterMessage(activeSlot.adapter, "Worker session has been reset."),
+        );
+        return;
+      case "confirm":
+        await this.confirmPendingApproval(message, activeSlot, command.code);
+        return;
+      case "deny":
+        await this.denyPendingApproval(message, activeSlot);
+        return;
+      case "answer":
+        await this.answerPendingUserInput(message, activeSlot, command.raw);
+        return;
+    }
+  }
+
+  private async confirmPendingApproval(
+    message: InboundWechatMessage,
+    activeSlot: DaemonSlot,
+    code?: string,
+  ): Promise<void> {
+    const slot = this.resolvePendingApprovalSlot(activeSlot, code);
+    if (!slot) {
+      await this.queueWechatMessage(message.senderId, "No matching pending approval request.");
+      return;
+    }
+    const pending = slot.pendingConfirmation;
+    if (!pending) {
+      await this.queueWechatMessage(message.senderId, "No pending approval request.");
+      return;
+    }
+    if (pending.code !== code && this.countPendingApprovals() > 1) {
+      await this.queueWechatMessage(message.senderId, "Confirmation code did not match.");
+      return;
+    }
+
+    const confirmed = await slot.runtime.resolveApproval("confirm");
+    if (!confirmed) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          "The worker could not apply this approval request.",
+        ),
+      );
+      return;
+    }
+    slot.pendingConfirmation = null;
+    slot.activeTask = {
+      startedAt: Date.now(),
+      inputPreview: pending.commandPreview,
+    };
+    appendDaemonLog(
+      `approval_confirmed: adapter=${slot.adapter} command=${truncatePreview(pending.commandPreview)}`,
+    );
+    await this.queueWechatMessage(
+      message.senderId,
+      prefixDaemonAdapterMessage(slot.adapter, "Approval confirmed. Continuing..."),
+    );
+  }
+
+  private async denyPendingApproval(
+    message: InboundWechatMessage,
+    activeSlot: DaemonSlot,
+  ): Promise<void> {
+    const slot =
+      activeSlot.pendingConfirmation || this.countPendingApprovals() !== 1
+        ? activeSlot
+        : Array.from(this.slots.values()).find((entry) => entry.pendingConfirmation) ?? activeSlot;
+    const pending = slot.pendingConfirmation;
+    if (!pending) {
+      await this.queueWechatMessage(message.senderId, "No pending approval request.");
+      return;
+    }
+
+    const denied = await slot.runtime.resolveApproval("deny");
+    if (!denied) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          "The worker could not deny this approval request cleanly.",
+        ),
+      );
+      return;
+    }
+    slot.pendingConfirmation = null;
+    appendDaemonLog(
+      `approval_denied: adapter=${slot.adapter} command=${truncatePreview(pending.commandPreview)}`,
+    );
+    await this.queueWechatMessage(
+      message.senderId,
+      prefixDaemonAdapterMessage(slot.adapter, "Approval denied."),
+    );
+  }
+
+  private async answerPendingUserInput(
+    message: InboundWechatMessage,
+    activeSlot: DaemonSlot,
+    raw: string,
+  ): Promise<void> {
+    const pending = activeSlot.pendingUserInput;
+    if (!pending) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(activeSlot.adapter, "No pending user input request."),
+      );
+      return;
+    }
+
+    const parsed = parsePendingUserInputAnswerCommand(raw, pending);
+    if ("error" in parsed) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(activeSlot.adapter, parsed.error),
+      );
+      return;
+    }
+
+    const submitted = await activeSlot.runtime.submitUserInput(parsed.answers);
+    if (!submitted) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          activeSlot.adapter,
+          "The worker could not apply this answer.",
+        ),
+      );
+      return;
+    }
+
+    activeSlot.pendingUserInput = null;
+    activeSlot.activeTask = {
+      startedAt: Date.now(),
+      inputPreview: parsed.preview,
+    };
+    appendDaemonLog(
+      `user_input_answered: adapter=${activeSlot.adapter} preview=${parsed.preview}`,
+    );
+    await this.queueWechatMessage(
+      message.senderId,
+      prefixDaemonAdapterMessage(activeSlot.adapter, "Answer submitted. Continuing..."),
+    );
+  }
+
+  private resolvePendingApprovalSlot(
+    activeSlot: DaemonSlot,
+    code?: string,
+  ): DaemonSlot | null {
+    if (code) {
+      return (
+        Array.from(this.slots.values()).find(
+          (slot) => slot.pendingConfirmation?.code === code,
+        ) ?? null
+      );
+    }
+
+    if (activeSlot.pendingConfirmation && this.countPendingApprovals() <= 1) {
+      return activeSlot;
+    }
+
+    return null;
+  }
+
+  private countPendingApprovals(): number {
+    return Array.from(this.slots.values()).filter((slot) => slot.pendingConfirmation)
+      .length;
+  }
+
+  private getActiveSlot(): DaemonSlot | null {
+    if (!this.activeAdapter) {
+      return null;
+    }
+    return this.slots.get(this.activeAdapter) ?? null;
+  }
+
+  private async dispatchInboundWechatText(
+    message: InboundWechatMessage,
+    slot: DaemonSlot,
+  ): Promise<void> {
+    const preview = formatInboundMessagePreview(message);
+    slot.activeTask = {
+      startedAt: Date.now(),
+      inputPreview: truncatePreview(preview, 180),
+    };
+    appendDaemonLog(
+      `forwarded_input: adapter=${slot.adapter} text=${truncatePreview(preview)}`,
+    );
+    await slot.runtime.sendInput(
+      buildWechatInboundPrompt(message.text, message.attachments),
+    );
+  }
+
+  private queueWechatTextAction<T>(action: () => Promise<T>): Promise<T> {
+    const run = this.textSendChain.then(action);
+    this.textSendChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private queueWechatAttachmentAction<T>(action: () => Promise<T>): Promise<T> {
+    const run = this.attachmentSendChain.then(action);
+    this.attachmentSendChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private queueWechatMessage(
+    senderId: string,
+    text: string,
+    context: WechatSendContext = "message",
+  ): Promise<boolean> {
+    return this.queueWechatTextAction(async () => {
+      for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await this.transport.sendText(senderId, text);
+          return true;
+        } catch (error) {
+          if (isWechatContextTokenStaleError(error)) {
+            this.transport.clearCachedContextToken(senderId);
+            appendDaemonLog(
+              formatWechatContextTokenStaleLogEntry({
+                context,
+                recipientId: senderId,
+                error,
+              }),
+            );
+            return false;
+          }
+
+          if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(error)) {
+            const delayMs = computeWechatSendRetryDelayMs(attempt);
+            appendDaemonLog(
+              `wechat_send_retry: context=${context} recipient=${senderId} attempt=${attempt} delay_ms=${delayMs} error=${truncatePreview(describeWechatTransportError(error), 400)}`,
+            );
+            await delay(delayMs);
+            continue;
+          }
+
+          logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(error)}`);
+          appendDaemonLog(
+            formatWechatSendFailureLogEntry({
+              context,
+              recipientId: senderId,
+              error,
+            }),
+          );
+          return false;
+        }
+      }
+
+      return false;
+    });
+  }
+
+  private trackWechatForwardTask(task: Promise<void>): void {
+    const tracked = task
+      .catch((error) => {
+        logError(`WeChat forward task failed: ${describeWechatTransportError(error)}`);
+        appendDaemonLog(
+          `wechat_forward_failed: error=${truncatePreview(describeWechatTransportError(error), 400)}`,
+        );
+      })
+      .finally(() => {
+        this.pendingWechatForwardTasks.delete(tracked);
+      });
+    this.pendingWechatForwardTasks.add(tracked);
+  }
+
+  private async waitForPendingWechatForwardTasks(): Promise<void> {
+    while (this.pendingWechatForwardTasks.size > 0) {
+      await Promise.allSettled([...this.pendingWechatForwardTasks]);
+    }
+  }
+}
+
+async function assertNoLiveDaemon(): Promise<void> {
+  const endpoint = readDaemonEndpoint();
+  if (!endpoint) {
+    return;
+  }
+
+  if (await isDaemonEndpointAlive(endpoint, { timeoutMs: 500 })) {
+    throw new Error(
+      `wechat-daemon is already running (pid=${endpoint.pid}, cwd=${endpoint.cwd}).`,
+    );
+  }
+
+  clearDaemonEndpoint(endpoint.pid);
+}
+
+export type SingleBridgeCleanupResult =
+  | { action: "none" }
+  | { action: "cleared_stale_lock"; lock: BridgeLockPayload }
+  | { action: "stopped"; lock: BridgeLockPayload; forced: boolean };
+
+type SingleBridgeCleanupDeps = {
+  readLock?: () => BridgeLockPayload | null;
+  isAlive?: (pid: number) => boolean;
+  killProcess?: (pid: number, signal: NodeJS.Signals) => void;
+  clearLock?: (lock: BridgeLockPayload) => void;
+  clearEndpoint?: (lock: BridgeLockPayload) => void;
+  sleep?: (ms: number) => Promise<void>;
+  log?: (message: string) => void;
+  stopTimeoutMs?: number;
+  forceStopTimeoutMs?: number;
+  pollMs?: number;
+};
+
+async function waitForProcessExit(params: {
+  pid: number;
+  timeoutMs: number;
+  pollMs: number;
+  isAlive: (pid: number) => boolean;
+  sleep: (ms: number) => Promise<void>;
+}): Promise<boolean> {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
+    if (!params.isAlive(params.pid)) {
+      return true;
+    }
+    await params.sleep(Math.min(params.pollMs, deadline - Date.now()));
+  }
+  return !params.isAlive(params.pid);
+}
+
+function clearSingleBridgeLock(lock: BridgeLockPayload): void {
+  try {
+    const current = readBridgeLockFile();
+    if (
+      !current ||
+      current.pid === lock.pid ||
+      current.instanceId === lock.instanceId
+    ) {
+      fs.rmSync(BRIDGE_LOCK_FILE, { force: true });
+    }
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+function clearSingleBridgeEndpoint(lock: BridgeLockPayload): void {
+  clearLocalCompanionEndpoint(lock.cwd, undefined, { adapter: lock.adapter });
+}
+
+export async function cleanupSingleBridgeBeforeDaemon(
+  deps: SingleBridgeCleanupDeps = {},
+): Promise<SingleBridgeCleanupResult> {
+  const readLock = deps.readLock ?? readBridgeLockFile;
+  const isAlive = deps.isAlive ?? isPidAlive;
+  const killProcess = deps.killProcess ?? ((pid, signal) => {
+    if (signal === "SIGKILL") {
+      killProcessTreeSync(pid);
+      return;
+    }
+    process.kill(pid, signal);
+  });
+  const clearLock = deps.clearLock ?? clearSingleBridgeLock;
+  const clearEndpoint = deps.clearEndpoint ?? clearSingleBridgeEndpoint;
+  const sleepFn = deps.sleep ?? sleep;
+  const cleanupLog = deps.log ?? log;
+  const stopTimeoutMs = deps.stopTimeoutMs ?? SINGLE_BRIDGE_STOP_TIMEOUT_MS;
+  const forceStopTimeoutMs =
+    deps.forceStopTimeoutMs ?? SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS;
+  const pollMs = deps.pollMs ?? SINGLE_BRIDGE_STOP_POLL_MS;
+  const lock = readLock();
+
+  if (!lock) {
+    return { action: "none" };
+  }
+
+  const clearBridgeArtifacts = () => {
+    clearEndpoint(lock);
+    clearLock(lock);
+  };
+
+  if (!isAlive(lock.pid)) {
+    cleanupLog(
+      `Found stale single bridge lock for ${lock.cwd} (pid=${lock.pid} dead). Cleaning it before daemon startup.`,
+    );
+    appendDaemonLog(
+      `single_bridge_stale_cleanup: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
+    );
+    clearBridgeArtifacts();
+    return { action: "cleared_stale_lock", lock };
+  }
+
+  cleanupLog(
+    `Found existing single bridge for ${lock.cwd} (pid=${lock.pid}, adapter=${lock.adapter}). Stopping it before daemon startup...`,
+  );
+  appendDaemonLog(
+    `single_bridge_takeover_attempt: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
+  );
+
+  try {
+    killProcess(lock.pid, "SIGTERM");
+  } catch (error) {
+    if (isAlive(lock.pid)) {
+      appendDaemonLog(
+        `single_bridge_sigterm_failed: pid=${lock.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
+      );
+    }
+  }
+
+  let forced = false;
+  let stopped = await waitForProcessExit({
+    pid: lock.pid,
+    timeoutMs: stopTimeoutMs,
+    pollMs,
+    isAlive,
+    sleep: sleepFn,
+  });
+
+  if (!stopped) {
+    forced = true;
+    cleanupLog(
+      `Single bridge pid=${lock.pid} did not stop in ${formatDuration(stopTimeoutMs)}. Forcing cleanup...`,
+    );
+    appendDaemonLog(
+      `single_bridge_force_stop_attempt: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
+    );
+    try {
+      killProcess(lock.pid, "SIGKILL");
+    } catch (error) {
+      if (isAlive(lock.pid)) {
+        appendDaemonLog(
+          `single_bridge_sigkill_failed: pid=${lock.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
+        );
+      }
+    }
+    stopped = await waitForProcessExit({
+      pid: lock.pid,
+      timeoutMs: forceStopTimeoutMs,
+      pollMs,
+      isAlive,
+      sleep: sleepFn,
+    });
+  }
+
+  if (!stopped && isAlive(lock.pid)) {
+    throw new Error(
+      `Could not stop existing single bridge automatically (pid=${lock.pid}, adapter=${lock.adapter}, cwd=${lock.cwd}).`,
+    );
+  }
+
+  clearBridgeArtifacts();
+  cleanupLog(
+    `Cleaned previous single bridge for ${lock.cwd}; daemon startup can continue.`,
+  );
+  appendDaemonLog(
+    `single_bridge_takeover_complete: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd} forced=${forced}`,
+  );
+  return { action: "stopped", lock, forced };
+}
+
+export async function runDaemon(
+  options: DaemonCliOptions,
+): Promise<void> {
+  migrateLegacyChannelFiles((message) => log(message));
+  await assertNoLiveDaemon();
+  await cleanupSingleBridgeBeforeDaemon();
+  const reapedPeerPids = await reapPeerBridgeProcesses({
+    logger: (message) => appendDaemonLog(message),
+  });
+  if (reapedPeerPids.length > 0) {
+    log(`Cleaned ${reapedPeerPids.length} peer bridge process(es): ${reapedPeerPids.join(", ")}`);
+  }
+  const reapedOpencodePids = await reapOrphanedOpencodeProcesses({
+    logger: (message) => appendDaemonLog(message),
+  });
+  if (reapedOpencodePids.length > 0) {
+    log(`Cleaned ${reapedOpencodePids.length} orphaned OpenCode process(es): ${reapedOpencodePids.join(", ")}`);
+  }
+  const credentials = await ensureWechatCredentials({
+    requireUserId: true,
+    validateExisting: true,
+    log,
+  });
+  if (!credentials.userId) {
+    throw new Error("Saved WeChat credentials are missing userId.");
+  }
+
+  const daemon = new WechatDaemon({
+    cwd: options.cwd,
+    profile: options.profile,
+    authorizedUserId: credentials.userId,
+    transport: new WeChatTransport({ log, logError }),
+  });
+  await daemon.startIpcServer();
+  await daemon.runInitialAdapter(options);
+
+  const requestShutdown = (signal: string) => {
+    log(`Received ${signal}. Stopping daemon.`);
+    void daemon.shutdown().finally(() => process.exit(0));
+  };
+  process.once("SIGINT", () => requestShutdown("SIGINT"));
+  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
+  process.once("SIGHUP", () => requestShutdown("SIGHUP"));
+  if (process.platform === "win32") {
+    process.once("SIGBREAK", () => requestShutdown("SIGBREAK"));
+  }
+  process.on("exit", () => {
+    clearDaemonEndpoint();
+  });
+
+  await daemon.runPollLoop();
+}
+
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  try {
+    await runDaemon(parseDaemonCliArgs(argv));
+  } catch (error) {
+    logError(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+}
+
+const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+if (isDirectRun) {
+  void main();
+}

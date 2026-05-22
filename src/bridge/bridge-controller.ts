@@ -27,7 +27,9 @@ export class BridgeController {
       return;
     }
 
-    const existing = readLocalCompanionEndpoint(this.cwd);
+    const existing = readLocalCompanionEndpoint(this.cwd, {
+      adapter: endpoint.kind,
+    });
     const adapterState = this.adapter.getState();
     const nextEndpoint =
       existing?.instanceId === endpoint.instanceId
@@ -52,7 +54,9 @@ export class BridgeController {
   }
 
   clearLocalClientEndpoint(): void {
-    clearLocalCompanionEndpoint(this.cwd, this.endpointInstanceId ?? undefined);
+    clearLocalCompanionEndpoint(this.cwd, this.endpointInstanceId ?? undefined, {
+      adapter: this.adapter.getState().kind,
+    });
     this.endpointInstanceId = null;
   }
 }

@@ -13,7 +13,12 @@ import {
   normalizeComparablePath,
   parseCliArgs,
   runVisibleClient,
+  tryDelegateToDaemon,
 } from "../../src/companion/local-companion-start.ts";
+import type {
+  DaemonEndpoint,
+  DaemonRequest,
+} from "../../src/daemon/daemon-link.ts";
 
 describe("local-companion-start helpers", () => {
   test("parseCliArgs uses current working directory by default", () => {
@@ -190,6 +195,106 @@ describe("local-companion-start helpers", () => {
         logType: "function",
       },
     ]);
+  });
+
+  test("tryDelegateToDaemon asks a live same-cwd daemon to ensure the requested slot", async () => {
+    const cwd = path.resolve("./tmp/project");
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd,
+      startedAt: "2026-05-22T00:00:00.000Z",
+    };
+    const requests: DaemonRequest[] = [];
+
+    const delegated = await tryDelegateToDaemon(
+      {
+        adapter: "opencode",
+        cwd,
+        profile: "work",
+        timeoutMs: 15000,
+        cliArgs: ["--mode", "build"],
+      },
+      {
+        readEndpoint: () => endpoint,
+        isEndpointAlive: async () => true,
+        sendRequest: async (_endpoint, request) => {
+          requests.push(request);
+          return { ok: true };
+        },
+      },
+    );
+
+    expect(delegated).toBe(true);
+    expect(requests).toEqual([
+      {
+        command: "ensure_slot",
+        adapter: "opencode",
+        cwd,
+        profile: "work",
+        cliArgs: ["--mode", "build"],
+        openVisible: true,
+      },
+    ]);
+  });
+
+  test("tryDelegateToDaemon rejects daemon cwd mismatches", async () => {
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd: "D:/work/project-a",
+      startedAt: "2026-05-22T00:00:00.000Z",
+    };
+
+    await expect(
+      tryDelegateToDaemon(
+        {
+          adapter: "codex",
+          cwd: "D:/work/project-b",
+          timeoutMs: 15000,
+          cliArgs: [],
+        },
+        {
+          readEndpoint: () => endpoint,
+          isEndpointAlive: async () => true,
+        },
+      ),
+    ).rejects.toThrow("v1 daemon switching is limited to its startup cwd");
+  });
+
+  test("tryDelegateToDaemon clears stale daemon endpoint and falls back", async () => {
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd: path.resolve("./tmp/project"),
+      startedAt: "2026-05-22T00:00:00.000Z",
+    };
+    const cleared: number[] = [];
+
+    const delegated = await tryDelegateToDaemon(
+      {
+        adapter: "codex",
+        cwd: endpoint.cwd,
+        timeoutMs: 15000,
+        cliArgs: [],
+      },
+      {
+        readEndpoint: () => endpoint,
+        isEndpointAlive: async () => false,
+        clearEndpoint: (pid) => {
+          cleared.push(pid ?? 0);
+        },
+      },
+    );
+
+    expect(delegated).toBe(false);
+    expect(cleared).toEqual([123]);
   });
 
   test("runVisibleClient routes OpenCode through the shared in-process companion", async () => {

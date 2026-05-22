@@ -30,6 +30,7 @@ export const CONTEXT_CACHE_FILE = path.join(
 export const BRIDGE_STATE_FILE = path.join(CHANNEL_DATA_DIR, "bridge-state.json");
 export const BRIDGE_LOG_FILE = path.join(CHANNEL_DATA_DIR, "bridge.log");
 export const BRIDGE_LOCK_FILE = path.join(CHANNEL_DATA_DIR, "bridge.lock.json");
+export const DAEMON_ENDPOINT_FILE = path.join(CHANNEL_DATA_DIR, "daemon-endpoint.json");
 export const CODEX_PANEL_ENDPOINT_FILE = path.join(
   CHANNEL_DATA_DIR,
   "codex-panel-endpoint.json",
@@ -49,6 +50,8 @@ export type WorkspaceChannelPaths = {
   stateFile: string;
   endpointFile: string;
 };
+
+export type WorkspaceEndpointAdapter = "codex" | "claude" | "opencode" | "shell";
 
 type LegacyChannelSource = {
   dataDir: string;
@@ -175,6 +178,16 @@ export function getWorkspaceChannelPaths(cwd: string): WorkspaceChannelPaths {
     stateFile: path.join(workspaceDir, "bridge-state.json"),
     endpointFile: path.join(workspaceDir, "codex-panel-endpoint.json"),
   };
+}
+
+export function getWorkspaceAdapterEndpointFile(
+  cwd: string,
+  adapter: WorkspaceEndpointAdapter,
+): string {
+  return path.join(
+    getWorkspaceChannelPaths(cwd).workspaceDir,
+    `${adapter}-companion-endpoint.json`,
+  );
 }
 
 export function ensureWorkspaceChannelDir(cwd: string): WorkspaceChannelPaths {

@@ -50,6 +50,11 @@ import {
   checkForUpdate,
   formatUpdateMessage,
 } from "../utils/version-checker.ts";
+import {
+  clearDaemonEndpoint,
+  isDaemonEndpointAlive,
+  readDaemonEndpoint,
+} from "../daemon/daemon-link.ts";
 
 type BridgeCliOptions = {
   adapter: BridgeAdapterKind;
@@ -375,6 +380,16 @@ function printUsageAndExit(): never {
 
 async function main(): Promise<void> {
   const options = parseCliArgs(process.argv.slice(2));
+  const daemonEndpoint = readDaemonEndpoint();
+  if (daemonEndpoint && await isDaemonEndpointAlive(daemonEndpoint, { timeoutMs: 500 })) {
+    throw new Error(
+      `wechat-daemon is already running (pid=${daemonEndpoint.pid}, cwd=${daemonEndpoint.cwd}). Stop it before starting a standalone bridge.`,
+    );
+  }
+  if (daemonEndpoint) {
+    clearDaemonEndpoint(daemonEndpoint.pid);
+    log(`Cleared stale wechat-daemon endpoint for pid=${daemonEndpoint.pid}.`);
+  }
   const credentials = await ensureWechatCredentials({
     requireUserId: true,
     validateExisting: true,

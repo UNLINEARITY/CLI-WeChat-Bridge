@@ -93,7 +93,9 @@ function delay(ms: number): Promise<void> {
 function readMatchingEndpoint(
   options: LocalCompanionCliOptions,
 ): LocalCompanionEndpoint {
-  const endpoint = readLocalCompanionEndpoint(options.cwd);
+  const endpoint = readLocalCompanionEndpoint(options.cwd, {
+    adapter: options.adapter,
+  });
   if (!endpoint || endpoint.kind !== options.adapter) {
     throw new Error(
       `No active ${options.adapter} bridge endpoint was found for ${options.cwd}. Start "wechat-bridge-${options.adapter}" in that directory first.`,

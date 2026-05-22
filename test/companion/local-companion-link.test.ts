@@ -71,6 +71,59 @@ afterEach(() => {
 });
 
 describe("local companion endpoint occupancy", () => {
+  test("stores separate adapter endpoints for the same workspace", () => {
+    const cwd = makeTempCwd();
+
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, {
+      instanceId: "codex-1",
+      kind: "codex",
+      command: "codex",
+      port: 8123,
+    }));
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, {
+      instanceId: "claude-1",
+      kind: "claude",
+      command: "claude",
+      port: 8124,
+    }));
+
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "codex" })).toMatchObject({
+      instanceId: "codex-1",
+      kind: "codex",
+      port: 8123,
+    });
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "claude" })).toMatchObject({
+      instanceId: "claude-1",
+      kind: "claude",
+      port: 8124,
+    });
+  });
+
+  test("clears only the requested adapter endpoint when adapter is provided", () => {
+    const cwd = makeTempCwd();
+
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, {
+      instanceId: "codex-1",
+      kind: "codex",
+      command: "codex",
+      port: 8123,
+    }));
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, {
+      instanceId: "opencode-1",
+      kind: "opencode",
+      command: "opencode",
+      port: 8125,
+    }));
+
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: "codex" });
+
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "codex" })).toBeNull();
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "opencode" })).toMatchObject({
+      instanceId: "opencode-1",
+      kind: "opencode",
+    });
+  });
+
   test("readLocalCompanionEndpoint preserves visible client occupancy metadata", () => {
     const cwd = makeTempCwd();
 

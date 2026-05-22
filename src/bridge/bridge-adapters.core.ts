@@ -202,7 +202,9 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.expectedCloseReason = null;
     this.clearReconnectShutdownTimer();
     this.rejectPendingRequests(`${this.options.kind} companion proxy is shutting down.`);
-    clearLocalCompanionEndpoint(this.options.cwd, this.endpoint?.instanceId);
+    clearLocalCompanionEndpoint(this.options.cwd, this.endpoint?.instanceId, {
+      adapter: this.options.kind,
+    });
 
     if (this.socket) {
       try {
@@ -270,6 +272,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
             companionConnectedAt: nowIso(),
           },
           this.endpoint?.instanceId,
+          { adapter: this.options.kind },
         );
         sendLocalCompanionMessage(socket, { type: "hello_ack" });
         return;
@@ -282,7 +285,9 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       if (this.socket === socket) {
         const expectedCloseReason = this.expectedCloseReason;
         this.expectedCloseReason = null;
-        clearLocalCompanionOccupancy(this.options.cwd, this.endpoint?.instanceId);
+        clearLocalCompanionOccupancy(this.options.cwd, this.endpoint?.instanceId, {
+          adapter: this.options.kind,
+        });
         this.detachPanelSocket();
         if (!this.shuttingDown) {
           this.handleCompanionDisconnect(expectedCloseReason);
