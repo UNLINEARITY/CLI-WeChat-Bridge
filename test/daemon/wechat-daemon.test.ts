@@ -7,9 +7,11 @@ import {
   buildVisibleClientLaunchArgs,
   buildWindowsVisibleClientLaunchCommand,
   cleanupSingleBridgeBeforeDaemon,
+  formatDaemonSwitchResultDetail,
   formatDaemonStatus,
   parseDaemonCliArgs,
   parseDaemonSwitchCommand,
+  waitForVisibleClientConnection,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
 
@@ -86,11 +88,13 @@ describe("wechat-daemon helpers", () => {
   test("buildWindowsVisibleClientLaunchCommand opens a titled console window", () => {
     const command = buildWindowsVisibleClientLaunchCommand({
       adapter: "claude",
+      cwd: "D:\\work",
       args: ["C:\\Program Files\\bridge\\local-companion.js", "--cwd", "D:\\work"],
     });
 
     expect(command).toContain("start");
     expect(command).toContain('"wechat-claude"');
+    expect(command).toContain('/D "D:\\work"');
     expect(command).toContain('"C:\\Program Files\\bridge\\local-companion.js"');
   });
 
@@ -119,6 +123,82 @@ describe("wechat-daemon helpers", () => {
         ],
       }),
     ).toContain("active: codex");
+  });
+
+  test("formatDaemonSwitchResultDetail reports automatic visible CLI outcomes", () => {
+    expect(
+      formatDaemonSwitchResultDetail({
+        created: true,
+        openedVisible: true,
+        visibleConnected: true,
+      }),
+    ).toBe("Started a new visible CLI.");
+
+    expect(
+      formatDaemonSwitchResultDetail({
+        created: false,
+        openedVisible: false,
+        visibleConnected: true,
+      }),
+    ).toBe("Reused the existing visible CLI.");
+
+    expect(
+      formatDaemonSwitchResultDetail({
+        created: true,
+        openedVisible: true,
+        visibleConnected: false,
+      }),
+    ).toContain("tried to open the visible CLI");
+  });
+
+  test("waitForVisibleClientConnection resolves when the visible companion appears", async () => {
+    let now = 0;
+    let checks = 0;
+
+    const connected = await waitForVisibleClientConnection(
+      {
+        cwd: "D:\\work\\project",
+        adapter: "opencode",
+        timeoutMs: 1_000,
+        pollMs: 250,
+      },
+      {
+        isAlive: () => {
+          checks += 1;
+          return checks >= 3;
+        },
+        sleep: async (ms) => {
+          now += ms;
+        },
+        now: () => now,
+      },
+    );
+
+    expect(connected).toBe(true);
+    expect(checks).toBe(3);
+  });
+
+  test("waitForVisibleClientConnection returns false on timeout", async () => {
+    let now = 0;
+
+    const connected = await waitForVisibleClientConnection(
+      {
+        cwd: "D:\\work\\project",
+        adapter: "claude",
+        timeoutMs: 500,
+        pollMs: 250,
+      },
+      {
+        isAlive: () => false,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        now: () => now,
+      },
+    );
+
+    expect(connected).toBe(false);
+    expect(now).toBe(500);
   });
 
   test("cleanupSingleBridgeBeforeDaemon returns none when no lock exists", async () => {

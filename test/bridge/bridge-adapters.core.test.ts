@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import {
   buildCompanionHealthPatch,
   buildCompanionReconnectTimeoutMessage,
+  formatCompanionNotConnectedMessage,
+  formatLocalCompanionStartupMessage,
   getCompanionDisconnectDisposition,
   isExpectedLocalCompanionClose,
   shouldStopBridgeAfterCompanionDisconnect,
@@ -65,6 +67,31 @@ describe("local companion proxy lifecycle", () => {
       message:
         'claude companion disconnected unexpectedly. Run "wechat-claude" again in a second terminal for this directory to reconnect.',
     });
+  });
+
+  test("daemon-managed companions do not ask users to open a second terminal", () => {
+    const startupMessage = formatLocalCompanionStartupMessage({
+      kind: "opencode",
+      launchMode: "daemon_auto",
+    });
+    const missingMessage = formatCompanionNotConnectedMessage({
+      kind: "opencode",
+      launchMode: "daemon_auto",
+    });
+    const disconnect = getCompanionDisconnectDisposition({
+      kind: "opencode",
+      lifecycle: "persistent",
+      expectedClose: false,
+      reconnectGraceMs: 15_000,
+      launchMode: "daemon_auto",
+    });
+
+    expect(startupMessage).toContain("daemon-managed opencode");
+    expect(startupMessage).not.toContain("second terminal");
+    expect(missingMessage).toContain("Send /opencode in WeChat");
+    expect(missingMessage).not.toContain("second terminal");
+    expect(disconnect.message).toContain("Send /opencode in WeChat");
+    expect(disconnect.message).not.toContain("second terminal");
   });
 
   test("expected close detection only treats explicit closing reasons as expected", () => {

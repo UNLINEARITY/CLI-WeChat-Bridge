@@ -142,6 +142,8 @@ const WECHAT_SEND_RETRY_BASE_MS = 750;
 const SINGLE_BRIDGE_STOP_TIMEOUT_MS = 10_000;
 const SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS = 3_000;
 const SINGLE_BRIDGE_STOP_POLL_MS = 250;
+const VISIBLE_CLIENT_CONNECT_TIMEOUT_MS = 15_000;
+const VISIBLE_CLIENT_CONNECT_POLL_MS = 250;
 const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode"];
 
 function log(message: string): void {
@@ -330,44 +332,68 @@ export function buildVisibleClientLaunchArgs(params: {
 
 export function buildWindowsVisibleClientLaunchCommand(params: {
   adapter: DaemonAdapterKind;
+  cwd: string;
   args: string[];
 }): string {
   return [
     "start",
     quoteWindowsCommandArg(`wechat-${params.adapter}`),
+    "/D",
+    quoteWindowsCommandArg(params.cwd),
     quoteWindowsCommandArg(process.execPath),
     ...params.args.map((arg) => quoteWindowsCommandArg(arg)),
   ].join(" ");
+}
+
+type VisibleClientLaunch = {
+  command: string;
+  args: string[];
+  pid?: number;
+};
+
+function formatLaunchPreview(launch: VisibleClientLaunch): string {
+  return [launch.command, ...launch.args].join(" ");
 }
 
 function openVisibleClient(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
   cliArgs?: string[];
-}): void {
+  onError?: (error: Error) => void;
+}): VisibleClientLaunch {
   const args = buildVisibleClientLaunchArgs(params);
   if (process.platform === "win32") {
+    const command = process.env.ComSpec || "cmd.exe";
+    const launchArgs = [
+      "/d",
+      "/c",
+      buildWindowsVisibleClientLaunchCommand({
+        adapter: params.adapter,
+        cwd: params.cwd,
+        args,
+      }),
+    ];
     const child = spawn(
-      process.env.ComSpec || "cmd.exe",
-      [
-        "/d",
-        "/s",
-        "/c",
-        buildWindowsVisibleClientLaunchCommand({
-          adapter: params.adapter,
-          args,
-        }),
-      ],
+      command,
+      launchArgs,
       {
         cwd: params.cwd,
         env: process.env,
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
+        windowsVerbatimArguments: true,
+        windowsHide: false,
       },
     );
+    child.once("error", (error) => {
+      params.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
     child.unref();
-    return;
+    return {
+      command,
+      args: launchArgs,
+      pid: child.pid,
+    };
   }
 
   const child = spawn(process.execPath, args, {
@@ -377,7 +403,15 @@ function openVisibleClient(params: {
     stdio: "ignore",
     windowsHide: false,
   });
+  child.once("error", (error) => {
+    params.onError?.(error instanceof Error ? error : new Error(String(error)));
+  });
   child.unref();
+  return {
+    command: process.execPath,
+    args,
+    pid: child.pid,
+  };
 }
 
 function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean {
@@ -391,6 +425,53 @@ function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean 
 
   clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter });
   return false;
+}
+
+function cleanupVisibleClientLauncher(launch: VisibleClientLaunch): boolean {
+  if (!launch.pid || !isPidAlive(launch.pid)) {
+    return false;
+  }
+
+  try {
+    killProcessTreeSync(launch.pid);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForVisibleClientConnection(
+  params: {
+    cwd: string;
+    adapter: DaemonAdapterKind;
+    timeoutMs?: number;
+    pollMs?: number;
+  },
+  deps: {
+    isAlive?: (cwd: string, adapter: DaemonAdapterKind) => boolean;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<boolean> {
+  const timeoutMs = params.timeoutMs ?? VISIBLE_CLIENT_CONNECT_TIMEOUT_MS;
+  const pollMs = params.pollMs ?? VISIBLE_CLIENT_CONNECT_POLL_MS;
+  const isAlive = deps.isAlive ?? isVisibleClientAlive;
+  const sleepFn = deps.sleep ?? sleep;
+  const now = deps.now ?? (() => Date.now());
+  const deadline = now() + timeoutMs;
+
+  while (true) {
+    if (isAlive(params.cwd, params.adapter)) {
+      return true;
+    }
+
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      return false;
+    }
+
+    await sleepFn(Math.min(pollMs, remainingMs));
+  }
 }
 
 function formatInboundMessagePreview(message: InboundWechatMessage): string {
@@ -412,6 +493,30 @@ function formatNoActiveAdapterMessage(): string {
     "No active terminal is selected.",
     "Send /codex, /claude, or /opencode to choose one.",
   ].join("\n");
+}
+
+export function formatDaemonSwitchResultDetail(result: {
+  created: boolean;
+  openedVisible: boolean;
+  visibleConnected: boolean;
+}): string {
+  if (result.openedVisible && result.visibleConnected) {
+    return result.created
+      ? "Started a new visible CLI."
+      : "Opened a visible CLI for the existing slot.";
+  }
+
+  if (result.openedVisible) {
+    return result.created
+      ? `Started the bridge slot and tried to open the visible CLI, but it has not connected yet. Check ${BRIDGE_LOG_FILE}.`
+      : `Tried to open a visible CLI for the existing slot, but it has not connected yet. Check ${BRIDGE_LOG_FILE}.`;
+  }
+
+  if (result.visibleConnected) {
+    return "Reused the existing visible CLI.";
+  }
+
+  return result.created ? "Started the bridge slot." : "Reused the bridge slot.";
 }
 
 export function formatDaemonStatus(status: DaemonStatus): string {
@@ -710,6 +815,7 @@ class WechatDaemon {
     activeAdapter: DaemonAdapterKind;
     created: boolean;
     openedVisible: boolean;
+    visibleConnected: boolean;
   }> {
     let slot = this.slots.get(adapter);
     let created = false;
@@ -723,22 +829,47 @@ class WechatDaemon {
 
     this.activeAdapter = adapter;
     let openedVisible = false;
-    if (options.openVisible !== false && !isVisibleClientAlive(this.cwd, adapter)) {
-      openVisibleClient({
+    let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
+    if (options.openVisible !== false && !visibleConnected) {
+      const launch = openVisibleClient({
         adapter,
         cwd: this.cwd,
         cliArgs: options.cliArgs,
+        onError: (error) => {
+          appendDaemonLog(
+            `visible_client_open_error: adapter=${adapter} error=${truncatePreview(error.message, 400)}`,
+          );
+        },
       });
       openedVisible = true;
+      appendDaemonLog(
+        `visible_client_open_attempt: adapter=${adapter} cwd=${this.cwd} pid=${launch.pid ?? "unknown"} command=${truncatePreview(formatLaunchPreview(launch), 400)}`,
+      );
+      visibleConnected = await waitForVisibleClientConnection({
+        cwd: this.cwd,
+        adapter,
+      });
+      if (visibleConnected) {
+        appendDaemonLog(`visible_client_connected: adapter=${adapter} cwd=${this.cwd}`);
+      } else {
+        log(
+          `${adapter} visible CLI did not connect within ${formatDuration(VISIBLE_CLIENT_CONNECT_TIMEOUT_MS)}. Check ${BRIDGE_LOG_FILE}.`,
+        );
+        const cleanedLauncher = cleanupVisibleClientLauncher(launch);
+        appendDaemonLog(
+          `visible_client_connect_timeout: adapter=${adapter} cwd=${this.cwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS} cleaned_launcher=${cleanedLauncher}`,
+        );
+      }
     }
 
     appendDaemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible}`,
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected}`,
     );
     return {
       activeAdapter: adapter,
       created,
       openedVisible,
+      visibleConnected,
     };
   }
 
@@ -753,6 +884,7 @@ class WechatDaemon {
       cwd: this.cwd,
       profile: options.profile,
       lifecycle: "persistent",
+      companionLaunchMode: "daemon_auto",
     });
     const controller = new BridgeController(runtime, this.cwd);
     const slot: DaemonSlot = {
@@ -1026,13 +1158,7 @@ class WechatDaemon {
       const result = await this.ensureSlot(switchAdapter, {
         openVisible: true,
       });
-      const detail = result.created
-        ? result.openedVisible
-          ? "Started a new visible CLI."
-          : "Started the bridge slot."
-        : result.openedVisible
-          ? "Opened a visible CLI for the existing slot."
-          : "Reused the existing visible CLI.";
+      const detail = formatDaemonSwitchResultDetail(result);
       await this.queueWechatMessage(
         message.senderId,
         `Active terminal: ${switchAdapter}.\n${detail}`,

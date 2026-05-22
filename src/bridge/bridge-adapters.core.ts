@@ -104,7 +104,10 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.clearReconnectShutdownTimer();
     this.setStatus(
       "starting",
-      `Waiting for manual ${this.options.kind} companion connection. Run "${getLocalCompanionCommandName(this.options.kind)}" in a second terminal for this directory.`,
+      formatLocalCompanionStartupMessage({
+        kind: this.options.kind,
+        launchMode: this.options.companionLaunchMode,
+      }),
     );
 
     await new Promise<void>((resolve, reject) => {
@@ -397,6 +400,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       lifecycle: this.options.lifecycle,
       expectedClose: isExpectedLocalCompanionClose(expectedCloseReason),
       reconnectGraceMs: LOCAL_COMPANION_RECONNECT_GRACE_MS,
+      launchMode: this.options.companionLaunchMode,
     });
 
     if (disposition.action === "shutdown") {
@@ -473,9 +477,10 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
   private async sendRequest(payload: LocalCompanionCommand): Promise<unknown> {
     const socket = this.socket;
     if (!socket) {
-      throw new Error(
-        `${this.options.kind} companion is not connected. Run "${getLocalCompanionCommandName(this.options.kind)}" in a second terminal for this directory.`,
-      );
+      throw new Error(formatCompanionNotConnectedMessage({
+        kind: this.options.kind,
+        launchMode: this.options.companionLaunchMode,
+      }));
     }
     if (!this.state.pid && payload.command !== "dispose") {
       throw new Error(`${this.options.kind} companion is connected but not ready yet. Wait for it to finish starting.`);
@@ -516,6 +521,30 @@ export function buildCompanionHealthPatch(
   };
 }
 
+type CompanionLaunchMode = AdapterOptions["companionLaunchMode"];
+
+export function formatLocalCompanionStartupMessage(params: {
+  kind: BridgeAdapterKind;
+  launchMode?: CompanionLaunchMode;
+}): string {
+  if (params.launchMode === "daemon_auto") {
+    return `Waiting for daemon-managed ${params.kind} companion connection. The daemon will open or reuse the visible CLI automatically.`;
+  }
+
+  return `Waiting for manual ${params.kind} companion connection. Run "${getLocalCompanionCommandName(params.kind)}" in a second terminal for this directory.`;
+}
+
+export function formatCompanionNotConnectedMessage(params: {
+  kind: BridgeAdapterKind;
+  launchMode?: CompanionLaunchMode;
+}): string {
+  if (params.launchMode === "daemon_auto") {
+    return `${params.kind} companion is not connected yet. Send /${params.kind} in WeChat to open or reconnect the visible CLI automatically.`;
+  }
+
+  return `${params.kind} companion is not connected. Run "${getLocalCompanionCommandName(params.kind)}" in a second terminal for this directory.`;
+}
+
 export function isExpectedLocalCompanionClose(
   reason: LocalCompanionCloseReason | null | undefined,
 ): boolean {
@@ -549,6 +578,7 @@ export function getCompanionDisconnectDisposition(params: {
   lifecycle: BridgeLifecycleMode | undefined;
   expectedClose: boolean;
   reconnectGraceMs: number;
+  launchMode?: CompanionLaunchMode;
 }): CompanionDisconnectDisposition {
   const commandName = getLocalCompanionCommandName(params.kind);
 
@@ -568,9 +598,23 @@ export function getCompanionDisconnectDisposition(params: {
   }
 
   if (params.expectedClose) {
+    if (params.launchMode === "daemon_auto") {
+      return {
+        action: "await_manual_reconnect",
+        message: `${params.kind} companion closed. Send /${params.kind} in WeChat to reopen the visible CLI automatically.`,
+      };
+    }
+
     return {
       action: "await_manual_reconnect",
       message: `${params.kind} companion closed. Run "${commandName}" again in a second terminal for this directory.`,
+    };
+  }
+
+  if (params.launchMode === "daemon_auto") {
+    return {
+      action: "await_manual_reconnect",
+      message: `${params.kind} companion disconnected unexpectedly. Send /${params.kind} in WeChat to reopen the visible CLI automatically.`,
     };
   }
 

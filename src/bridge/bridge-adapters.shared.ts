@@ -92,6 +92,7 @@ export type AdapterOptions = {
   profile?: string;
   extraCliArgs?: string[];
   lifecycle?: BridgeLifecycleMode;
+  companionLaunchMode?: "manual" | "daemon_auto";
   initialSharedSessionId?: string;
   initialSharedThreadId?: string;
   initialResumeConversationId?: string;
