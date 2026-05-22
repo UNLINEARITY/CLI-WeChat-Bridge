@@ -1,3 +1,6 @@
+import net from "node:net";
+import path from "node:path";
+
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -7,8 +10,14 @@ import {
   formatLocalCompanionStartupMessage,
   getCompanionDisconnectDisposition,
   isExpectedLocalCompanionClose,
+  LocalCompanionProxyAdapter,
   shouldStopBridgeAfterCompanionDisconnect,
 } from "../../src/bridge/bridge-adapters.core.ts";
+import {
+  clearLocalCompanionEndpoint,
+  readLocalCompanionEndpoint,
+  sendLocalCompanionMessage,
+} from "../../src/companion/local-companion-link.ts";
 
 describe("local companion proxy lifecycle", () => {
   test("persistent bridges stay alive after companion disconnect", () => {
@@ -92,6 +101,61 @@ describe("local companion proxy lifecycle", () => {
     expect(missingMessage).not.toContain("second terminal");
     expect(disconnect.message).toContain("Send /opencode in WeChat");
     expect(disconnect.message).not.toContain("second terminal");
+  });
+
+  test("companion state updates preserve visible companion occupancy", async () => {
+    const cwd = path.resolve("tmp/daemon-visible-companion");
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: "claude" });
+    const adapter = new LocalCompanionProxyAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd,
+      lifecycle: "persistent",
+      companionLaunchMode: "daemon_auto",
+    });
+
+    await adapter.start();
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "claude" });
+    expect(endpoint).toBeTruthy();
+
+    const socket = net.connect({
+      host: "127.0.0.1",
+      port: endpoint?.port ?? 0,
+    });
+
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+
+      sendLocalCompanionMessage(socket, {
+        type: "hello",
+        token: endpoint?.token ?? "",
+        companionPid: 12_345,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      sendLocalCompanionMessage(socket, {
+        type: "state",
+        state: {
+          kind: "claude",
+          status: "idle",
+          cwd,
+          command: "claude",
+          pid: 54_321,
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const updated = readLocalCompanionEndpoint(cwd, { adapter: "claude" });
+      expect(updated?.companionPid).toBe(12_345);
+      expect(updated?.companionWorkerPid).toBe(54_321);
+      expect(updated?.companionStatus).toBe("idle");
+    } finally {
+      socket.destroy();
+      await adapter.dispose();
+      clearLocalCompanionEndpoint(cwd, undefined, { adapter: "claude" });
+    }
   });
 
   test("expected close detection only treats explicit closing reasons as expected", () => {

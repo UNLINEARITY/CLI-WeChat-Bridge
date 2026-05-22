@@ -268,11 +268,16 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.expectedCloseReason = null;
         this.socket = socket;
         this.detachMessageListener = detachListener;
+        const companionConnectedAt = nowIso();
+        if (this.endpoint) {
+          this.endpoint.companionPid = message.companionPid;
+          this.endpoint.companionConnectedAt = companionConnectedAt;
+        }
         updateLocalCompanionOccupancy(
           this.options.cwd,
           {
             companionPid: message.companionPid,
-            companionConnectedAt: nowIso(),
+            companionConnectedAt,
           },
           this.endpoint?.instanceId,
           { adapter: this.options.kind },
