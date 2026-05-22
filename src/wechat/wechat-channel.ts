@@ -14,6 +14,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import {
+  formatByteSize,
   WeChatTransport,
   type InboundWechatMessage,
 } from "./wechat-transport.ts";
@@ -272,8 +273,8 @@ async function fetchMessages(args: FetchMessagesArgs): Promise<string> {
 }
 
 function formatFetchedMessages(messages: InboundWechatMessage[]): string {
-  const blocks = messages.map((message, index) =>
-    [
+  const blocks = messages.map((message, index) => {
+    const lines = [
       `[${index + 1}]`,
       `sender_id: ${message.senderId}`,
       `sender: ${message.sender}`,
@@ -281,8 +282,22 @@ function formatFetchedMessages(messages: InboundWechatMessage[]): string {
       `created_at: ${message.createdAt}`,
       "text:",
       message.text,
-    ].join("\n"),
-  );
+    ];
+    if (message.attachments.length > 0) {
+      lines.push(
+        "attachments:",
+        ...message.attachments.map((attachment) =>
+          [
+            `- kind: ${attachment.kind}`,
+            `  name: ${attachment.fileName}`,
+            `  size: ${formatByteSize(attachment.sizeBytes)}`,
+            `  path: ${attachment.path}`,
+          ].join("\n"),
+        ),
+      );
+    }
+    return lines.join("\n");
+  });
 
   return [
     `Fetched ${messages.length} new WeChat message${messages.length === 1 ? "" : "s"}.`,

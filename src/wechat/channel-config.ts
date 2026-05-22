@@ -39,6 +39,10 @@ export const INBOUND_MESSAGE_CLAIMS_DIR = path.join(
   GLOBAL_CHANNEL_DATA_DIR,
   "inbound-message-claims",
 );
+export const INBOUND_ATTACHMENTS_DIR = path.join(
+  CHANNEL_DATA_DIR,
+  "inbound-attachments",
+);
 
 export type WorkspaceChannelPaths = {
   workspaceDir: string;

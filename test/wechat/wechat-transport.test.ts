@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { createCipheriv } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,16 +7,22 @@ import path from "node:path";
 import {
   assertWechatApiResponseOk,
   assertMediaUploadSizeAllowed,
+  buildCdnDownloadUrl,
   buildInboundMessageClaimPath,
   clearInboundMessageClaims,
   classifyWechatTransportError,
+  decodeInboundMediaAesKey,
+  decryptInboundMediaPayload,
   describeWechatTransportError,
+  extractInboundMessageContent,
   formatByteSize,
   isWechatContextTokenStaleError,
   isWechatSyncSessionTimeout,
+  resolveInboundMediaDownloadLimitBytes,
   resolveMediaUploadLimitBytes,
   tryClaimInboundMessage,
   WechatApiResponseError,
+  type WeixinMessage,
 } from "../../src/wechat/wechat-transport.ts";
 
 describe("wechat upload limits", () => {
@@ -56,6 +63,17 @@ describe("wechat upload limits", () => {
     expect(formatByteSize(512)).toBe("512 B");
     expect(formatByteSize(1_536)).toBe("1.5 KB");
     expect(formatByteSize(20 * 1024 * 1024)).toBe("20.0 MB");
+  });
+
+  test("uses separate inbound download limits", () => {
+    expect(resolveInboundMediaDownloadLimitBytes("image", {} as NodeJS.ProcessEnv)).toBe(
+      20 * 1024 * 1024,
+    );
+    expect(
+      resolveInboundMediaDownloadLimitBytes("file", {
+        WECHAT_MAX_INBOUND_FILE_MB: "12",
+      } as NodeJS.ProcessEnv),
+    ).toBe(12 * 1024 * 1024);
   });
 
   test("classifies transient fetch failures as retryable network errors", () => {
@@ -209,5 +227,84 @@ describe("wechat upload limits", () => {
     } finally {
       clearInboundMessageClaims(claimsDir);
     }
+  });
+});
+
+describe("wechat inbound media", () => {
+  test("extracts image and file descriptors without requiring text", () => {
+    const message: WeixinMessage = {
+      item_list: [
+        {
+          type: 2,
+          image_item: {
+            file_name: "screenshot.png",
+            media: {
+              aes_key: "00112233445566778899aabbccddeeff",
+              encrypt_query_param: "img-param",
+            },
+          },
+        },
+        {
+          type: 4,
+          file_item: {
+            file_name: "report.pdf",
+            len: "128",
+            media: {
+              aes_key: "ffeeddccbbaa99887766554433221100",
+              encrypt_query_param: "file-param",
+            },
+          },
+        },
+      ],
+    };
+
+    expect(extractInboundMessageContent(message)).toEqual({
+      text: "",
+      attachments: [
+        expect.objectContaining({
+          kind: "image",
+          fileName: "screenshot.png",
+          aesKey: "00112233445566778899aabbccddeeff",
+          expectedSizeBytes: undefined,
+        }),
+        expect.objectContaining({
+          kind: "file",
+          fileName: "report.pdf",
+          aesKey: "ffeeddccbbaa99887766554433221100",
+          expectedSizeBytes: 128,
+        }),
+      ],
+    });
+  });
+
+  test("adds an explicit note when media metadata is missing", () => {
+    const message: WeixinMessage = {
+      item_list: [{ type: 2, image_item: {} }],
+    };
+
+    expect(extractInboundMessageContent(message)).toEqual({
+      text: "[WeChat image attachment could not be downloaded: missing media metadata]",
+      attachments: [],
+    });
+  });
+
+  test("builds CDN download URLs from encrypted query params", () => {
+    expect(buildCdnDownloadUrl("https://novac2c.cdn.weixin.qq.com/c2c", "a+b/c=")).toBe(
+      "https://novac2c.cdn.weixin.qq.com/c2c/download?encrypted_query_param=a%2Bb%2Fc%3D",
+    );
+  });
+
+  test("decodes inbound AES keys and decrypts media payloads", () => {
+    const key = Buffer.from("00112233445566778899aabbccddeeff", "hex");
+    const plaintext = Buffer.from("wechat inbound media");
+    const cipher = createCipheriv("aes-128-ecb", key, null);
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+
+    expect(decodeInboundMediaAesKey(key.toString("hex"))).toEqual(key);
+    expect(decodeInboundMediaAesKey(key.toString("base64"))).toEqual(key);
+    expect(decodeInboundMediaAesKey(Buffer.from(key.toString("hex")).toString("base64"))).toEqual(
+      key,
+    );
+    expect(decryptInboundMediaPayload(ciphertext, key.toString("hex"))).toEqual(plaintext);
   });
 });

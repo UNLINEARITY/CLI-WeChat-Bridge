@@ -217,6 +217,34 @@ describe("wechat inbound prompt injection", () => {
     expect(buildWechatInboundPrompt(ordinary)).toBe(ordinary);
     expect(buildWechatInboundPrompt(explicitProtocol)).toBe(explicitProtocol);
   });
+
+  test("adds saved inbound attachment paths to the prompt", () => {
+    const prompt = buildWechatInboundPrompt("Please summarize this file.", [
+      {
+        kind: "file",
+        path: "C:\\Users\\unlin\\.claude\\channels\\wechat\\inbound-attachments\\2026-05-22\\report.pdf",
+        fileName: "report.pdf",
+        sizeBytes: 1536,
+      },
+    ]);
+
+    expect(prompt).toContain("Please summarize this file.");
+    expect(prompt).toContain("[WeChat inbound attachments]");
+    expect(prompt).toContain("kind=file name=report.pdf size=1.5 KB path=C:\\Users\\unlin");
+  });
+
+  test("creates a usable prompt for attachment-only messages", () => {
+    const prompt = buildWechatInboundPrompt("", [
+      {
+        kind: "image",
+        path: "C:\\Users\\unlin\\.claude\\channels\\wechat\\inbound-attachments\\2026-05-22\\photo.jpg",
+        fileName: "photo.jpg",
+      },
+    ]);
+
+    expect(prompt).toContain("Received WeChat attachment(s).");
+    expect(prompt).toContain("kind=image name=photo.jpg path=C:\\Users\\unlin");
+  });
 });
 
 describe("parseCodexSessionAgentMessage", () => {

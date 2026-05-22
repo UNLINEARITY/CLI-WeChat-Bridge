@@ -182,6 +182,12 @@ cd D:\work\your-project
 
 ![文件传输](docs/images/image-8.png)
 
+微信发来的图片和普通文件也会被接收并保存到本地数据目录：
+
+- 保存位置：`~/.claude/channels/wechat/inbound-attachments/<日期>/`
+- bridge 会把本地路径追加到转发给 Codex / Claude Code / OpenCode 的 prompt 中，模型可按需读取或解析这些文件；
+- 当前不会自动 OCR 图片，也不会自动抽取 PDF / DOCX 正文；解析动作由本地 CLI 根据路径完成。
+
 | 适配器 | 当前状态 | 说明 |
 | --- | --- | --- |
 | `codex` | 已接入 | 双终端模式；本地 companion 为线程权威；微信跟随本地线程 |
@@ -367,6 +373,7 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | `context_tokens.json` | 微信上下文 token 缓存 |
 | `bridge.log` | bridge 运行日志 |
 | `bridge.lock.json` | bridge 运行锁 |
+| `inbound-attachments/` | 微信入站图片和普通文件的本地保存目录 |
 | `workspaces/<workspace-key>/bridge-state.json` | 当前工作区状态 |
 | `workspaces/<workspace-key>/codex-panel-endpoint.json` | 当前工作区 companion endpoint；文件名保留历史兼容 |
 
@@ -380,6 +387,8 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | `WECHAT_MAX_FILE_MB` | 覆盖普通文件上传大小限制，默认 50 MB |
 | `WECHAT_MAX_VOICE_MB` | 覆盖语音上传大小限制，默认 20 MB |
 | `WECHAT_MAX_VIDEO_MB` | 覆盖视频上传大小限制，默认 100 MB |
+| `WECHAT_MAX_INBOUND_IMAGE_MB` | 覆盖微信入站图片下载大小限制，默认 20 MB |
+| `WECHAT_MAX_INBOUND_FILE_MB` | 覆盖微信入站普通文件下载大小限制，默认 50 MB |
 | `WECHAT_OPENCODE_DEBUG` | 开启 OpenCode 适配器调试输出 |
 
 ## 版本更新

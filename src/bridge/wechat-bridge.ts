@@ -1217,6 +1217,20 @@ function buildCompletionSummary(params: {
   return lines.join("\n");
 }
 
+function formatInboundMessagePreview(message: InboundWechatMessage): string {
+  if (message.text.trim()) {
+    return message.text;
+  }
+
+  if (message.attachments.length > 0) {
+    return message.attachments
+      .map((attachment) => `${attachment.kind}: ${attachment.path}`)
+      .join("\n");
+  }
+
+  return "(empty)";
+}
+
 async function handleInboundMessage(params: {
   message: InboundWechatMessage;
   options: BridgeCliOptions;
@@ -1430,12 +1444,13 @@ async function dispatchInboundWechatText(params: {
   adapter: BridgeAdapter;
 }): Promise<ActiveTask> {
   const { message, options, stateStore, adapter } = params;
+  const preview = formatInboundMessagePreview(message);
   const activeTask = {
     startedAt: Date.now(),
-    inputPreview: truncatePreview(message.text, 180),
+    inputPreview: truncatePreview(preview, 180),
   };
-  stateStore.appendLog(`Forwarded input to ${options.adapter}: ${truncatePreview(message.text)}`);
-  await adapter.sendInput(buildWechatInboundPrompt(message.text));
+  stateStore.appendLog(`Forwarded input to ${options.adapter}: ${truncatePreview(preview)}`);
+  await adapter.sendInput(buildWechatInboundPrompt(message.text, message.attachments));
   return activeTask;
 }
 

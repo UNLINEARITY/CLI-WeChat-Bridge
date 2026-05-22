@@ -141,6 +141,13 @@ export type WechatReplyAttachment = {
   path: string;
 };
 
+export type WechatInboundPromptAttachment = {
+  kind: "image" | "file";
+  path: string;
+  fileName?: string;
+  sizeBytes?: number;
+};
+
 export type ParsedWechatFinalReply = {
   visibleText: string;
   attachments: WechatReplyAttachment[];
@@ -311,17 +318,65 @@ export function shouldInjectWechatAttachmentPrompt(text: string): boolean {
   );
 }
 
-export function buildWechatInboundPrompt(text: string): string {
-  if (!shouldInjectWechatAttachmentPrompt(text)) {
-    return text;
+function formatPromptByteSize(bytes: number | undefined): string | null {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
+    return null;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(bytes >= 100 * 1024 ? 0 : 1)} KB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatWechatInboundAttachmentPrompt(
+  attachments: WechatInboundPromptAttachment[],
+): string {
+  const lines = [
+    "[WeChat inbound attachments]",
+    "The user sent attachment files through WeChat. They have been saved locally. Read the local paths directly if the user's request requires inspecting them.",
+  ];
+
+  attachments.forEach((attachment, index) => {
+    const sizeText = formatPromptByteSize(attachment.sizeBytes);
+    const metadata = [
+      `kind=${attachment.kind}`,
+      attachment.fileName ? `name=${attachment.fileName}` : "",
+      sizeText ? `size=${sizeText}` : "",
+    ].filter(Boolean);
+    lines.push(`${index + 1}. ${metadata.join(" ")} path=${attachment.path}`);
+  });
+
+  return lines.join("\n");
+}
+
+export function buildWechatInboundPrompt(
+  text: string,
+  attachments: WechatInboundPromptAttachment[] = [],
+): string {
+  const trimmedAttachments = attachments.filter((attachment) => attachment.path.trim());
+
+  if (!trimmedAttachments.length) {
+    if (!shouldInjectWechatAttachmentPrompt(text)) {
+      return text;
+    }
+
+    const normalized = normalizeOutput(text).trim();
+    if (!normalized) {
+      return text;
+    }
+
+    return `${WECHAT_ATTACHMENT_PROMPT_PREFIX}\n${normalized}`;
   }
 
-  const normalized = normalizeOutput(text).trim();
-  if (!normalized) {
-    return text;
-  }
+  const baseText = normalizeOutput(text).trim() || "Received WeChat attachment(s).";
+  const userPrompt = shouldInjectWechatAttachmentPrompt(baseText)
+    ? `${WECHAT_ATTACHMENT_PROMPT_PREFIX}\n${baseText.trim()}`
+    : baseText;
 
-  return `${WECHAT_ATTACHMENT_PROMPT_PREFIX}\n${normalized}`;
+  return `${userPrompt.trim()}\n\n${formatWechatInboundAttachmentPrompt(trimmedAttachments)}`;
 }
 
 export function parseWechatFinalReply(text: string): ParsedWechatFinalReply {

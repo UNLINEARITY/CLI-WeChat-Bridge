@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { createCipheriv } from "node:crypto";
+import { createCipheriv, createDecipheriv } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -7,6 +7,7 @@ import {
   CONTEXT_CACHE_FILE,
   CREDENTIALS_FILE,
   ensureChannelDataDir,
+  INBOUND_ATTACHMENTS_DIR,
   INBOUND_MESSAGE_CLAIMS_DIR,
   migrateLegacyChannelFiles,
   SYNC_BUF_FILE,
@@ -19,6 +20,7 @@ const CHANNEL_VERSION = "0.3.0";
 const RECENT_MESSAGE_CACHE_SIZE = 500;
 const BYTES_PER_MB = 1024 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
+const INBOUND_DOWNLOAD_TIMEOUT_MS = 30_000;
 const CDN_MAX_RETRIES = 3;
 const ERROR_CAUSE_DEPTH_LIMIT = 4;
 const INBOUND_MESSAGE_CLAIM_TTL_MS = 10 * 60 * 1000;
@@ -50,23 +52,48 @@ export type AccountData = {
 
 type ContextTokenState = Record<string, string>;
 
-interface TextItem {
+export interface TextItem {
   text?: string;
 }
 
-interface RefMessage {
+export interface CdnMedia {
+  aes_key?: string;
+  aeskey?: string;
+  encrypt_query_param?: string;
+  full_url?: string;
+}
+
+export interface ImageItem {
+  aes_key?: string;
+  aeskey?: string;
+  file_name?: string;
+  media?: CdnMedia;
+  mid_size?: number;
+}
+
+export interface FileItem {
+  aes_key?: string;
+  aeskey?: string;
+  file_name?: string;
+  len?: string;
+  media?: CdnMedia;
+}
+
+export interface RefMessage {
   message_item?: MessageItem;
   title?: string;
 }
 
-interface MessageItem {
+export interface MessageItem {
   type?: number;
   text_item?: TextItem;
   voice_item?: { text?: string };
+  image_item?: ImageItem;
+  file_item?: FileItem;
   ref_msg?: RefMessage;
 }
 
-interface WeixinMessage {
+export interface WeixinMessage {
   from_user_id?: string;
   to_user_id?: string;
   client_id?: string;
@@ -101,9 +128,32 @@ export type InboundWechatMessage = {
   sender: string;
   sessionId: string;
   text: string;
+  attachments: InboundWechatAttachment[];
   contextToken?: string;
   createdAt: string;
   createdAtMs?: number;
+};
+
+export type InboundWechatAttachmentKind = "image" | "file";
+
+export type InboundWechatAttachment = {
+  kind: InboundWechatAttachmentKind;
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+};
+
+export type InboundWechatAttachmentDescriptor = {
+  kind: InboundWechatAttachmentKind;
+  fileName: string;
+  media: CdnMedia;
+  aesKey: string;
+  expectedSizeBytes?: number;
+};
+
+export type ExtractedInboundWechatMessageContent = {
+  text: string;
+  attachments: InboundWechatAttachmentDescriptor[];
 };
 
 type PollMessagesOptions = {
@@ -214,6 +264,16 @@ const MEDIA_UPLOAD_LIMIT_ENV_KEYS: Record<UploadLabel, string> = {
   file: "WECHAT_MAX_FILE_MB",
   voice: "WECHAT_MAX_VOICE_MB",
   video: "WECHAT_MAX_VIDEO_MB",
+};
+
+const DEFAULT_MEDIA_INBOUND_LIMIT_MB: Record<InboundWechatAttachmentKind, number> = {
+  image: 20,
+  file: 50,
+};
+
+const MEDIA_INBOUND_LIMIT_ENV_KEYS: Record<InboundWechatAttachmentKind, string> = {
+  image: "WECHAT_MAX_INBOUND_IMAGE_MB",
+  file: "WECHAT_MAX_INBOUND_FILE_MB",
 };
 
 const RETRYABLE_HTTP_STATUS_CODES = new Set([408, 425, 429]);
@@ -567,8 +627,40 @@ function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
   return Buffer.concat([cipher.update(plaintext), cipher.final()]);
 }
 
+function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
+  const decipher = createDecipheriv("aes-128-ecb", key, null);
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+}
+
 function aesEcbPaddedSize(plaintextSize: number): number {
   return Math.ceil((plaintextSize + 1) / 16) * 16;
+}
+
+function isHexAesKey(value: string): boolean {
+  return /^[a-f0-9]{32}$/i.test(value);
+}
+
+export function decodeInboundMediaAesKey(value: string): Buffer {
+  const trimmed = value.trim();
+  if (isHexAesKey(trimmed)) {
+    return Buffer.from(trimmed, "hex");
+  }
+
+  const decoded = Buffer.from(trimmed, "base64");
+  if (decoded.length === 16) {
+    return decoded;
+  }
+
+  const decodedText = decoded.toString("utf8").trim();
+  if (isHexAesKey(decodedText)) {
+    return Buffer.from(decodedText, "hex");
+  }
+
+  throw new Error("Unsupported inbound media aes key format.");
+}
+
+export function decryptInboundMediaPayload(ciphertext: Buffer, aesKey: string): Buffer {
+  return decryptAesEcb(ciphertext, decodeInboundMediaAesKey(aesKey));
 }
 
 export function formatByteSize(bytes: number): string {
@@ -599,6 +691,19 @@ export function resolveMediaUploadLimitBytes(
   return Math.floor(limitMb * BYTES_PER_MB);
 }
 
+export function resolveInboundMediaDownloadLimitBytes(
+  label: InboundWechatAttachmentKind,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const envKey = MEDIA_INBOUND_LIMIT_ENV_KEYS[label];
+  const raw = env[envKey];
+  const fallbackMb = DEFAULT_MEDIA_INBOUND_LIMIT_MB[label];
+  const parsedMb = raw ? Number(raw) : Number.NaN;
+  const limitMb =
+    Number.isFinite(parsedMb) && parsedMb > 0 ? parsedMb : fallbackMb;
+  return Math.floor(limitMb * BYTES_PER_MB);
+}
+
 export function assertMediaUploadSizeAllowed(
   label: UploadLabel,
   rawsize: number,
@@ -613,6 +718,23 @@ export function assertMediaUploadSizeAllowed(
   const labelName = label.charAt(0).toUpperCase() + label.slice(1);
   throw new Error(
     `${labelName} too large: ${formatByteSize(rawsize)} exceeds ${formatByteSize(limitBytes)} limit. Set ${envKey} to override.`,
+  );
+}
+
+function assertInboundMediaDownloadSizeAllowed(
+  label: InboundWechatAttachmentKind,
+  rawsize: number,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const limitBytes = resolveInboundMediaDownloadLimitBytes(label, env);
+  if (rawsize <= limitBytes) {
+    return;
+  }
+
+  const envKey = MEDIA_INBOUND_LIMIT_ENV_KEYS[label];
+  const labelName = label.charAt(0).toUpperCase() + label.slice(1);
+  throw new Error(
+    `${labelName} too large: ${formatByteSize(rawsize)} exceeds ${formatByteSize(limitBytes)} inbound limit. Set ${envKey} to override.`,
   );
 }
 
@@ -652,6 +774,39 @@ function buildCdnUploadUrl(
   filekey: string,
 ): string {
   return `${cdnBaseUrl}/upload?encrypted_query_param=${encodeURIComponent(uploadParam)}&filekey=${encodeURIComponent(filekey)}`;
+}
+
+export function buildCdnDownloadUrl(
+  cdnBaseUrl: string,
+  downloadParam: string,
+): string {
+  return `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(downloadParam)}`;
+}
+
+function isTrustedCdnDownloadUrl(url: URL): boolean {
+  const trustedHost = new URL(CDN_BASE_URL).hostname;
+  return url.protocol === "https:" && url.hostname === trustedHost;
+}
+
+function resolveCdnDownloadUrl(media: CdnMedia): string {
+  const fullUrl = media.full_url?.trim();
+  if (fullUrl) {
+    try {
+      const url = new URL(fullUrl);
+      if (isTrustedCdnDownloadUrl(url)) {
+        return url.toString();
+      }
+    } catch {
+      // Fall back to the encrypted query param below.
+    }
+  }
+
+  const downloadParam = media.encrypt_query_param?.trim();
+  if (!downloadParam) {
+    throw new Error("Inbound media is missing encrypt_query_param.");
+  }
+
+  return buildCdnDownloadUrl(CDN_BASE_URL, downloadParam);
 }
 
 async function uploadBufferToCdn(params: {
@@ -708,6 +863,58 @@ async function uploadBufferToCdn(params: {
   return { downloadParam };
 }
 
+async function downloadBufferFromCdn(params: {
+  media: CdnMedia;
+  kind: InboundWechatAttachmentKind;
+  onRetry?: (attempt: number) => void;
+}): Promise<Buffer> {
+  const cdnUrl = resolveCdnDownloadUrl(params.media);
+  const limitBytes = resolveInboundMediaDownloadLimitBytes(params.kind);
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= CDN_MAX_RETRIES; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), INBOUND_DOWNLOAD_TIMEOUT_MS);
+    try {
+      const res = await fetch(cdnUrl, {
+        method: "GET",
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (res.status >= 400 && res.status < 500) {
+        const errMsg = res.headers.get("x-error-message") ?? (await res.text());
+        throw new Error(`CDN client error ${res.status}: ${errMsg}`);
+      }
+      if (res.status !== 200) {
+        const errMsg = res.headers.get("x-error-message") ?? `status ${res.status}`;
+        throw new Error(`CDN server error: ${errMsg}`);
+      }
+
+      const contentLength = Number(res.headers.get("content-length") ?? "");
+      if (Number.isFinite(contentLength) && contentLength > aesEcbPaddedSize(limitBytes)) {
+        throw new Error(
+          `${params.kind} download too large: ${formatByteSize(contentLength)} encrypted payload exceeds ${formatByteSize(limitBytes)} inbound limit.`,
+        );
+      }
+
+      return Buffer.from(await res.arrayBuffer());
+    } catch (err) {
+      clearTimeout(timer);
+      lastError = err;
+      if (err instanceof Error && err.message.includes("client error")) {
+        throw err;
+      }
+      if (attempt >= CDN_MAX_RETRIES) {
+        break;
+      }
+      params.onRetry?.(attempt);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("CDN download failed");
+}
+
 function extractReferenceLabel(item: MessageItem): string | null {
   const ref = item.ref_msg;
   if (!ref) {
@@ -726,12 +933,67 @@ function extractReferenceLabel(item: MessageItem): string | null {
   return parts.length ? `Quoted: ${parts.join(" | ")}` : null;
 }
 
-function extractTextFromMessage(message: WeixinMessage): string {
+function parseExpectedSize(value: unknown): number | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : Number.NaN;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function buildInboundAttachmentDescriptor(
+  kind: InboundWechatAttachmentKind,
+  item: MessageItem,
+): InboundWechatAttachmentDescriptor | null {
+  if (kind === "image") {
+    const imageItem = item.image_item;
+    const media = imageItem?.media;
+    const aesKey = media?.aes_key ?? media?.aeskey ?? imageItem?.aes_key ?? imageItem?.aeskey;
+    if (!media || !aesKey?.trim()) {
+      return null;
+    }
+
+    return {
+      kind,
+      fileName: imageItem?.file_name?.trim() || "wechat-image.jpg",
+      media,
+      aesKey,
+      expectedSizeBytes: parseExpectedSize(imageItem?.mid_size),
+    };
+  }
+
+  const fileItem = item.file_item;
+  const media = fileItem?.media;
+  const aesKey = media?.aes_key ?? media?.aeskey ?? fileItem?.aes_key ?? fileItem?.aeskey;
+  if (!media || !aesKey?.trim()) {
+    return null;
+  }
+
+  return {
+    kind,
+    fileName: fileItem?.file_name?.trim() || "wechat-file",
+    media,
+    aesKey,
+    expectedSizeBytes: parseExpectedSize(fileItem?.len),
+  };
+}
+
+function formatUnsupportedInboundAttachment(kind: InboundWechatAttachmentKind): string {
+  return `[WeChat ${kind} attachment could not be downloaded: missing media metadata]`;
+}
+
+export function extractInboundMessageContent(
+  message: WeixinMessage,
+): ExtractedInboundWechatMessageContent {
   if (!message.item_list?.length) {
-    return "";
+    return { text: "", attachments: [] };
   }
 
   const lines: string[] = [];
+  const attachments: InboundWechatAttachmentDescriptor[] = [];
+
   for (const item of message.item_list) {
     const reference = extractReferenceLabel(item);
     if (reference && !lines.includes(reference)) {
@@ -751,9 +1013,30 @@ function extractTextFromMessage(message: WeixinMessage): string {
         lines.push(transcript);
       }
     }
+
+    if (item.type === MSG_ITEM_IMAGE) {
+      const attachment = buildInboundAttachmentDescriptor("image", item);
+      if (attachment) {
+        attachments.push(attachment);
+      } else {
+        lines.push(formatUnsupportedInboundAttachment("image"));
+      }
+    }
+
+    if (item.type === MSG_ITEM_FILE) {
+      const attachment = buildInboundAttachmentDescriptor("file", item);
+      if (attachment) {
+        attachments.push(attachment);
+      } else {
+        lines.push(formatUnsupportedInboundAttachment("file"));
+      }
+    }
   }
 
-  return lines.join("\n").trim();
+  return {
+    text: lines.join("\n").trim(),
+    attachments,
+  };
 }
 
 function buildMessageKey(message: WeixinMessage): string {
@@ -866,6 +1149,42 @@ function formatTimestamp(timestampMs?: number): string {
   return new Date(timestampMs).toISOString();
 }
 
+function appendInboundAttachmentFailureText(text: string, failureLines: string[]): string {
+  if (failureLines.length === 0) {
+    return text;
+  }
+  return [text, ...failureLines].filter(Boolean).join("\n").trim();
+}
+
+function sanitizeInboundAttachmentFileName(
+  fileName: string,
+  fallback: string,
+): string {
+  const lastSegment = fileName.trim().replace(/\\/g, "/").split("/").pop() ?? "";
+  const withoutControlChars = Array.from(lastSegment)
+    .map((character) => (character.charCodeAt(0) < 32 ? "_" : character))
+    .join("");
+  const sanitized = withoutControlChars
+    .replace(/[<>:"/\\|?*]+/g, "_")
+    .replace(/\s+/g, " ")
+    .trim();
+  return sanitized.slice(0, 160) || fallback;
+}
+
+function buildInboundAttachmentFilePath(params: {
+  kind: InboundWechatAttachmentKind;
+  fileName: string;
+  createdAtMs?: number;
+}): string {
+  const timestamp = formatTimestamp(params.createdAtMs);
+  const day = timestamp.slice(0, 10);
+  const directory = path.join(INBOUND_ATTACHMENTS_DIR, day);
+  const fallback = params.kind === "image" ? "wechat-image.jpg" : "wechat-file";
+  const safeFileName = sanitizeInboundAttachmentFileName(params.fileName, fallback);
+  const uniquePrefix = `${timestamp.replace(/[:.]/g, "-")}-${crypto.randomBytes(4).toString("hex")}`;
+  return path.join(directory, `${uniquePrefix}-${safeFileName}`);
+}
+
 export class WeChatTransport {
   private readonly logger: TransportLogger;
   private readonly recentMessageKeys = new Set<string>();
@@ -902,6 +1221,8 @@ export class WeChatTransport {
       `max_file_mb: ${resolveMediaUploadLimitBytes("file") / BYTES_PER_MB}`,
       `max_voice_mb: ${resolveMediaUploadLimitBytes("voice") / BYTES_PER_MB}`,
       `max_video_mb: ${resolveMediaUploadLimitBytes("video") / BYTES_PER_MB}`,
+      `max_inbound_image_mb: ${resolveInboundMediaDownloadLimitBytes("image") / BYTES_PER_MB}`,
+      `max_inbound_file_mb: ${resolveInboundMediaDownloadLimitBytes("file") / BYTES_PER_MB}`,
       `account_id: ${account?.accountId ?? "(none)"}`,
       `user_id: ${account?.userId ?? "(none)"}`,
       `saved_at: ${account?.savedAt ?? "(none)"}`,
@@ -964,8 +1285,8 @@ export class WeChatTransport {
         continue;
       }
 
-      const text = extractTextFromMessage(rawMessage);
-      if (!text) {
+      const extracted = extractInboundMessageContent(rawMessage);
+      if (!extracted.text && extracted.attachments.length === 0) {
         continue;
       }
 
@@ -991,11 +1312,18 @@ export class WeChatTransport {
         continue;
       }
 
+      const { attachments, failureLines } = await this.downloadInboundAttachments(
+        extracted.attachments,
+        rawMessage,
+      );
+      const text = appendInboundAttachmentFailureText(extracted.text, failureLines);
+
       messages.push({
         senderId,
         sender: normalizeSender(senderId),
         sessionId: rawMessage.session_id ?? "",
         text,
+        attachments,
         contextToken: rawMessage.context_token,
         createdAt: formatTimestamp(rawMessage.create_time_ms),
         createdAtMs,
@@ -1003,6 +1331,59 @@ export class WeChatTransport {
     }
 
     return { messages, ignoredBacklogCount };
+  }
+
+  private async downloadInboundAttachments(
+    descriptors: InboundWechatAttachmentDescriptor[],
+    rawMessage: WeixinMessage,
+  ): Promise<{ attachments: InboundWechatAttachment[]; failureLines: string[] }> {
+    const attachments: InboundWechatAttachment[] = [];
+    const failureLines: string[] = [];
+
+    for (const descriptor of descriptors) {
+      try {
+        const encrypted = await downloadBufferFromCdn({
+          media: descriptor.media,
+          kind: descriptor.kind,
+          onRetry: (attempt) => {
+            this.logger.log(
+              `CDN download attempt ${attempt} failed for inbound ${descriptor.kind}, retrying...`,
+            );
+          },
+        });
+        const plaintext = decryptInboundMediaPayload(encrypted, descriptor.aesKey);
+        assertInboundMediaDownloadSizeAllowed(descriptor.kind, plaintext.length);
+        if (
+          descriptor.expectedSizeBytes !== undefined &&
+          plaintext.length !== descriptor.expectedSizeBytes
+        ) {
+          this.logger.log(
+            `Inbound ${descriptor.kind} size differs from metadata: expected=${descriptor.expectedSizeBytes} actual=${plaintext.length}`,
+          );
+        }
+
+        const filePath = buildInboundAttachmentFilePath({
+          kind: descriptor.kind,
+          fileName: descriptor.fileName,
+          createdAtMs: rawMessage.create_time_ms,
+        });
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, plaintext);
+
+        attachments.push({
+          kind: descriptor.kind,
+          path: filePath,
+          fileName: path.basename(filePath),
+          sizeBytes: plaintext.length,
+        });
+      } catch (error) {
+        const message = `Failed to download inbound WeChat ${descriptor.kind} (${descriptor.fileName}): ${describeWechatTransportError(error)}`;
+        this.logger.logError(message);
+        failureLines.push(`[${message}]`);
+      }
+    }
+
+    return { attachments, failureLines };
   }
 
   async sendText(senderId: string, text: string): Promise<void> {
