@@ -4,6 +4,16 @@
 
 ## 版本列表
 
+### [v1.0.5](./1.0.5.md) / [中文说明](./1.0.5_CN.md)
+**常驻 daemon + 短 npm 包名 + `.cli-bridge` 自动迁移** - 新增 `wechat-daemon`，支持从微信在 Codex、Claude Code 与 OpenCode 之间切换并自动打开或复用可见 CLI，同时启用 `cli-wechat-bridge` 主包名并把运行数据迁移到独立的 `~/.cli-bridge` 目录
+- **常驻 daemon**：`wechat-daemon` 绑定当前工作区，微信发送 `/codex`、`/claude`、`/opencode` 即可切换活动 CLI；切换不会关闭之前的 CLI slot
+- **短包名发布**：`cli-wechat-bridge` 成为默认 npm 安装入口，`@unlinearity/cli-wechat-bridge` 作为兼容镜像继续同步
+- **自动打开可见 CLI**：daemon 会复用已有 companion；没有目标 CLI 时自动打开本地可见终端，并等待连接结果
+- **迁移与清理**：老用户数据会从旧 Claude channel 路径迁移到 `~/.cli-bridge`，旧 lock 不迁移，启动 daemon 前会清理旧单 bridge 状态
+- **入站附件**：微信收到的图片和普通文件会保存到 `~/.cli-bridge/inbound-attachments/<日期>/`，并把本地路径加入转发给 CLI 的 prompt
+- **context 诊断**：`sendmessage ret=-2` 会被识别为微信 context token 过期，日志会标明失败场景并提示先让微信端发一条新消息
+- **统计**：32 个文件，新增 4,703 行，删除 178 行
+
 ### [v1.0.4](./1.0.4.md) / [中文说明](./1.0.4_CN.md)
 **桥接回复可靠性 + 真实全局安装烟测 + 源码质量门禁** - 修复 OpenCode/Codex 回复回传边界，补上 lint/typecheck/quality 基础设施，并让本地构建包可以安装到真实 npm 全局环境做人工验证
 - **OpenCode 回复正确性**：最终回复改为优先取 session 中最新可见 assistant 内容，过滤 reasoning delta 与 prompt 回显，并保留长回复整段发送体验
@@ -102,6 +112,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.5 | 2026-05-22 | 常驻 daemon、多 CLI 微信切换、短 npm 包名、`.cli-bridge` 自动迁移、入站附件落盘与 stale context token 诊断 | 32 个文件，+4,703/-178 |
 | 1.0.4 | 2026-05-16 | 桥接回复可靠性、源码质量门禁、真实全局 npm 安装烟测与 README 工作流刷新 | 36 个文件，+3,354/-1,009 |
 | 1.0.3 | 2026-05-11 | Codex final reply 恢复、OpenCode `/new` 与本地新会话跟随修复 | 13 个文件，+849/-26 |
 | 1.0.2 | 2026-05-11 | npm 全局安装后的微信首次鉴权、过期会话恢复与 setup 提示修复 | 12 个文件，+511/-126 |

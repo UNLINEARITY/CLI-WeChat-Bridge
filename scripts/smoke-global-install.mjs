@@ -11,6 +11,7 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const PACKAGE_JSON_PATH = path.join(REPO_ROOT, "package.json");
 const PACKAGE_JSON = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, "utf8"));
 const PACKAGE_NAME = String(PACKAGE_JSON.name ?? "");
+const COMPAT_PACKAGE_NAMES = ["@unlinearity/cli-wechat-bridge"];
 const BIN_MAP = PACKAGE_JSON.bin && typeof PACKAGE_JSON.bin === "object" ? PACKAGE_JSON.bin : {};
 const NPM_EXEC_PATH = process.env.npm_execpath;
 
@@ -137,6 +138,7 @@ function isSafeSmokeCommand(commandName) {
     commandName === "wechat-codex" ||
     commandName === "wechat-claude" ||
     commandName === "wechat-opencode" ||
+    commandName === "wechat-daemon" ||
     commandName.startsWith("wechat-bridge") ||
     commandName.endsWith("-start")
   );
@@ -265,6 +267,14 @@ function removePath(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
+function resolveGlobalPackageRoot(globalRoot, packageName) {
+  return path.join(globalRoot, ...packageName.split("/"));
+}
+
+function getGlobalPackageNamesToPurge() {
+  return [...new Set([PACKAGE_NAME, ...COMPAT_PACKAGE_NAMES])];
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const smokeCommands = getSmokeCommands();
@@ -286,25 +296,35 @@ async function main() {
     }
 
     if (options.purgeGlobal) {
-      log(`Purging any currently installed global copy of ${PACKAGE_NAME}...`);
+      const packageNamesToPurge = getGlobalPackageNamesToPurge();
+      log(`Purging any currently installed global copy of ${packageNamesToPurge.join(" or ")}...`);
       const globalRootResult = runNpm([
         "root",
         "-g",
         "--silent",
       ]);
       const globalRoot = globalRootResult.stdout.trim();
-      const globalPackageRoot = globalRoot ? path.join(globalRoot, PACKAGE_NAME) : "";
+      let purgedAny = false;
 
-      if (globalPackageRoot && fs.existsSync(globalPackageRoot)) {
+      for (const packageName of packageNamesToPurge) {
+        const globalPackageRoot = globalRoot
+          ? resolveGlobalPackageRoot(globalRoot, packageName)
+          : "";
+        if (!globalPackageRoot || !fs.existsSync(globalPackageRoot)) {
+          continue;
+        }
+        purgedAny = true;
         runNpm([
           "uninstall",
           "-g",
-          PACKAGE_NAME,
+          packageName,
           "--silent",
           "--no-fund",
           "--no-audit",
         ], { stdio: "inherit" });
-      } else {
+      }
+
+      if (!purgedAny) {
         log("No installed global copy was found.");
       }
     }

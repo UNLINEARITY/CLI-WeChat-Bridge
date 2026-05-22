@@ -1,6 +1,6 @@
 {
-  "name": "@unlinearity/cli-wechat-bridge",
-  "version": "1.0.4",
+  "name": "cli-wechat-bridge",
+  "version": "1.0.5",
   "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and PowerShell over WeChat",
   "type": "module",
   "files": [
@@ -56,6 +56,7 @@
     "typecheck:src": "tsc -p tsconfig.typecheck.src.json --noEmit --pretty false",
     "quality": "npm run lint && npm run typecheck:src && bun test test && npm run build",
     "smoke:global": "node scripts/smoke-global-install.mjs",
+    "publish:dual": "node scripts/publish-dual.mjs",
     "setup": "node --no-warnings --experimental-strip-types src/wechat/setup.ts",
     "start": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts",
     "check": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts --check",

@@ -6,8 +6,9 @@
 
 <p align="center">
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/CLI-WeChat-Bridge?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;color=0891b2&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/@unlinearity/cli-wechat-bridge?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dm/@unlinearity/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/cli-wechat-bridge?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dm/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="scoped npm downloads" src="https://img.shields.io/npm/dm/@unlinearity/cli-wechat-bridge?label=Scoped%20downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=15803d&amp;labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/blob/main/LICENSE.txt"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/CLI-WeChat-Bridge?label=License&amp;style=for-the-badge&amp;color=7c3aed&amp;labelColor=1c1917"></a>
 </p>
 
@@ -48,10 +49,12 @@
 正式版本可以直接从 npm 安装：
 
 ```bash
-npm install -g @unlinearity/cli-wechat-bridge@latest
+npm install -g cli-wechat-bridge@latest
 ```
 
 安装后可在任意项目目录中直接使用 `wechat-daemon`、`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 等命令。
+
+兼容说明：旧包名 `@unlinearity/cli-wechat-bridge` 会继续同步发布，已经安装旧包名的用户可以正常升级；新用户优先使用更短的 `cli-wechat-bridge`。
 
 如果你希望从源码运行或参与开发，也可以克隆仓库并安装依赖：
 
@@ -484,7 +487,7 @@ wechat-check-update
 如果你使用 npm 全局安装，当前推荐直接执行：
 
 ```bash
-npm install -g @unlinearity/cli-wechat-bridge@latest
+npm install -g cli-wechat-bridge@latest
 ```
 
 升级后请重启正在运行的 bridge 和 companion 终端，确保它们加载同一版本。
@@ -515,7 +518,7 @@ npm install -g .
 请确认已经执行以下之一：
 
 ```bash
-npm install -g @unlinearity/cli-wechat-bridge@latest
+npm install -g cli-wechat-bridge@latest
 npm install -g .
 npm link
 ```
