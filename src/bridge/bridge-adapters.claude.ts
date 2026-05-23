@@ -13,6 +13,7 @@ import {
   extractClaudeResumeConversationId,
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
+  getClaudePermissionAutoResponse,
   getClaudeWechatOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
@@ -912,7 +913,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     socket: net.Socket,
   ): void {
     this.clearWechatWorkingNotice();
-    this.flushPendingClaudeHookApprovals();
     const denyMessage = getClaudeWechatOutboundAttachmentDenyMessage(payload);
     if (denyMessage) {
       this.pendingApproval = null;
@@ -929,6 +929,23 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    const autoResponse = getClaudePermissionAutoResponse(payload);
+    if (autoResponse) {
+      if (!this.pendingApproval && !this.state.pendingApproval) {
+        this.setStatus(
+          "busy",
+          `Claude approval auto-approved: ${truncatePreview(autoResponse.reason, 180)}`,
+        );
+      }
+      this.respondToClaudeHook(
+        socket,
+        requestId,
+        buildClaudePermissionDecisionHookOutput(autoResponse.action),
+      );
+      return;
+    }
+
+    this.flushPendingClaudeHookApprovals();
     this.pendingHookApprovals.set(requestId, {
       requestId,
       socket,

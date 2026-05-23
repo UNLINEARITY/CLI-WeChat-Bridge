@@ -1246,7 +1246,7 @@ describe("Claude CLI compatibility", () => {
       {
         tool_name: "Bash",
         tool_input: {
-          command: "dir",
+          command: "rm -rf build",
         },
       },
       {
@@ -1258,9 +1258,145 @@ describe("Claude CLI compatibility", () => {
     expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
     expect(adapter.pendingApproval).toMatchObject({
       summary: "Claude permission is required for Bash.",
-      commandPreview: "Bash: dir",
+      commandPreview: "Bash: rm -rf build",
       confirmInput: "y\r",
       denyInput: "n\r",
+    });
+
+    adapter.flushPendingClaudeHookApprovals();
+  });
+
+  test("auto-approves low-risk Claude Bash approvals without WeChat prompts", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const socketPayloads: string[] = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleClaudePermissionRequest(
+      "request-low-risk",
+      {
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            'find /c/Nonlinear/ob/ -type f -name "*.md" 2>/dev/null | xargs grep -l -i reinforcement 2>/dev/null | head -10',
+        },
+      },
+      {
+        end(payload: string) {
+          socketPayloads.push(payload);
+        },
+        destroy() {},
+      } as any,
+    );
+
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.getState().status).toBe("busy");
+    expect(adapter.getState().pendingApproval ?? null).toBeNull();
+    const response = JSON.parse(socketPayloads[0]!.trim()) as {
+      requestId: string;
+      stdout: string;
+    };
+    expect(response.requestId).toBe("request-low-risk");
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: {
+          behavior: "allow",
+        },
+      },
+    });
+  });
+
+  test("auto-approves low-risk Claude read tools without WeChat prompts", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const socketPayloads: string[] = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleClaudePermissionRequest(
+      "request-read",
+      {
+        tool_name: "Read",
+        tool_input: {
+          file_path: "C:\\Nonlinear\\ob\\note.md",
+        },
+      },
+      {
+        end(payload: string) {
+          socketPayloads.push(payload);
+        },
+        destroy() {},
+      } as any,
+    );
+
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    const response = JSON.parse(socketPayloads[0]!.trim()) as {
+      requestId: string;
+      stdout: string;
+    };
+    expect(response.requestId).toBe("request-read");
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: {
+          behavior: "allow",
+        },
+      },
+    });
+  });
+
+  test("keeps high-risk Claude approvals actionable through WeChat", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleClaudePermissionRequest(
+      "request-high-risk",
+      {
+        tool_name: "Bash",
+        tool_input: {
+          command: "rm -rf build",
+        },
+      },
+      {
+        end() {},
+        destroy() {},
+      } as any,
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(adapter.pendingApproval).toMatchObject({
+      summary: "Claude permission is required for Bash.",
+      commandPreview: "Bash: rm -rf build",
     });
 
     adapter.flushPendingClaudeHookApprovals();
@@ -1285,7 +1421,7 @@ describe("Claude CLI compatibility", () => {
       {
         tool_name: "Bash",
         tool_input: {
-          command: "npm test",
+          command: "rm -rf build",
         },
       },
       {

@@ -11,6 +11,7 @@ import {
   extractClaudeResumeConversationId,
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
+  getClaudePermissionAutoResponse,
   getClaudeWechatOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
@@ -217,6 +218,94 @@ describe("getClaudeWechatOutboundAttachmentDenyMessage", () => {
         tool_input: {
           command:
             'ls "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-22"',
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("getClaudePermissionAutoResponse", () => {
+  test("auto-approves low-risk Claude Bash searches and listings", () => {
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            'find /c/Nonlinear/ob/ -type f -name "*.md" 2>/dev/null | xargs grep -l -i -E "reinforcement|RL" 2>/dev/null | head -10',
+        },
+      }),
+    ).toMatchObject({
+      action: "confirm",
+    });
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Bash",
+        tool_input: {
+          command: "ls -la /c/Nonlinear/ob 2>/dev/null | head -30",
+        },
+      }),
+    ).toMatchObject({
+      action: "confirm",
+    });
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            "Get-ChildItem -Path C:\\Nonlinear\\ob -Recurse -File -Include *.png,*.jpg | Select-Object -First 20",
+        },
+      }),
+    ).toMatchObject({
+      action: "confirm",
+    });
+  });
+
+  test("auto-approves low-risk Claude read tools", () => {
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Read",
+        tool_input: {
+          file_path: "C:\\Nonlinear\\ob\\note.md",
+        },
+      }),
+    ).toEqual({
+      action: "confirm",
+      reason: "low-risk Read permission",
+    });
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Glob",
+        tool_input: {
+          pattern: "**/*.md",
+        },
+      }),
+    ).toMatchObject({
+      action: "confirm",
+    });
+  });
+
+  test("keeps high-risk and mutating Claude requests on the approval path", () => {
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Bash",
+        tool_input: {
+          command: "rm -rf /tmp/demo",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Bash",
+        tool_input: {
+          command: 'find /tmp/demo -type f -delete',
+        },
+      }),
+    ).toBeNull();
+    expect(
+      getClaudePermissionAutoResponse({
+        tool_name: "Write",
+        tool_input: {
+          file_path: "C:\\tmp\\note.md",
         },
       }),
     ).toBeNull();

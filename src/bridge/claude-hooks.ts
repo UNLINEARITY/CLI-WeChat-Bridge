@@ -2,6 +2,7 @@ import type { ApprovalRequest } from "./bridge-types.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
+  isHighRiskShellCommand,
   isWechatOutboundAttachmentWriteCommand,
   normalizeOutput,
   truncatePreview,
@@ -41,6 +42,10 @@ export type PendingInjectedClaudePrompt = {
 };
 
 export type ClaudePermissionDecisionAction = "confirm" | "deny";
+export type ClaudePermissionAutoResponse = {
+  action: ClaudePermissionDecisionAction;
+  reason: string;
+};
 
 export const CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
@@ -49,6 +54,14 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   "Edit",
   "MultiEdit",
   "NotebookEdit",
+]);
+const LOW_RISK_READ_TOOL_NAMES = new Set([
+  "Glob",
+  "Grep",
+  "LS",
+  "NotebookRead",
+  "Read",
+  "TodoRead",
 ]);
 
 type ClaudeTranscriptAssistantEntry = {
@@ -304,6 +317,36 @@ export function getClaudeWechatOutboundAttachmentDenyMessage(
   }
 
   return null;
+}
+
+export function getClaudePermissionAutoResponse(
+  payload: ClaudeHookPayload,
+): ClaudePermissionAutoResponse | null {
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
+  if (!toolName) {
+    return null;
+  }
+
+  if (LOW_RISK_READ_TOOL_NAMES.has(toolName)) {
+    return {
+      action: "confirm",
+      reason: `low-risk ${toolName} permission`,
+    };
+  }
+
+  if (toolName !== "Bash") {
+    return null;
+  }
+
+  const command = getClaudeToolInputString(payload, "command").trim();
+  if (!command || isHighRiskShellCommand(command)) {
+    return null;
+  }
+
+  return {
+    action: "confirm",
+    reason: `low-risk command ${truncatePreview(command, 120)}`,
+  };
 }
 
 export function buildClaudePermissionDecisionHookOutput(

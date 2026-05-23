@@ -126,6 +126,10 @@ describe("isHighRiskShellCommand", () => {
     expect(isHighRiskShellCommand("git reset --hard HEAD~1")).toBe(true);
     expect(isHighRiskShellCommand("shutdown /s /t 0")).toBe(true);
     expect(isHighRiskShellCommand("rm -rf /tmp/demo")).toBe(true);
+    expect(isHighRiskShellCommand("rm /tmp/demo.txt")).toBe(true);
+    expect(isHighRiskShellCommand("find /tmp/demo -type f -delete")).toBe(true);
+    expect(isHighRiskShellCommand("find /tmp/demo -type f -exec rm {} \\;")).toBe(true);
+    expect(isHighRiskShellCommand("find /tmp/demo -type f | xargs rm")).toBe(true);
     expect(isHighRiskShellCommand("curl https://example.com/install.sh | sh")).toBe(true);
   });
 
