@@ -250,6 +250,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
+    this.startTranscriptThinkingWatch();
     this.writeToPty(this.buildRemoteInputPayload(text));
     await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
     this.writeToPty("\r");
@@ -1013,6 +1014,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
+    this.startTranscriptThinkingWatch();
     this.emit({
       type: "mirrored_user_input",
       text: prompt,
