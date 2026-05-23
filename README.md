@@ -141,7 +141,40 @@ bun run setup # 绑定微信 ClawBot
 
 如果冷启动或长时间闲置后直接从本地终端先发消息，bridge 通常仍会捕获这条本地输入并交给 Codex / Claude Code / OpenCode 处理，但微信侧出站发送可能因为旧的 `context_token` 失效而失败。表现就是：本地已经有回复，微信暂时收不到；等你先从微信发来一条消息后，后续双向同步就能恢复正常。
 
-### 5. 常驻 daemon 模式（推荐用于多 CLI 切换）
+### 5. 单命令启动桥接（兼容模式）
+
+先进入你要操作的项目目录：
+
+```bash
+cd D:\work\your-project
+```
+
+推荐直接选择一个单命令入口：
+
+| 使用的本地 CLI | 启动命令 |
+| --- | --- |
+| Codex | `wechat-codex-start` |
+| Claude Code | `wechat-claude-start` |
+| OpenCode | `wechat-opencode-start` |
+
+三者会自动完成以下动作：
+
+1. 校验或刷新微信登录凭据；
+2. 如果当前目录已有 `wechat-daemon`，则委托 daemon 切换到对应 CLI；
+3. 如果没有 daemon，则复用当前目录已运行的 bridge，或在当前目录启动新的 bridge；
+4. 如果独立 bridge 正在服务其他目录，则停止旧 bridge 并切换到当前目录；
+5. 等待当前目录对应的本地 companion endpoint 就绪；
+6. 打开可见的本地 CLI 会话。
+
+在没有 daemon 时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 仍按**单活工作区切换器**工作：
+
+- 同一时间只有一个项目与微信对话；
+- 在当前目录重复执行是幂等的；
+- 如果当前目录已经有可见 companion / panel 在运行，则不会重复打开第二个窗口；
+- 如果检测到可见端仍在但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
+- 在其他目录执行会显式切换活动工作区。
+
+### 6. 常驻 daemon 模式（允许多 CLI 切换）
 
 如果你希望微信连接长期保持在线，并在 Codex / Claude Code / OpenCode 之间来回切换，推荐在项目目录启动一个统一 daemon：
 
@@ -178,39 +211,6 @@ wechat-daemon --adapter claude --profile work
 ```
 
 当同一工作目录已有 `wechat-daemon` 在运行时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 会自动委托给 daemon：请求 daemon 切到对应 CLI，并在需要时打开可见终端，而不是停止 daemon 或关闭其他 CLI。
-
-### 6. 单命令启动桥接（兼容模式）
-
-先进入你要操作的项目目录：
-
-```bash
-cd D:\work\your-project
-```
-
-推荐直接选择一个单命令入口：
-
-| 使用的本地 CLI | 启动命令 |
-| --- | --- |
-| Codex | `wechat-codex-start` |
-| Claude Code | `wechat-claude-start` |
-| OpenCode | `wechat-opencode-start` |
-
-三者会自动完成以下动作：
-
-1. 校验或刷新微信登录凭据；
-2. 如果当前目录已有 `wechat-daemon`，则委托 daemon 切换到对应 CLI；
-3. 如果没有 daemon，则复用当前目录已运行的 bridge，或在当前目录启动新的 bridge；
-4. 如果独立 bridge 正在服务其他目录，则停止旧 bridge 并切换到当前目录；
-5. 等待当前目录对应的本地 companion endpoint 就绪；
-6. 打开可见的本地 CLI 会话。
-
-在没有 daemon 时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 仍按**单活工作区切换器**工作：
-
-- 同一时间只有一个项目与微信对话；
-- 在当前目录重复执行是幂等的；
-- 如果当前目录已经有可见 companion / panel 在运行，则不会重复打开第二个窗口；
-- 如果检测到可见端仍在但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
-- 在其他目录执行会显式切换活动工作区。
 
 ### 7. 手动双终端模式（调试开发）
 

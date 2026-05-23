@@ -4,6 +4,15 @@
 
 ## 版本列表
 
+### [v1.0.6](./1.0.6.md) / [中文说明](./1.0.6_CN.md)
+**审批体验 + 微信附件发送保护** - 低风险 Codex / Claude 查找读取操作自动通过，高风险操作继续进入微信审批，并阻止 Claude、Codex、OpenCode 把待发送文件错误 staging 到 `.claude`、`.cli-bridge` 或 `outbound-attachments` 目录
+- **Codex 审批链路**：命令、文件变更、权限请求和 `request_user_input` 现在由 bridge 接管，低风险自动通过，高风险转发到微信，追问可用 `/answer` 回复
+- **Claude 低风险自动通过**：`find`、`ls`、`grep`、`Get-ChildItem` 等读取查找命令以及 `Read`、`LS`、`Glob`、`Grep` 等只读工具不再反复触发审批
+- **删除仍需审批**：高风险检测补充普通 `rm`、`find -delete`、`find -exec rm` 和 `xargs rm`
+- **附件发送保护**：所有 adapter 都会拒绝错误的 outbound attachment staging；OpenCode 额外覆盖 `metadata.filepath`、`metadata.parentDir` 和 `external_directory` 权限形态
+- **Claude 多行 prompt**：使用 bracketed paste 和延迟 Enter，确保微信附件提示完整送达 Claude 可见终端
+- **统计**：15 个文件，新增 2,739 行，删除 132 行
+
 ### [v1.0.5](./1.0.5.md) / [中文说明](./1.0.5_CN.md)
 **常驻 daemon + 短 npm 包名 + `.cli-bridge` 自动迁移** - 新增 `wechat-daemon`，支持从微信在 Codex、Claude Code 与 OpenCode 之间切换并自动打开或复用可见 CLI，同时启用 `cli-wechat-bridge` 主包名并把运行数据迁移到独立的 `~/.cli-bridge` 目录
 - **常驻 daemon**：`wechat-daemon` 绑定当前工作区，微信发送 `/codex`、`/claude`、`/opencode` 即可切换活动 CLI；切换不会关闭之前的 CLI slot
@@ -112,6 +121,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.6 | 2026-05-23 | Codex / Claude 低风险审批自动通过、微信附件发送 staging 保护、Codex `/answer` 用户输入回传 | 15 个文件，+2,739/-132 |
 | 1.0.5 | 2026-05-22 | 常驻 daemon、多 CLI 微信切换、短 npm 包名、`.cli-bridge` 自动迁移、入站附件落盘与 stale context token 诊断 | 32 个文件，+4,703/-178 |
 | 1.0.4 | 2026-05-16 | 桥接回复可靠性、源码质量门禁、真实全局 npm 安装烟测与 README 工作流刷新 | 36 个文件，+3,354/-1,009 |
 | 1.0.3 | 2026-05-11 | Codex final reply 恢复、OpenCode `/new` 与本地新会话跟随修复 | 13 个文件，+849/-26 |
