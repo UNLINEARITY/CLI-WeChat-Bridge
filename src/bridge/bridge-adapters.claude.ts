@@ -13,6 +13,7 @@ import {
   extractClaudeResumeConversationId,
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
+  getClaudeWechatOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
   type ClaudeHookPayload,
@@ -44,6 +45,7 @@ const {
   DEFAULT_ROWS,
   MODULE_DIR,
   buildClaudeCliArgs,
+  delay,
   isClaudeInvalidResumeError,
   quotePosixCommandArg,
   quoteWindowsCommandArg,
@@ -55,6 +57,9 @@ const CLAUDE_COMPACT_OUTPUT_LINE_RE =
 const CLAUDE_COMPACT_FAILURE_RE =
   /Error:\s*Error during compaction:|(?:^|\b)API Error:|\b(?:compact|compaction)\s+failed\b|^Error:/i;
 const CLAUDE_COMPACT_DEDUP_MS = 2_000;
+const CLAUDE_BRACKETED_PASTE_START = "\u001b[200~";
+const CLAUDE_BRACKETED_PASTE_END = "\u001b[201~";
+const CLAUDE_REMOTE_ENTER_DELAY_MS = 40;
 
 export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private hookServer: net.Server | null = null;
@@ -153,7 +158,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
-    this.writeToPty(text.replace(/\r?\n/g, "\r"));
+    this.writeToPty(this.buildRemoteInputPayload(text));
+    await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
     this.writeToPty("\r");
     this.armWechatWorkingNotice();
   }
@@ -591,6 +597,15 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     });
   }
 
+  private buildRemoteInputPayload(text: string): string {
+    const normalizedText = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    if (!normalizedText.includes("\n")) {
+      return normalizedText;
+    }
+
+    return `${CLAUDE_BRACKETED_PASTE_START}${normalizedText}${CLAUDE_BRACKETED_PASTE_END}`;
+  }
+
   private shouldTreatClaudeOutputAsCompactCompletion(text: string): boolean {
     if (
       this.state.status !== "busy" &&
@@ -898,6 +913,22 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   ): void {
     this.clearWechatWorkingNotice();
     this.flushPendingClaudeHookApprovals();
+    const denyMessage = getClaudeWechatOutboundAttachmentDenyMessage(payload);
+    if (denyMessage) {
+      this.pendingApproval = null;
+      this.state.pendingApproval = null;
+      this.state.pendingApprovalOrigin = undefined;
+      if (this.state.status === "awaiting_approval") {
+        this.setStatus("busy");
+      }
+      this.respondToClaudeHook(
+        socket,
+        requestId,
+        buildClaudePermissionDecisionHookOutput("deny", denyMessage),
+      );
+      return;
+    }
+
     this.pendingHookApprovals.set(requestId, {
       requestId,
       socket,

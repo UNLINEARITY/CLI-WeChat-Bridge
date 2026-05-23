@@ -36,6 +36,20 @@ export type PendingInjectedClaudePrompt = {
 
 export type ClaudePermissionDecisionAction = "confirm" | "deny";
 
+export const CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
+  "The WeChat bridge does not use outbound attachment directories. Do not create or copy files under .claude/channels/wechat/outbound-attachments or .cli-bridge/outbound-attachments. To send a file, put the original absolute local file path in the final ```wechat-attachments``` block.";
+
+const WECHAT_OUTBOUND_ATTACHMENT_PATH_RE =
+  /(?:^|\/)(?:\.claude\/channels\/wechat\/|\.cli-bridge\/)outbound-attachments(?:\/|$)/i;
+const WRITE_LIKE_BASH_COMMAND_RE =
+  /\b(cp|copy|xcopy|robocopy|mv|move|mkdir|md|new-item|ni|set-content|add-content|out-file|write-output|touch)\b|>\s*["']?[^&|]*outbound-attachments/i;
+const FILE_MUTATION_TOOL_NAMES = new Set([
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+]);
+
 type ClaudeTranscriptAssistantEntry = {
   type?: string;
   message?: {
@@ -261,8 +275,51 @@ export function buildClaudePermissionApprovalRequest(
   };
 }
 
+function containsWechatOutboundAttachmentPath(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().replace(/\\/g, "/");
+  return WECHAT_OUTBOUND_ATTACHMENT_PATH_RE.test(normalized);
+}
+
+function getClaudeToolInputString(payload: ClaudeHookPayload, key: string): string {
+  const value = payload.tool_input?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+export function getClaudeWechatOutboundAttachmentDenyMessage(
+  payload: ClaudeHookPayload,
+): string | null {
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
+  if (!toolName) {
+    return null;
+  }
+
+  if (FILE_MUTATION_TOOL_NAMES.has(toolName)) {
+    const filePath = getClaudeToolInputString(payload, "file_path");
+    return containsWechatOutboundAttachmentPath(filePath)
+      ? CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      : null;
+  }
+
+  if (toolName === "Bash") {
+    const command = getClaudeToolInputString(payload, "command");
+    if (
+      containsWechatOutboundAttachmentPath(command) &&
+      WRITE_LIKE_BASH_COMMAND_RE.test(command)
+    ) {
+      return CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
+    }
+  }
+
+  return null;
+}
+
 export function buildClaudePermissionDecisionHookOutput(
   action: ClaudePermissionDecisionAction,
+  denyMessage = "Permission denied from WeChat bridge.",
 ): string {
   const decision =
     action === "confirm"
@@ -271,7 +328,7 @@ export function buildClaudePermissionDecisionHookOutput(
         }
       : {
           behavior: "deny",
-          message: "Permission denied from WeChat bridge.",
+          message: denyMessage,
           interrupt: false,
         };
 

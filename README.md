@@ -9,7 +9,9 @@
   <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/cli-wechat-bridge?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dm/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="scoped npm downloads" src="https://img.shields.io/npm/dm/@unlinearity/cli-wechat-bridge?label=Scoped%20downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=15803d&amp;labelColor=1c1917"></a>
-  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/blob/main/LICENSE.txt"><img alt="License" src="https://img.shields.io/github/license/UNLINEARITY/CLI-WeChat-Bridge?label=License&amp;style=for-the-badge&amp;color=7c3aed&amp;labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/cli-wechat-bridge">
+  <img alt="License" src="https://img.shields.io/npm/l/cli-wechat-bridge?label=License&style=for-the-badge&color=7c3aed&labelColor=1c1917">
+</a>
 </p>
 
 **命令行工具的微信桥接**：本项目用于桥接微信消息与本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、`OpenCode` 或持久化 `powershell.exe` 会话，并将本地输出、审批请求与运行状态同步回微信。

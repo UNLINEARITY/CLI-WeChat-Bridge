@@ -183,6 +183,16 @@ describe("wechat inbound prompt injection", () => {
     expect(prompt).toContain("[User request]\n把桌面的pdf发给我，发送微信");
   });
 
+  test("tells agents to reference source paths instead of staging outbound files", () => {
+    const prompt = buildWechatInboundPrompt("Please send any document from Desktop to WeChat.");
+
+    expect(prompt).toContain("reference that path directly in the attachment block");
+    expect(prompt).toContain("Do not create, copy, move, or write files");
+    expect(prompt).toContain("~/.claude/channels/wechat");
+    expect(prompt).toContain("~/.cli-bridge");
+    expect(prompt).toContain("outbound-attachments");
+  });
+
   test("injects attachment guidance for short follow-up send commands", () => {
     expect(shouldInjectWechatAttachmentPrompt("发送微信")).toBe(true);
     expect(shouldInjectWechatAttachmentPrompt("发呀")).toBe(true);

@@ -34,6 +34,7 @@ import {
   ShellAdapter,
   ShellCommandRejectedError,
 } from "../../src/bridge/bridge-adapters.shell.ts";
+import { buildWechatInboundPrompt } from "../../src/bridge/bridge-utils.ts";
 
 const tempDirectories: string[] = [];
 const originalHome = process.env.HOME;
@@ -899,6 +900,71 @@ describe("Claude CLI compatibility", () => {
     });
   });
 
+  test("submits single-line Claude WeChat input with a delayed final enter", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const writes: string[] = [];
+    adapter.setEventSink(() => undefined);
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+
+    await adapter.sendInput("Send a short reply");
+
+    expect(writes).toEqual(["Send a short reply", "\r"]);
+    expect(adapter.getState()).toMatchObject({
+      status: "busy",
+      activeTurnOrigin: "wechat",
+    });
+
+    await adapter.dispose();
+  });
+
+  test("submits generated WeChat attachment guidance as bracketed paste before enter", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const writes: string[] = [];
+    adapter.setEventSink(() => undefined);
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+
+    const prompt = buildWechatInboundPrompt(
+      "Please send any document from Desktop to WeChat.",
+    );
+
+    expect(prompt).toContain("[WeChat bridge note]");
+    expect(prompt).toContain("\n");
+
+    await adapter.sendInput(prompt);
+
+    expect(writes).toEqual([`\u001b[200~${prompt}\u001b[201~`, "\r"]);
+    expect(adapter.getState()).toMatchObject({
+      status: "busy",
+      activeTurnOrigin: "wechat",
+    });
+
+    await adapter.dispose();
+  });
+
   test("suppresses raw Claude PTY output and waits for structured approval hooks", () => {
     const adapter = createBridgeAdapter({
       kind: "claude",
@@ -994,6 +1060,61 @@ describe("Claude CLI compatibility", () => {
         },
       },
     });
+  });
+
+  test("auto-denies Claude attempts to stage WeChat files in outbound directories", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const socketPayloads: string[] = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleClaudePermissionRequest(
+      "request-outbound",
+      {
+        tool_name: "Bash",
+        tool_input: {
+          command:
+            'cp "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.claude/channels/wechat/outbound-attachments/2026-05-22/report.docx"',
+        },
+      },
+      {
+        end(payload: string) {
+          socketPayloads.push(payload);
+        },
+        destroy() {},
+      } as any,
+    );
+
+    expect(events).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.getState()).toMatchObject({
+      status: "busy",
+      pendingApproval: null,
+    });
+    const response = JSON.parse(socketPayloads[0]!.trim()) as {
+      requestId: string;
+      stdout: string;
+    };
+    expect(response.requestId).toBe("request-outbound");
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: "PermissionRequest",
+        decision: {
+          behavior: "deny",
+          interrupt: false,
+        },
+      },
+    });
+    expect(response.stdout).toContain("original absolute local file path");
   });
 
   test("clears stale Claude remote approvals when the hook request is lost without a terminal fallback", () => {
