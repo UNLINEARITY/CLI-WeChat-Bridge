@@ -75,6 +75,7 @@ const {
   findCodexSessionFile,
   findRecentCodexSessionFileForCwd,
   getCodexRpcRequestId,
+  getCodexWechatOutboundAttachmentDenyMessage,
   getNotificationThreadId,
   getNotificationTurnId,
   isRecord,
@@ -2246,6 +2247,15 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     params: Record<string, unknown>,
     trackedTurn: CodexActiveTurn,
   ): void {
+    const denyMessage = getCodexWechatOutboundAttachmentDenyMessage(method, params);
+    if (denyMessage) {
+      this.sendRpcMessage({
+        id: requestId,
+        result: { decision: "decline" },
+      });
+      return;
+    }
+
     const request = buildCodexApprovalRequest(method, params);
     if (!request) {
       return;

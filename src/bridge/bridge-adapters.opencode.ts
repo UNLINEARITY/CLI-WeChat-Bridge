@@ -29,7 +29,11 @@ import type {
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import {
+  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  containsWechatOutboundAttachmentPath,
   buildOneTimeCode,
+  isWechatOutboundAttachmentMutationTool,
+  isWechatOutboundAttachmentWriteCommand,
   normalizeOutput,
   nowIso,
   truncatePreview,
@@ -1159,6 +1163,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.clearWechatWorkingNotice();
+    const denyMessage = this.getWechatOutboundAttachmentPermissionDenyMessage(
+      properties,
+      pendingPermission,
+    );
+    if (denyMessage) {
+      this.rejectPermission(pendingPermission, denyMessage);
+      return;
+    }
+
     const approval = this.toPendingApproval(pendingPermission);
     this.pendingPermission = pendingPermission;
     this.state.pendingApproval = approval;
@@ -1175,6 +1188,68 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.pendingPermission = null;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
+  }
+
+  private getWechatOutboundAttachmentPermissionDenyMessage(
+    properties: Record<string, unknown>,
+    pendingPermission: OpenCodePendingPermission,
+  ): string | null {
+    const metadata = isRecord(properties.metadata) ? properties.metadata : {};
+    const command = this.extractPermissionCommand(properties, metadata);
+    if (isWechatOutboundAttachmentWriteCommand(command)) {
+      return WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
+    }
+
+    const targetPath = [
+      command,
+      typeof metadata.path === "string" ? metadata.path : "",
+      typeof metadata.file === "string" ? metadata.file : "",
+      typeof metadata.filePath === "string" ? metadata.filePath : "",
+      typeof metadata.target === "string" ? metadata.target : "",
+      typeof metadata.detail === "string" ? metadata.detail : "",
+      Array.isArray(properties.patterns)
+        ? properties.patterns.filter((value): value is string => typeof value === "string").join(" ")
+        : "",
+      typeof properties.pattern === "string" ? properties.pattern : "",
+    ].join(" ");
+
+    return isWechatOutboundAttachmentMutationTool(
+      pendingPermission.request.toolName,
+      targetPath,
+    )
+      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      : null;
+  }
+
+  private rejectPermission(
+    pendingPermission: OpenCodePendingPermission,
+    denyMessage: string,
+  ): void {
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+
+    void (async () => {
+      try {
+        const result = await client.permission.respond({
+          sessionID: pendingPermission.sessionId,
+          permissionID: pendingPermission.permissionId,
+          directory: this.options.cwd,
+          workspace: this.activeWorkspaceId ?? undefined,
+          response: "reject",
+        });
+        if (result.error !== undefined) {
+          throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
+        }
+      } catch (err) {
+        this.emit({
+          type: "stderr",
+          text: `${denyMessage}\nFailed to reject permission: ${describeUnknownError(err)}`,
+          timestamp: nowIso(),
+        });
+      }
+    })();
   }
 
   private toPendingApproval(pendingPermission: OpenCodePendingPermission): PendingApproval {
@@ -1201,12 +1276,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return null;
     }
 
-    const toolName =
-      typeof properties.type === "string"
-        ? properties.type
-        : typeof properties.permission === "string"
-          ? properties.permission
-          : undefined;
+    const toolName = this.extractPermissionToolName(properties);
     const title =
       typeof properties.title === "string"
         ? properties.title
@@ -1214,14 +1284,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
           ? `Permission request: ${properties.permission}`
           : undefined;
     const metadata = isRecord(properties.metadata) ? properties.metadata : {};
-    const command =
-      typeof metadata.command === "string"
-        ? metadata.command
-        : typeof metadata.detail === "string"
-          ? metadata.detail
-          : Array.isArray(properties.patterns)
-            ? properties.patterns.filter((value): value is string => typeof value === "string").join(", ")
-            : undefined;
+    const command = this.extractPermissionCommand(properties, metadata);
 
     return {
       sessionId,
@@ -1239,6 +1302,33 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         denyInput: undefined,
       },
     };
+  }
+
+  private extractPermissionToolName(properties: Record<string, unknown>): string | undefined {
+    return typeof properties.type === "string"
+      ? properties.type
+      : typeof properties.permission === "string"
+        ? properties.permission
+        : undefined;
+  }
+
+  private extractPermissionCommand(
+    properties: Record<string, unknown>,
+    metadata: Record<string, unknown>,
+  ): string | undefined {
+    if (typeof metadata.command === "string") {
+      return metadata.command;
+    }
+    if (typeof metadata.detail === "string") {
+      return metadata.detail;
+    }
+    if (Array.isArray(properties.patterns)) {
+      const patterns = properties.patterns.filter(
+        (value): value is string => typeof value === "string",
+      );
+      return patterns.length > 0 ? patterns.join(", ") : undefined;
+    }
+    return undefined;
   }
 
   private handleSessionCreated(properties: unknown): void {

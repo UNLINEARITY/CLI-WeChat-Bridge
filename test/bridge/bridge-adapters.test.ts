@@ -18,6 +18,7 @@ import {
   extractCodexThreadStartedThreadId,
   extractCodexUserMessageText,
   findRecentCodexSessionFileForCwd,
+  getCodexWechatOutboundAttachmentDenyMessage,
   hasClaudeNoAltScreenOption,
   isClaudeInvalidResumeError,
   listCodexResumeThreads,
@@ -738,6 +739,38 @@ describe("buildCodexApprovalRequest", () => {
         "Codex needs approval before applying a file change: Extra write access is required for generated assets.",
       commandPreview: "C:\\repo\\generated",
     });
+  });
+
+  test("detects outbound attachment staging approvals", () => {
+    expect(
+      getCodexWechatOutboundAttachmentDenyMessage(
+        "item/commandExecution/requestApproval",
+        {
+          command:
+            'cp "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx"',
+        },
+      ),
+    ).toContain("original absolute local file path");
+
+    expect(
+      getCodexWechatOutboundAttachmentDenyMessage(
+        "item/fileChange/requestApproval",
+        {
+          grantRoot:
+            "C:\\Users\\unlin\\.claude\\channels\\wechat\\outbound-attachments\\2026-05-23",
+        },
+      ),
+    ).toContain("original absolute local file path");
+
+    expect(
+      getCodexWechatOutboundAttachmentDenyMessage(
+        "item/commandExecution/requestApproval",
+        {
+          command:
+            'ls "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23"',
+        },
+      ),
+    ).toBeNull();
   });
 });
 
@@ -1892,6 +1925,47 @@ describe("Codex panel completion recovery", () => {
     });
     expect(adapter.state.activeTurnId).toBe("turn_2");
     expect(adapter.state.activeTurnOrigin).toBe("wechat");
+  });
+
+  test("auto-denies Codex attempts to stage WeChat files in outbound directories", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.state.status = "busy";
+
+    adapter.handleTrackedTurnServerRequest(
+      7,
+      "item/commandExecution/requestApproval",
+      {
+        command:
+          'cp "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx"',
+      },
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        origin: "wechat",
+      },
+    );
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 7,
+        result: { decision: "decline" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.pendingApproval).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
   });
 
   test("mirrors the first local turn after /resume before shared thread follow catches up", () => {

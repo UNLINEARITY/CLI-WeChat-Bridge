@@ -47,7 +47,10 @@ import type {
   UserInputRequestOption,
 } from "./bridge-types.ts";
 import {
+  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  containsWechatOutboundAttachmentPath,
   detectCliApproval,
+  isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
   normalizeOutput,
   nowIso,
@@ -376,6 +379,29 @@ export function buildCodexApprovalRequest(
         : "Codex needs approval before applying a file change.",
       commandPreview: truncatePreview(preview, 180),
     };
+  }
+
+  return null;
+}
+
+export function getCodexWechatOutboundAttachmentDenyMessage(
+  method: string,
+  params: unknown,
+): string | null {
+  if (!isRecord(params)) {
+    return null;
+  }
+
+  if (method === "item/commandExecution/requestApproval") {
+    return isWechatOutboundAttachmentWriteCommand(params.command)
+      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      : null;
+  }
+
+  if (method === "item/fileChange/requestApproval") {
+    return containsWechatOutboundAttachmentPath(params.grantRoot)
+      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      : null;
   }
 
   return null;

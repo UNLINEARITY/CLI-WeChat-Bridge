@@ -9,6 +9,7 @@ import type {
 import {
   buildWechatInboundPrompt,
   buildOneTimeCode,
+  containsWechatOutboundAttachmentPath,
   shouldInjectWechatAttachmentPrompt,
   detectCliApproval,
   formatApprovalMessage,
@@ -21,6 +22,8 @@ import {
   formatTaskFailedMessage,
   formatThreadSwitchMessage,
   getInteractiveShellCommandRejectionMessage,
+  isWechatOutboundAttachmentMutationTool,
+  isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
   MESSAGE_START_GRACE_MS,
   OutputBatcher,
@@ -191,6 +194,30 @@ describe("wechat inbound prompt injection", () => {
     expect(prompt).toContain("~/.claude/channels/wechat");
     expect(prompt).toContain("~/.cli-bridge");
     expect(prompt).toContain("outbound-attachments");
+  });
+
+  test("detects outbound attachment staging writes without blocking read-only commands", () => {
+    expect(
+      containsWechatOutboundAttachmentPath(
+        "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23\\report.docx",
+      ),
+    ).toBe(true);
+    expect(
+      isWechatOutboundAttachmentWriteCommand(
+        'Copy-Item "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx"',
+      ),
+    ).toBe(true);
+    expect(
+      isWechatOutboundAttachmentWriteCommand(
+        'ls "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23"',
+      ),
+    ).toBe(false);
+    expect(
+      isWechatOutboundAttachmentMutationTool(
+        "edit",
+        "C:\\Users\\unlin\\.claude\\channels\\wechat\\outbound-attachments\\2026-05-23\\report.docx",
+      ),
+    ).toBe(true);
   });
 
   test("injects attachment guidance for short follow-up send commands", () => {

@@ -66,6 +66,16 @@ const WECHAT_ATTACHMENT_PROMPT_PREFIX = [
 const WECHAT_ATTACHMENT_BLOCK_RE =
   /\n```wechat-attachments[ \t]*\n([\s\S]*?)\n```[ \t]*$/;
 
+export const WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
+  "The WeChat bridge does not use outbound attachment directories. Do not create or copy files under .claude/channels/wechat/outbound-attachments or .cli-bridge/outbound-attachments. To send a file, put the original absolute local file path in the final ```wechat-attachments``` block.";
+
+const WECHAT_OUTBOUND_ATTACHMENT_PATH_RE =
+  /(?:^|\/)(?:(?:\.claude\/channels\/wechat\/|\.cli-bridge\/)?outbound-attachments)(?:\/|$)/i;
+const WECHAT_OUTBOUND_ATTACHMENT_WRITE_COMMAND_RE =
+  /\b(cp|copy|copy-item|xcopy|robocopy|mv|move|move-item|mkdir|md|new-item|ni|set-content|add-content|out-file|write-output|touch)\b|>\s*["']?[^&|]*outbound-attachments/i;
+const WECHAT_OUTBOUND_ATTACHMENT_MUTATION_TOOL_RE =
+  /^(?:write|edit|multiedit|notebookedit|patch|create|mkdir|move|copy|file[_-]?change)$/i;
+
 const WECHAT_ATTACHMENT_KINDS = ["image", "file", "video", "voice"] as const;
 const INLINE_IMAGE_EXTENSIONS = new Set([
   ".png",
@@ -317,6 +327,34 @@ export function shouldInjectWechatAttachmentPrompt(text: string): boolean {
     mentionsFileOrMedia ||
     mentionsLocalPath ||
     looksLikeShortSendCommand
+  );
+}
+
+export function containsWechatOutboundAttachmentPath(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  const normalized = value.trim().replace(/\\/g, "/");
+  return WECHAT_OUTBOUND_ATTACHMENT_PATH_RE.test(normalized);
+}
+
+export function isWechatOutboundAttachmentWriteCommand(command: unknown): boolean {
+  return (
+    typeof command === "string" &&
+    containsWechatOutboundAttachmentPath(command) &&
+    WECHAT_OUTBOUND_ATTACHMENT_WRITE_COMMAND_RE.test(command)
+  );
+}
+
+export function isWechatOutboundAttachmentMutationTool(
+  toolName: unknown,
+  targetPath: unknown,
+): boolean {
+  return (
+    typeof toolName === "string" &&
+    WECHAT_OUTBOUND_ATTACHMENT_MUTATION_TOOL_RE.test(toolName.trim()) &&
+    containsWechatOutboundAttachmentPath(targetPath)
   );
 }
 

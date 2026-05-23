@@ -1173,6 +1173,50 @@ describe("OpenCode permission.updated handling", () => {
       commandPreview: "npm test",
     });
   });
+
+  test("auto-rejects outbound attachment staging permission events", async () => {
+    const { events, internal } = createPermissionAdapter();
+    const responses: Array<Record<string, unknown>> = [];
+    internal.client = {
+      permission: {
+        respond: async (parameters: Record<string, unknown>) => {
+          responses.push(parameters);
+          return {
+            data: true,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    internal.handleSseEvent({
+      type: "permission.asked",
+      properties: {
+        id: "perm_outbound_1",
+        sessionID: "session_perm_1",
+        permission: "bash",
+        metadata: {
+          command:
+            'Copy-Item "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx"',
+        },
+      },
+    });
+
+    await wait(10);
+
+    expect(responses).toEqual([
+      expect.objectContaining({
+        sessionID: "session_perm_1",
+        permissionID: "perm_outbound_1",
+        response: "reject",
+      }),
+    ]);
+    expect(events.filter((e) => e.type === "approval_required")).toHaveLength(0);
+    expect(internal.pendingPermission).toBeNull();
+    expect(internal.state.status).toBe("busy");
+  });
 });
 
 /* ------------------------------------------------------------------ */
