@@ -113,6 +113,7 @@ type WechatSendContext =
   | "message"
   | "notice"
   | "approval_required"
+  | "user_input_required"
   | "mirrored_user_input"
   | "session_switched"
   | "thread_switched"
@@ -1032,7 +1033,7 @@ class WechatDaemon {
               slot.adapter,
               formatUserInputRequestMessage(pending, adapterState),
             ),
-            "approval_required",
+            "user_input_required",
           );
         }));
         break;

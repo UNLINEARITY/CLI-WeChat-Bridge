@@ -64,6 +64,8 @@ const {
   buildCliEnvironment,
   buildCodexApprovalRequest,
   buildCodexCliArgs,
+  buildCodexDynamicToolCallFailureResponse,
+  buildCodexMcpServerElicitationDeclineResponse,
   buildCodexPermissionsRequestApprovalResponse,
   buildCodexUserInputRequest,
   coerceWebSocketMessageData,
@@ -76,6 +78,7 @@ const {
   findCodexSessionFile,
   findRecentCodexSessionFileForCwd,
   getCodexRpcRequestId,
+  getCodexApprovalAutoResponse,
   getCodexWechatOutboundAttachmentDenyMessage,
   getNotificationThreadId,
   getNotificationTurnId,
@@ -110,6 +113,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private cleanPanelExitInProgress = false;
   private rpcRequestCounter = 0;
   private pendingRpcRequests = new Map<string, CodexRpcPendingRequest>();
+  private subscribedThreadIds = new Set<string>();
   private sharedThreadId: string | null = null;
   private announcedThreadId: string | null = null;
   private pendingThreadAnnouncement: CodexPendingThreadAnnouncement | null = null;
@@ -307,6 +311,30 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     return await super.resolveApproval(action);
+  }
+
+  override async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+    if (!this.pendingUserInputRequest) {
+      return false;
+    }
+
+    const request = this.pendingUserInputRequest;
+    const responseAnswers: Record<string, { answers: string[] }> = {};
+    for (const [questionId, values] of Object.entries(answers)) {
+      responseAnswers[questionId] = {
+        answers: values,
+      };
+    }
+
+    this.sendRpcMessage({
+      id: request.requestId,
+      result: {
+        answers: responseAnswers,
+      },
+    });
+    this.clearPendingUserInputState();
+    this.setStatus("busy", "Codex user input submitted.");
+    return true;
   }
 
   override async dispose(): Promise<void> {
@@ -966,6 +994,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (this.pendingApproval) {
       throw new Error("A Codex approval request is pending. Reply with /confirm <code> or /deny.");
     }
+    if (this.pendingUserInputRequest || this.state.pendingUserInput) {
+      throw new Error("Codex is waiting for user input. Reply with /answer and your response, or use /stop.");
+    }
     if (this.pendingTurnStart || this.activeTurn || this.state.status === "busy") {
       const origin = this.state.activeTurnOrigin;
       if (origin === "local") {
@@ -982,6 +1013,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.clearPendingApprovalState();
 
     const threadId = await this.ensureThreadStarted();
+    const subscribedBeforeTurnStart = await this.tryEnsureSharedThreadSubscribed(threadId);
     this.pendingTurnStart = true;
     this.pendingTurnThreadId = threadId;
     this.interruptPendingTurnStart = false;
@@ -1012,6 +1044,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         turnId,
         origin: "wechat",
       });
+      if (!subscribedBeforeTurnStart) {
+        await this.tryEnsureSharedThreadSubscribed(threadId);
+      }
 
       if (this.interruptPendingTurnStart) {
         await this.requestActiveTurnInterrupt();
@@ -1035,12 +1070,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     const turnPending =
-      this.pendingTurnStart || this.state.status === "busy" || this.state.status === "awaiting_approval";
+      this.pendingTurnStart ||
+      this.state.status === "busy" ||
+      this.state.status === "awaiting_approval" ||
+      this.state.status === "awaiting_input";
     if (!turnPending) {
       return false;
     }
 
     this.clearPendingApprovalState();
+    this.clearPendingUserInputState();
 
     if (this.pendingTurnStart && !this.activeTurn) {
       this.interruptPendingTurnStart = true;
@@ -1249,6 +1288,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private attachRpcSocket(socket: WebSocket): void {
     this.rpcSocket = socket;
     this.rpcShuttingDown = false;
+    this.subscribedThreadIds.clear();
 
     socket.addEventListener("message", (event) => {
       this.handleRpcMessageData(event.data);
@@ -1262,6 +1302,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const socket = this.rpcSocket;
     this.rpcSocket = null;
     this.rpcShuttingDown = true;
+    this.subscribedThreadIds.clear();
     this.rejectPendingRpcRequests("Codex websocket connection closed.");
 
     if (!socket) {
@@ -1305,6 +1346,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       cleanPanelExitInProgress: this.cleanPanelExitInProgress,
     });
     this.rpcSocket = null;
+    this.subscribedThreadIds.clear();
     this.rejectPendingRpcRequests("Codex websocket connection closed.");
     this.rpcShuttingDown = false;
 
@@ -1456,8 +1498,48 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.rememberBridgeOwnedThreadSignal(threadId);
+    this.subscribedThreadIds.add(threadId);
     this.updateSharedThread(threadId);
     return threadId;
+  }
+
+  private async tryEnsureSharedThreadSubscribed(threadId: string): Promise<boolean> {
+    if (this.subscribedThreadIds.has(threadId)) {
+      return true;
+    }
+
+    try {
+      await this.ensureSharedThreadSubscribed(threadId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async ensureSharedThreadSubscribed(threadId: string): Promise<void> {
+    if (this.subscribedThreadIds.has(threadId)) {
+      return;
+    }
+
+    const response = await this.sendRpcRequest("thread/resume", {
+      threadId,
+      cwd: this.options.cwd,
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+      excludeTurns: true,
+    });
+
+    const resumedThreadId = this.extractThreadIdFromResponse(response);
+    if (!resumedThreadId) {
+      throw new Error("Codex did not return a thread id while subscribing the bridge client.");
+    }
+
+    this.rememberBridgeOwnedThreadSignal(resumedThreadId);
+    this.subscribedThreadIds.add(resumedThreadId);
+    if (resumedThreadId !== this.sharedThreadId) {
+      this.updateSharedThread(resumedThreadId);
+    }
   }
 
   private async resumeSharedThread(
@@ -1489,6 +1571,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
+      excludeTurns: true,
     });
 
     const resumedThreadId = this.extractThreadIdFromResponse(response);
@@ -1497,6 +1580,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.rememberBridgeOwnedThreadSignal(resumedThreadId);
+    this.subscribedThreadIds.add(resumedThreadId);
     this.sessionFilePath = null;
     this.sessionReadOffset = 0;
     this.sessionPartialLine = "";
@@ -1557,7 +1641,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.clearInterruptTimer();
     this.interruptTimer = setTimeout(() => {
       this.interruptTimer = null;
-      if (this.state.status !== "busy" && this.state.status !== "awaiting_approval") {
+      if (
+        this.state.status !== "busy" &&
+        this.state.status !== "awaiting_approval" &&
+        this.state.status !== "awaiting_input"
+      ) {
         return;
       }
 
@@ -1586,6 +1674,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         pendingTurnStart: this.pendingTurnStart,
         hasActiveTurn: Boolean(this.activeTurn),
         hasPendingApproval: Boolean(this.pendingApproval || this.pendingApprovalRequest),
+        hasPendingUserInput: Boolean(this.pendingUserInputRequest || this.state.pendingUserInput),
         activeTurnId: this.state.activeTurnId,
       })
     ) {
@@ -1631,6 +1720,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.interruptPendingTurnStart = false;
     this.pendingThreadFollowId = null;
     this.clearPendingApprovalState();
+    this.clearPendingUserInputState();
     this.queuedTurnNotifications = [];
     this.queuedTurnServerRequests = [];
     this.turnFinalMessages.clear();
@@ -1873,6 +1963,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.state.pendingApprovalOrigin = undefined;
   }
 
+  private clearPendingUserInputState(): void {
+    this.pendingUserInputRequest = null;
+    this.state.pendingUserInput = null;
+    this.state.pendingUserInputOrigin = undefined;
+  }
+
   private cleanupTurnArtifacts(turnId: string): void {
     this.clearFinalReplyCompletionTimerForTurn(turnId);
     this.turnFinalMessages.delete(turnId);
@@ -1954,6 +2050,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     request: CodexPendingApprovalRequest,
     action: "confirm" | "deny",
   ): Promise<void> {
+    if (request.method === "item/permissions/requestApproval") {
+      this.sendRpcMessage({
+        id: request.requestId,
+        result: buildCodexPermissionsRequestApprovalResponse(request.params, action),
+      });
+      return;
+    }
+
     const decision = action === "confirm" ? "accept" : "decline";
     this.sendRpcMessage({
       id: request.requestId,
@@ -2183,6 +2287,17 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
             this.setStatus("busy", "Codex approval resolved.");
           }
         }
+        if (
+          requestId !== null &&
+          this.pendingUserInputRequest &&
+          requestId === this.pendingUserInputRequest.requestId &&
+          trackedTurn.turnId === this.pendingUserInputRequest.turnId
+        ) {
+          this.clearPendingUserInputState();
+          if (this.state.status === "awaiting_input") {
+            this.setStatus("busy", "Codex user input resolved.");
+          }
+        }
         return;
       }
 
@@ -2199,10 +2314,27 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     method: string,
     params: unknown,
   ): void {
+    if (method === "mcpServer/elicitation/request") {
+      this.sendRpcMessage({
+        id: requestId,
+        result: buildCodexMcpServerElicitationDeclineResponse(),
+      });
+      return;
+    }
+
+    if (method === "item/tool/call") {
+      this.sendRpcMessage({
+        id: requestId,
+        result: buildCodexDynamicToolCallFailureResponse(),
+      });
+      return;
+    }
+
     if (
       method !== "item/commandExecution/requestApproval" &&
       method !== "item/fileChange/requestApproval" &&
-      method !== "item/permissions/requestApproval"
+      method !== "item/permissions/requestApproval" &&
+      method !== "item/tool/requestUserInput"
     ) {
       this.sendRpcMessage({
         id: requestId,
@@ -2225,14 +2357,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    if (method === "item/permissions/requestApproval") {
-      this.sendRpcMessage({
-        id: requestId,
-        result: buildCodexPermissionsRequestApprovalResponse(),
-      });
-      return;
-    }
-
     if (this.shouldQueuePendingTurnEvent(params)) {
       this.queuedTurnServerRequests.push({
         requestId,
@@ -2242,8 +2366,17 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const trackedTurn = this.identifyTrackedTurn("server/request", params);
+    const trackedTurn =
+      this.identifyTrackedTurn("server/request", params) ??
+      this.fallbackTrackedTurnForServerRequest(params);
     if (!trackedTurn) {
+      this.sendRpcMessage({
+        id: requestId,
+        error: {
+          code: -32602,
+          message: "Invalid Codex server request payload: missing threadId or turnId.",
+        },
+      });
       return;
     }
 
@@ -2253,21 +2386,55 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   private handleTrackedTurnServerRequest(
     requestId: CodexRpcRequestId,
-    method: CodexPendingApprovalRequest["method"],
+    method: CodexPendingApprovalRequest["method"] | CodexPendingUserInputRequest["method"],
     params: Record<string, unknown>,
     trackedTurn: CodexActiveTurn,
   ): void {
+    if (method === "item/tool/requestUserInput") {
+      this.handleTrackedTurnUserInputRequest(requestId, params, trackedTurn);
+      return;
+    }
+
     const denyMessage = getCodexWechatOutboundAttachmentDenyMessage(method, params);
     if (denyMessage) {
       this.sendRpcMessage({
         id: requestId,
-        result: { decision: "decline" },
+        result:
+          method === "item/permissions/requestApproval"
+            ? buildCodexPermissionsRequestApprovalResponse(params, "deny")
+            : { decision: "decline" },
       });
+      this.state.lastOutputAt = nowIso();
+      this.setStatus(
+        "busy",
+        `Codex approval auto-denied: ${truncatePreview(denyMessage, 180)}`,
+      );
+      return;
+    }
+
+    const autoResponse = getCodexApprovalAutoResponse(method, params);
+    if (autoResponse) {
+      this.sendRpcMessage({
+        id: requestId,
+        result: autoResponse.result,
+      });
+      this.state.lastOutputAt = nowIso();
+      this.setStatus(
+        "busy",
+        `Codex approval auto-approved: ${truncatePreview(autoResponse.reason, 180)}`,
+      );
       return;
     }
 
     const request = buildCodexApprovalRequest(method, params);
     if (!request) {
+      this.sendRpcMessage({
+        id: requestId,
+        error: {
+          code: -32602,
+          message: "Invalid Codex approval request payload.",
+        },
+      });
       return;
     }
 
@@ -2277,14 +2444,73 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       threadId: trackedTurn.threadId,
       turnId: trackedTurn.turnId,
       origin: trackedTurn.origin,
+      params,
     };
     this.pendingApproval = request;
     this.state.pendingApproval = request;
     this.state.pendingApprovalOrigin = trackedTurn.origin;
     this.state.lastOutputAt = nowIso();
-    this.setStatus("awaiting_approval", "Codex approval is required.");
+    this.setStatus(
+      "awaiting_approval",
+      `Codex approval is required: ${truncatePreview(request.commandPreview, 180)}`,
+    );
     this.emit({
       type: "approval_required",
+      request,
+      timestamp: nowIso(),
+    });
+  }
+
+  private fallbackTrackedTurnForServerRequest(
+    params: Record<string, unknown>,
+  ): CodexActiveTurn | null {
+    if (this.activeTurn) {
+      return null;
+    }
+
+    const threadId = getNotificationThreadId(params);
+    const turnId = getNotificationTurnId(params);
+    if (!threadId || !turnId) {
+      return null;
+    }
+
+    return {
+      threadId,
+      turnId,
+      origin: this.bridgeOwnedTurnIds.has(turnId) ? "wechat" : "local",
+    };
+  }
+
+  private handleTrackedTurnUserInputRequest(
+    requestId: CodexRpcRequestId,
+    params: Record<string, unknown>,
+    trackedTurn: CodexActiveTurn,
+  ): void {
+    const request = buildCodexUserInputRequest(params);
+    if (!request) {
+      this.sendRpcMessage({
+        id: requestId,
+        error: {
+          code: -32602,
+          message: "Invalid Codex user input request payload.",
+        },
+      });
+      return;
+    }
+
+    this.pendingUserInputRequest = {
+      requestId,
+      method: "item/tool/requestUserInput",
+      threadId: trackedTurn.threadId,
+      turnId: trackedTurn.turnId,
+      origin: trackedTurn.origin,
+    };
+    this.state.pendingUserInput = request;
+    this.state.pendingUserInputOrigin = trackedTurn.origin;
+    this.state.lastOutputAt = nowIso();
+    this.setStatus("awaiting_input", "Codex is waiting for user input.");
+    this.emit({
+      type: "user_input_required",
       request,
       timestamp: nowIso(),
     });
@@ -2431,6 +2657,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     ) {
       this.clearPendingApprovalState();
     }
+    if (
+      this.pendingUserInputRequest &&
+      this.pendingUserInputRequest.turnId === trackedTurn.turnId
+    ) {
+      this.clearPendingUserInputState();
+    }
     if (this.activeTurn?.turnId === trackedTurn.turnId) {
       this.setActiveTurn(null);
     }
@@ -2537,6 +2769,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.pendingTurnStart ||
       this.pendingApproval ||
       this.pendingApprovalRequest ||
+      this.pendingUserInputRequest ||
+      this.state.pendingUserInput ||
       !this.collectTurnOutput(turnId)
     ) {
       return;
@@ -2557,6 +2791,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const finalText = this.collectTurnOutput(turnId);
     const lastActivityAtMs = this.turnLastActivityAtMs.get(turnId) ?? null;
     const pendingApproval = Boolean(this.pendingApproval || this.pendingApprovalRequest);
+    const pendingUserInput = Boolean(this.pendingUserInputRequest || this.state.pendingUserInput);
     const nowMs = Date.now();
     if (
       !shouldAutoCompleteCodexWechatTurnAfterFinalReply({
@@ -2565,6 +2800,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         activeTurnOrigin: activeTurn?.origin,
         pendingTurnStart: this.pendingTurnStart,
         hasPendingApproval: pendingApproval,
+        hasPendingUserInput: pendingUserInput,
         hasFinalOutput: Boolean(finalText),
         hasCompletedTurn: this.hasCompletedTurn(turnId),
         lastActivityAtMs,
@@ -2577,6 +2813,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         activeTurn.origin === "wechat" &&
         !this.pendingTurnStart &&
         !pendingApproval &&
+        !pendingUserInput &&
         finalText &&
         typeof lastActivityAtMs === "number"
       ) {
@@ -2597,6 +2834,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.clearPendingApprovalState();
+    this.clearPendingUserInputState();
     this.setActiveTurn(null);
     this.cleanupTurnArtifacts(turnId);
     this.state.lastOutputAt = nowIso();

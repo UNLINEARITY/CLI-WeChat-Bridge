@@ -227,6 +227,7 @@ describe("wechat-bridge cli helpers", () => {
         status: "idle",
         activeTurnId: undefined,
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
         hasPendingApproval: false,
         hasActiveTask: false,
       }),
@@ -239,6 +240,7 @@ describe("wechat-bridge cli helpers", () => {
         status: "busy",
         activeTurnId: undefined,
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
         hasPendingApproval: false,
         hasActiveTask: false,
       }),
@@ -251,6 +253,7 @@ describe("wechat-bridge cli helpers", () => {
         status: "idle",
         activeTurnId: "turn-123",
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
         hasPendingApproval: false,
         hasActiveTask: false,
       }),
@@ -263,8 +266,22 @@ describe("wechat-bridge cli helpers", () => {
         status: "idle",
         activeTurnId: undefined,
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
         hasPendingApproval: false,
         hasActiveTask: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      canDrainDeferredCodexInboundQueue({
+        adapter: "codex",
+        deferredCount: 1,
+        status: "awaiting_input",
+        activeTurnId: undefined,
+        hasPendingConfirmation: false,
+        hasPendingUserInput: true,
+        hasPendingApproval: false,
+        hasActiveTask: false,
       }),
     ).toBe(false);
   });

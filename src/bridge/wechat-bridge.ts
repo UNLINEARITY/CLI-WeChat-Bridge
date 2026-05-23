@@ -21,20 +21,25 @@ import type {
   BridgeTurnOrigin,
   BridgeWorkerStatus,
   PendingApproval,
+  PendingUserInputRequest,
+  UserInputRequest,
 } from "./bridge-types.ts";
 import {
   buildWechatInboundPrompt,
   buildOneTimeCode,
   formatApprovalMessage,
   formatPendingApprovalReminder,
+  formatPendingUserInputReminder,
   formatDuration,
   formatMirroredUserInputMessage,
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
+  formatUserInputRequestMessage,
   MESSAGE_START_GRACE_MS,
   nowIso,
   OutputBatcher,
+  parsePendingUserInputAnswerCommand,
   parseWechatControlCommand,
   truncatePreview,
 } from "./bridge-utils.ts";
@@ -78,6 +83,7 @@ type WechatSendContext =
   | "message"
   | "notice"
   | "approval_required"
+  | "user_input_required"
   | "mirrored_user_input"
   | "session_switched"
   | "thread_switched"
@@ -238,6 +244,17 @@ function toPendingApproval(request: ApprovalRequest | PendingApproval): PendingA
   };
 }
 
+function toPendingUserInput(request: UserInputRequest | PendingUserInputRequest): PendingUserInputRequest {
+  if (typeof (request as PendingUserInputRequest).createdAt === "string") {
+    return request as PendingUserInputRequest;
+  }
+
+  return {
+    ...request,
+    createdAt: nowIso(),
+  };
+}
+
 export function shouldDeferCodexInboundMessage(params: {
   adapter: BridgeAdapterKind;
   status: BridgeWorkerStatus;
@@ -260,6 +277,7 @@ export function canDrainDeferredCodexInboundQueue(params: {
   status: BridgeWorkerStatus;
   activeTurnId?: string;
   hasPendingConfirmation: boolean;
+  hasPendingUserInput: boolean;
   hasPendingApproval: boolean;
   hasActiveTask: boolean;
 }): boolean {
@@ -267,11 +285,13 @@ export function canDrainDeferredCodexInboundQueue(params: {
     params.adapter === "codex" &&
     params.deferredCount > 0 &&
     !params.hasPendingConfirmation &&
+    !params.hasPendingUserInput &&
     !params.hasPendingApproval &&
     !params.hasActiveTask &&
     !params.activeTurnId &&
     params.status !== "busy" &&
-    params.status !== "awaiting_approval"
+    params.status !== "awaiting_approval" &&
+    params.status !== "awaiting_input"
   );
 }
 
@@ -600,6 +620,7 @@ async function main(): Promise<void> {
         status: adapterState.status,
         activeTurnId: adapterState.activeTurnId,
         hasPendingConfirmation: Boolean(stateStore.getState().pendingConfirmation),
+        hasPendingUserInput: Boolean(stateStore.getState().pendingUserInput),
         hasPendingApproval: Boolean(adapterState.pendingApproval),
         hasActiveTask: Boolean(activeTask),
       })
@@ -1026,6 +1047,9 @@ function wireAdapterEvents(params: {
     if (bridgeState.pendingConfirmation && !adapterState.pendingApproval) {
       stateStore.clearPendingConfirmation();
     }
+    if (bridgeState.pendingUserInput && !adapterState.pendingUserInput) {
+      stateStore.clearPendingUserInput();
+    }
     const authorizedUserId = stateStore.getState().authorizedUserId;
 
     switch (event.type) {
@@ -1111,6 +1135,20 @@ function wireAdapterEvents(params: {
           );
         }));
         break;
+      case "user_input_required":
+        trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
+          const pending = toPendingUserInput(event.request);
+          stateStore.setPendingUserInput(pending);
+          stateStore.appendLog(
+            `User input requested: questions=${pending.questions.length}`,
+          );
+          await queueWechatMessage(
+            authorizedUserId,
+            formatUserInputRequestMessage(pending, adapterState),
+            "user_input_required",
+          );
+        }));
+        break;
       case "mirrored_user_input":
         stateStore.appendLog(`mirrored_local_input: ${truncatePreview(event.text)}`);
         if (shouldForwardBridgeEventToWechat(options.adapter, event.type, { text: event.text })) {
@@ -1165,6 +1203,7 @@ function wireAdapterEvents(params: {
       case "task_complete":
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
+          stateStore.clearPendingUserInput();
           if (options.adapter === "shell") {
             const summary = buildCompletionSummary({
               adapter: options.adapter,
@@ -1181,6 +1220,7 @@ function wireAdapterEvents(params: {
       case "task_failed":
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
+          stateStore.clearPendingUserInput();
           clearActiveTask();
           await queueWechatMessage(
             authorizedUserId,
@@ -1194,6 +1234,7 @@ function wireAdapterEvents(params: {
         logError(event.message);
         stateStore.appendLog(`fatal_error: ${event.message}`);
         stateStore.clearPendingConfirmation();
+        stateStore.clearPendingUserInput();
         clearActiveTask();
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           await queueWechatMessage(
@@ -1330,6 +1371,7 @@ async function handleInboundMessage(params: {
       await outputBatcher.flushNow();
       outputBatcher.clear();
       stateStore.clearPendingConfirmation();
+      stateStore.clearPendingUserInput();
       stateStore.clearSharedSessionId();
       await adapter.createSession();
       stateStore.appendLog(`New ${options.adapter} session requested by owner.`);
@@ -1349,6 +1391,7 @@ async function handleInboundMessage(params: {
       await outputBatcher.flushNow();
       outputBatcher.clear();
       stateStore.clearPendingConfirmation();
+      stateStore.clearPendingUserInput();
       stateStore.clearSharedSessionId();
       await adapter.reset();
       stateStore.appendLog("Worker reset by owner.");
@@ -1399,12 +1442,50 @@ async function handleInboundMessage(params: {
       await queueWechatMessage(message.senderId, "Approval denied.");
       return null;
     }
+    case "answer": {
+      const pending = state.pendingUserInput;
+      if (!pending) {
+        await queueWechatMessage(message.senderId, "No pending user input request.");
+        return null;
+      }
+
+      const parsed = parsePendingUserInputAnswerCommand(systemCommand.raw, pending);
+      if ("error" in parsed) {
+        await queueWechatMessage(message.senderId, parsed.error);
+        return null;
+      }
+
+      const submitted = await adapter.submitUserInput(parsed.answers);
+      if (!submitted) {
+        await queueWechatMessage(
+          message.senderId,
+          "The worker could not apply this answer.",
+        );
+        return null;
+      }
+
+      stateStore.clearPendingUserInput();
+      stateStore.appendLog(`User input answered: ${parsed.preview}`);
+      await queueWechatMessage(message.senderId, "Answer submitted. Continuing...");
+      return {
+        startedAt: Date.now(),
+        inputPreview: parsed.preview,
+      };
+    }
   }
 
   if (state.pendingConfirmation) {
     await queueWechatMessage(
       message.senderId,
       formatPendingApprovalReminder(state.pendingConfirmation, adapter.getState()),
+    );
+    return null;
+  }
+
+  if (state.pendingUserInput) {
+    await queueWechatMessage(
+      message.senderId,
+      formatPendingUserInputReminder(state.pendingUserInput),
     );
     return null;
   }

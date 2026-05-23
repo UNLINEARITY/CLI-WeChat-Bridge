@@ -49,6 +49,7 @@ import type {
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
+  containsWechatOutboundAttachmentPathDeep,
   detectCliApproval,
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
@@ -129,10 +130,14 @@ export type CodexQueuedNotification = {
 
 export type CodexPendingApprovalRequest = {
   requestId: CodexRpcRequestId;
-  method: "item/commandExecution/requestApproval" | "item/fileChange/requestApproval";
+  method:
+    | "item/commandExecution/requestApproval"
+    | "item/fileChange/requestApproval"
+    | "item/permissions/requestApproval";
   threadId: string;
   turnId: string;
   origin: BridgeTurnOrigin;
+  params: Record<string, unknown>;
 };
 
 export type CodexPendingUserInputRequest = {
@@ -141,6 +146,11 @@ export type CodexPendingUserInputRequest = {
   threadId: string;
   turnId: string;
   origin: BridgeTurnOrigin;
+};
+
+export type CodexApprovalAutoResponse = {
+  result: Record<string, unknown>;
+  reason: string;
 };
 
 export type CodexActiveTurn = {
@@ -381,6 +391,19 @@ export function buildCodexApprovalRequest(
     };
   }
 
+  if (method === "item/permissions/requestApproval") {
+    const reason = typeof params.reason === "string" ? params.reason : "";
+    const preview = summarizeCodexPermissionsRequest(params.permissions);
+
+    return {
+      source: "cli",
+      summary: reason
+        ? `Codex needs approval before granting extra permissions: ${truncatePreview(reason, 160)}`
+        : "Codex needs approval before granting extra permissions.",
+      commandPreview: truncatePreview(preview, 180),
+    };
+  }
+
   return null;
 }
 
@@ -393,7 +416,8 @@ export function getCodexWechatOutboundAttachmentDenyMessage(
   }
 
   if (method === "item/commandExecution/requestApproval") {
-    return isWechatOutboundAttachmentWriteCommand(params.command)
+    return isWechatOutboundAttachmentWriteCommand(params.command) ||
+      containsWechatOutboundAttachmentPathDeep(params.additionalPermissions)
       ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
@@ -404,13 +428,234 @@ export function getCodexWechatOutboundAttachmentDenyMessage(
       : null;
   }
 
+  if (method === "item/permissions/requestApproval") {
+    return containsWechatOutboundAttachmentPathDeep(params.permissions)
+      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      : null;
+  }
+
   return null;
 }
 
-export function buildCodexPermissionsRequestApprovalResponse(): Record<string, unknown> {
-  return {
-    permissions: {},
+function commandApprovalAllowsAccept(availableDecisions: unknown): boolean {
+  if (!Array.isArray(availableDecisions)) {
+    return true;
+  }
+
+  return availableDecisions.some((decision) => decision === "accept");
+}
+
+function normalizePermissionPath(pathValue: string): string {
+  const normalized = pathValue.trim().replace(/\\/g, "/").toLowerCase();
+  return normalized === "/" ? normalized : normalized.replace(/\/+$/g, "");
+}
+
+function isHighRiskPermissionPath(pathValue: string): boolean {
+  const normalized = normalizePermissionPath(pathValue);
+  if (!normalized) {
+    return false;
+  }
+
+  if (normalized === "/" || /^[a-z]:$/i.test(normalized)) {
+    return true;
+  }
+
+  return /^[a-z]:(?:\/windows|\/program files(?: \(x86\))?|\/programdata)(?:\/|$)/i.test(normalized);
+}
+
+function collectPermissionPaths(value: unknown, output: string[]): void {
+  if (typeof value === "string") {
+    output.push(value);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      collectPermissionPaths(item, output);
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  if (typeof value.path === "string") {
+    output.push(value.path);
+  }
+  if (typeof value.pattern === "string") {
+    output.push(value.pattern);
+  }
+
+  for (const item of Object.values(value)) {
+    collectPermissionPaths(item, output);
+  }
+}
+
+function hasRootSpecialPermissionPath(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(hasRootSpecialPermissionPath);
+  }
+
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  if (
+    (value.kind === "root" || value.kind === "Root") ||
+    (value.value === "root" || value.value === "Root")
+  ) {
+    return true;
+  }
+
+  return Object.values(value).some(hasRootSpecialPermissionPath);
+}
+
+function containsHighRiskPermissionTarget(value: unknown): boolean {
+  if (hasRootSpecialPermissionPath(value)) {
+    return true;
+  }
+
+  const paths: string[] = [];
+  collectPermissionPaths(value, paths);
+  return paths.some(isHighRiskPermissionPath);
+}
+
+export function getCodexApprovalAutoResponse(
+  method: CodexPendingApprovalRequest["method"],
+  params: Record<string, unknown>,
+): CodexApprovalAutoResponse | null {
+  if (method === "item/commandExecution/requestApproval") {
+    const command = typeof params.command === "string" ? params.command : "";
+    if (!commandApprovalAllowsAccept(params.availableDecisions)) {
+      return null;
+    }
+    if (command && isHighRiskShellCommand(command)) {
+      return null;
+    }
+    if (containsHighRiskPermissionTarget(params.additionalPermissions)) {
+      return null;
+    }
+
+    return {
+      result: { decision: "accept" },
+      reason: command
+        ? `low-risk command ${truncatePreview(command, 120)}`
+        : "low-risk command approval",
+    };
+  }
+
+  if (method === "item/fileChange/requestApproval") {
+    if (containsHighRiskPermissionTarget(params.grantRoot)) {
+      return null;
+    }
+
+    return {
+      result: { decision: "accept" },
+      reason: "low-risk file change approval",
+    };
+  }
+
+  if (method === "item/permissions/requestApproval") {
+    if (containsHighRiskPermissionTarget(params.permissions)) {
+      return null;
+    }
+
+    return {
+      result: buildCodexPermissionsRequestApprovalResponse(params, "confirm", {
+        strictAutoReview: true,
+      }),
+      reason: "low-risk permission grant",
+    };
+  }
+
+  return null;
+}
+
+function collectStringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function summarizeCodexPermissionsRequest(permissions: unknown): string {
+  if (!isRecord(permissions)) {
+    return "Additional permissions requested.";
+  }
+
+  const parts: string[] = [];
+  if (isRecord(permissions.network) && permissions.network.enabled === true) {
+    parts.push("network access");
+  }
+
+  if (isRecord(permissions.fileSystem)) {
+    const readPaths = collectStringValues(permissions.fileSystem.read);
+    const writePaths = collectStringValues(permissions.fileSystem.write);
+    if (readPaths.length > 0) {
+      parts.push(`read: ${readPaths.join(", ")}`);
+    }
+    if (writePaths.length > 0) {
+      parts.push(`write: ${writePaths.join(", ")}`);
+    }
+    if (Array.isArray(permissions.fileSystem.entries) && permissions.fileSystem.entries.length > 0) {
+      parts.push(`filesystem entries: ${permissions.fileSystem.entries.length}`);
+    }
+  }
+
+  return parts.length > 0 ? parts.join("; ") : "Additional permissions requested.";
+}
+
+function clonePermissionObject(value: unknown): Record<string, unknown> | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+export function buildCodexPermissionsRequestApprovalResponse(
+  params?: unknown,
+  action: "confirm" | "deny" = "deny",
+  options: { strictAutoReview?: boolean } = {},
+): Record<string, unknown> {
+  const permissions: Record<string, unknown> = {};
+  if (action === "confirm" && isRecord(params) && isRecord(params.permissions)) {
+    const network = clonePermissionObject(params.permissions.network);
+    const fileSystem = clonePermissionObject(params.permissions.fileSystem);
+    if (network) {
+      permissions.network = network;
+    }
+    if (fileSystem) {
+      permissions.fileSystem = fileSystem;
+    }
+  }
+
+  const response: Record<string, unknown> = {
+    permissions,
     scope: "turn",
+  };
+  if (options.strictAutoReview) {
+    response.strictAutoReview = true;
+  }
+  return response;
+}
+
+export function buildCodexMcpServerElicitationDeclineResponse(): Record<string, unknown> {
+  return {
+    action: "decline",
+    content: null,
+    _meta: null,
+  };
+}
+
+export function buildCodexDynamicToolCallFailureResponse(): Record<string, unknown> {
+  return {
+    contentItems: [
+      {
+        type: "inputText",
+        text: "Dynamic tool calls are not supported by the WeChat bridge.",
+      },
+    ],
+    success: false,
   };
 }
 
@@ -575,6 +820,7 @@ export function shouldRecoverCodexStaleBusyState(params: {
   pendingTurnStart: boolean;
   hasActiveTurn: boolean;
   hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
   activeTurnId?: string;
 }): boolean {
   return (
@@ -582,6 +828,7 @@ export function shouldRecoverCodexStaleBusyState(params: {
     !params.pendingTurnStart &&
     !params.hasActiveTurn &&
     !params.hasPendingApproval &&
+    !params.hasPendingUserInput &&
     !params.activeTurnId
   );
 }
@@ -592,6 +839,7 @@ export function shouldAutoCompleteCodexWechatTurnAfterFinalReply(params: {
   activeTurnOrigin?: BridgeTurnOrigin;
   pendingTurnStart: boolean;
   hasPendingApproval: boolean;
+  hasPendingUserInput: boolean;
   hasFinalOutput: boolean;
   hasCompletedTurn: boolean;
   lastActivityAtMs: number | null;
@@ -604,6 +852,7 @@ export function shouldAutoCompleteCodexWechatTurnAfterFinalReply(params: {
     params.activeTurnOrigin === "wechat" &&
     !params.pendingTurnStart &&
     !params.hasPendingApproval &&
+    !params.hasPendingUserInput &&
     params.hasFinalOutput &&
     !params.hasCompletedTurn &&
     typeof params.lastActivityAtMs === "number" &&

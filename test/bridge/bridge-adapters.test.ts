@@ -10,6 +10,7 @@ import {
   buildCodexCliArgs,
   buildCodexApprovalRequest,
   buildCodexPermissionsRequestApprovalResponse,
+  buildCodexUserInputRequest,
   buildPtySpawnOptions,
   buildShellInputPayload,
   buildShellProfileCommand,
@@ -19,6 +20,7 @@ import {
   extractCodexThreadStartedThreadId,
   extractCodexUserMessageText,
   findRecentCodexSessionFileForCwd,
+  getCodexApprovalAutoResponse,
   getCodexWechatOutboundAttachmentDenyMessage,
   hasClaudeNoAltScreenOption,
   isClaudeInvalidResumeError,
@@ -765,6 +767,21 @@ describe("buildCodexApprovalRequest", () => {
 
     expect(
       getCodexWechatOutboundAttachmentDenyMessage(
+        "item/permissions/requestApproval",
+        {
+          permissions: {
+            fileSystem: {
+              write: [
+                "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23",
+              ],
+            },
+          },
+        },
+      ),
+    ).toContain("original absolute local file path");
+
+    expect(
+      getCodexWechatOutboundAttachmentDenyMessage(
         "item/commandExecution/requestApproval",
         {
           command:
@@ -774,10 +791,206 @@ describe("buildCodexApprovalRequest", () => {
     ).toBeNull();
   });
 
-  test("builds an empty permissions response for Codex request_permissions prompts", () => {
+  test("formats and resolves Codex request_permissions prompts", () => {
+    expect(
+      buildCodexApprovalRequest("item/permissions/requestApproval", {
+        reason: "Need to inspect generated files.",
+        permissions: {
+          network: {
+            enabled: true,
+          },
+          fileSystem: {
+            read: ["C:\\repo\\generated"],
+            write: ["C:\\repo\\generated"],
+          },
+        },
+      }),
+    ).toEqual({
+      source: "cli",
+      summary:
+        "Codex needs approval before granting extra permissions: Need to inspect generated files.",
+      commandPreview:
+        "network access; read: C:\\repo\\generated; write: C:\\repo\\generated",
+    });
+
     expect(buildCodexPermissionsRequestApprovalResponse()).toEqual({
       permissions: {},
       scope: "turn",
+    });
+    expect(
+      buildCodexPermissionsRequestApprovalResponse(
+        {
+          permissions: {
+            network: {
+              enabled: true,
+            },
+            fileSystem: {
+              read: null,
+              write: ["C:\\repo\\generated"],
+            },
+          },
+        },
+        "confirm",
+      ),
+    ).toEqual({
+      permissions: {
+        network: {
+          enabled: true,
+        },
+        fileSystem: {
+          read: null,
+          write: ["C:\\repo\\generated"],
+        },
+      },
+      scope: "turn",
+    });
+    expect(
+      buildCodexPermissionsRequestApprovalResponse(
+        {
+          permissions: {
+            network: {
+              enabled: true,
+            },
+          },
+        },
+        "confirm",
+        { strictAutoReview: true },
+      ),
+    ).toEqual({
+      permissions: {
+        network: {
+          enabled: true,
+        },
+      },
+      scope: "turn",
+      strictAutoReview: true,
+    });
+  });
+
+  test("auto-approves only low-risk Codex approval requests", () => {
+    expect(
+      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
+        command: "rg \"TODO\" src",
+        cwd: "C:\\repo",
+        availableDecisions: ["accept", "cancel"],
+      })?.result,
+    ).toEqual({ decision: "accept" });
+
+    expect(
+      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
+        command: "rm -rf build",
+        cwd: "C:\\repo",
+        availableDecisions: ["accept", "cancel"],
+      }),
+    ).toBeNull();
+
+    expect(
+      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
+        command: "git status",
+        cwd: "C:\\repo",
+        availableDecisions: ["cancel"],
+      }),
+    ).toBeNull();
+
+    expect(
+      getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+        permissions: {
+          network: {
+            enabled: true,
+          },
+          fileSystem: {
+            read: null,
+            write: ["C:\\repo\\generated"],
+          },
+        },
+      })?.result,
+    ).toEqual({
+      permissions: {
+        network: {
+          enabled: true,
+        },
+        fileSystem: {
+          read: null,
+          write: ["C:\\repo\\generated"],
+        },
+      },
+      scope: "turn",
+      strictAutoReview: true,
+    });
+
+    expect(
+      getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+        permissions: {
+          fileSystem: {
+            write: ["/"],
+          },
+        },
+      }),
+    ).toBeNull();
+
+    expect(
+      getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+        permissions: {
+          fileSystem: {
+            entries: [
+              {
+                path: {
+                  type: "special",
+                  value: {
+                    kind: "root",
+                  },
+                },
+                access: "write",
+              },
+            ],
+          },
+        },
+      }),
+    ).toBeNull();
+  });
+
+  test("formats Codex request_user_input prompts for WeChat", () => {
+    expect(
+      buildCodexUserInputRequest({
+        questions: [
+          {
+            id: "format",
+            header: "Format",
+            question: "Which output format should I use?",
+            options: [
+              {
+                label: "Markdown",
+                description: "Return a Markdown report.",
+              },
+              {
+                label: "DOCX",
+                description: "Create a Word document.",
+              },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      summary: "Codex needs more information before the tool can continue.",
+      questions: [
+        {
+          id: "format",
+          header: "Format",
+          question: "Which output format should I use?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            {
+              label: "Markdown",
+              description: "Return a Markdown report.",
+            },
+            {
+              label: "DOCX",
+              description: "Create a Word document.",
+            },
+          ],
+        },
+      ],
     });
   });
 });
@@ -1574,6 +1787,7 @@ describe("shouldRecoverCodexStaleBusyState", () => {
         pendingTurnStart: false,
         hasActiveTurn: false,
         hasPendingApproval: false,
+        hasPendingUserInput: false,
       }),
     ).toBe(true);
   });
@@ -1585,6 +1799,7 @@ describe("shouldRecoverCodexStaleBusyState", () => {
         pendingTurnStart: true,
         hasActiveTurn: false,
         hasPendingApproval: false,
+        hasPendingUserInput: false,
       }),
     ).toBe(false);
 
@@ -1594,6 +1809,7 @@ describe("shouldRecoverCodexStaleBusyState", () => {
         pendingTurnStart: false,
         hasActiveTurn: true,
         hasPendingApproval: false,
+        hasPendingUserInput: false,
       }),
     ).toBe(false);
 
@@ -1603,6 +1819,7 @@ describe("shouldRecoverCodexStaleBusyState", () => {
         pendingTurnStart: false,
         hasActiveTurn: false,
         hasPendingApproval: true,
+        hasPendingUserInput: false,
       }),
     ).toBe(false);
 
@@ -1612,6 +1829,17 @@ describe("shouldRecoverCodexStaleBusyState", () => {
         pendingTurnStart: false,
         hasActiveTurn: false,
         hasPendingApproval: false,
+        hasPendingUserInput: true,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldRecoverCodexStaleBusyState({
+        status: "busy",
+        pendingTurnStart: false,
+        hasActiveTurn: false,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
         activeTurnId: "turn_123",
       }),
     ).toBe(false);
@@ -1627,6 +1855,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
         activeTurnOrigin: "wechat",
         pendingTurnStart: false,
         hasPendingApproval: false,
+        hasPendingUserInput: false,
         hasFinalOutput: true,
         hasCompletedTurn: false,
         lastActivityAtMs: 1_000,
@@ -1644,6 +1873,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
         activeTurnOrigin: "local",
         pendingTurnStart: false,
         hasPendingApproval: false,
+        hasPendingUserInput: false,
         hasFinalOutput: true,
         hasCompletedTurn: false,
         lastActivityAtMs: 1_000,
@@ -1659,6 +1889,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
         activeTurnOrigin: "wechat",
         pendingTurnStart: false,
         hasPendingApproval: true,
+        hasPendingUserInput: false,
         hasFinalOutput: true,
         hasCompletedTurn: false,
         lastActivityAtMs: 1_000,
@@ -1674,6 +1905,23 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
         activeTurnOrigin: "wechat",
         pendingTurnStart: false,
         hasPendingApproval: false,
+        hasPendingUserInput: true,
+        hasFinalOutput: true,
+        hasCompletedTurn: false,
+        lastActivityAtMs: 1_000,
+        nowMs: 2_100,
+        settleDelayMs: 1_000,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+        candidateTurnId: "turn_123",
+        activeTurnId: "turn_123",
+        activeTurnOrigin: "wechat",
+        pendingTurnStart: false,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
         hasFinalOutput: true,
         hasCompletedTurn: false,
         lastActivityAtMs: 1_500,
@@ -1935,6 +2183,124 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.state.activeTurnOrigin).toBe("wechat");
   });
 
+  test("sendInput subscribes the bridge before using a local-followed Codex thread", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+
+    adapter.nativeProcess = {};
+    adapter.sharedThreadId = "thread_local";
+    adapter.state.sharedThreadId = "thread_local";
+    adapter.state.sharedSessionId = "thread_local";
+    adapter.state.status = "idle";
+    adapter.pendingTurnStart = false;
+    adapter.pendingApproval = null;
+    adapter.pendingApprovalRequest = null;
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      if (method === "thread/resume") {
+        return {
+          thread: {
+            id: "thread_local",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn_wechat",
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    };
+
+    await adapter.sendInput("hello from wechat");
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+    ]);
+    expect(requests[0].params).toMatchObject({
+      threadId: "thread_local",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+      sandbox: "workspace-write",
+      excludeTurns: true,
+    });
+    expect(requests[1].params).toMatchObject({
+      threadId: "thread_local",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "user",
+    });
+    expect(adapter.subscribedThreadIds.has("thread_local")).toBe(true);
+    expect(adapter.activeTurn).toEqual({
+      threadId: "thread_local",
+      turnId: "turn_wechat",
+      origin: "wechat",
+    });
+  });
+
+  test("sendInput keeps working when a local-followed Codex thread is not materialized yet", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    let resumeAttempts = 0;
+
+    adapter.nativeProcess = {};
+    adapter.sharedThreadId = "thread_local";
+    adapter.state.sharedThreadId = "thread_local";
+    adapter.state.sharedSessionId = "thread_local";
+    adapter.state.status = "idle";
+    adapter.pendingTurnStart = false;
+    adapter.pendingApproval = null;
+    adapter.pendingApprovalRequest = null;
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      if (method === "thread/resume") {
+        resumeAttempts += 1;
+        if (resumeAttempts === 1) {
+          throw new Error("no rollout found for thread id thread_local");
+        }
+        return {
+          thread: {
+            id: "thread_local",
+          },
+        };
+      }
+      if (method === "turn/start") {
+        return {
+          turn: {
+            id: "turn_wechat",
+          },
+        };
+      }
+      throw new Error(`unexpected method ${method}`);
+    };
+
+    await adapter.sendInput("hello from wechat");
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+      "thread/resume",
+    ]);
+    expect(adapter.subscribedThreadIds.has("thread_local")).toBe(true);
+    expect(adapter.activeTurn).toEqual({
+      threadId: "thread_local",
+      turnId: "turn_wechat",
+      origin: "wechat",
+    });
+  });
+
   test("auto-denies Codex attempts to stage WeChat files in outbound directories", () => {
     const adapter = createBridgeAdapter({
       kind: "codex",
@@ -1976,7 +2342,7 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.state.status).toBe("busy");
   });
 
-  test("auto-resolves Codex permissions requests with an empty grant", () => {
+  test("auto-approves low-risk Codex command approvals without WeChat prompts", () => {
     const adapter = createBridgeAdapter({
       kind: "codex",
       command: "codex",
@@ -1990,6 +2356,116 @@ describe("Codex panel completion recovery", () => {
       rpcMessages.push(payload);
     };
     adapter.state.status = "busy";
+
+    adapter.handleRpcServerRequest(
+      11,
+      "item/commandExecution/requestApproval",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        command: "rg \"TODO\" src",
+        cwd: "C:\\repo",
+        availableDecisions: ["accept", "cancel"],
+      },
+    );
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 11,
+        result: { decision: "accept" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.pendingApproval).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("keeps high-risk Codex command approvals actionable through WeChat", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string; request?: unknown }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string; request?: unknown }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.rpcSocket = {
+      readyState: WebSocket.OPEN,
+      send() {},
+    };
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleRpcServerRequest(
+      12,
+      "item/commandExecution/requestApproval",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        command: "Remove-Item -Recurse C:\\temp",
+        cwd: "C:\\repo",
+        availableDecisions: ["accept", "cancel"],
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(adapter.pendingApprovalRequest).toMatchObject({
+      requestId: 12,
+      method: "item/commandExecution/requestApproval",
+    });
+    expect(adapter.pendingApproval).toMatchObject({
+      commandPreview: "Remove-Item -Recurse C:\\temp (C:\\repo)",
+    });
+    expect(rpcMessages).toEqual([]);
+    expect(adapter.state.status).toBe("awaiting_approval");
+
+    await expect(adapter.resolveApproval("confirm")).resolves.toBe(true);
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 12,
+        result: { decision: "accept" },
+      },
+    ]);
+    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("auto-denies Codex outbound attachment permission requests", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
 
     adapter.handleRpcServerRequest(
       8,
@@ -2024,6 +2500,353 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.pendingApproval).toBeNull();
     expect(adapter.state.pendingApproval).toBeUndefined();
     expect(adapter.state.status).toBe("busy");
+  });
+
+  test("auto-approves low-risk Codex permissions with strict auto review", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleRpcServerRequest(
+      13,
+      "item/permissions/requestApproval",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        cwd: "C:\\repo",
+        reason: "Need generated asset access.",
+        permissions: {
+          network: {
+            enabled: true,
+          },
+          fileSystem: {
+            read: null,
+            write: ["C:\\repo\\generated"],
+          },
+        },
+      },
+    );
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 13,
+        result: {
+          permissions: {
+            network: {
+              enabled: true,
+            },
+            fileSystem: {
+              read: null,
+              write: ["C:\\repo\\generated"],
+            },
+          },
+          scope: "turn",
+          strictAutoReview: true,
+        },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.pendingApproval).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("emits high-risk Codex permissions approvals and grants requested permissions on confirm", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string; request?: unknown }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string; request?: unknown }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.rpcSocket = {
+      readyState: WebSocket.OPEN,
+      send() {},
+    };
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleRpcServerRequest(
+      9,
+      "item/permissions/requestApproval",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        cwd: "C:\\repo",
+        reason: "Need system access.",
+        permissions: {
+          network: {
+            enabled: true,
+          },
+          fileSystem: {
+            read: null,
+            write: ["C:\\Windows\\System32"],
+          },
+        },
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(adapter.pendingApprovalRequest).toMatchObject({
+      requestId: 9,
+      method: "item/permissions/requestApproval",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    });
+    expect(adapter.pendingApproval).toMatchObject({
+      summary:
+        "Codex needs approval before granting extra permissions: Need system access.",
+      commandPreview: "network access; write: C:\\Windows\\System32",
+    });
+    expect(adapter.state.status).toBe("awaiting_approval");
+
+    await expect(adapter.resolveApproval("confirm")).resolves.toBe(true);
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 9,
+        result: {
+          permissions: {
+            network: {
+              enabled: true,
+            },
+            fileSystem: {
+              read: null,
+              write: ["C:\\Windows\\System32"],
+            },
+          },
+          scope: "turn",
+        },
+      },
+    ]);
+    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.pendingApproval).toBeNull();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("returns explicit fallback responses for unsupported Codex server tools", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+
+    adapter.handleRpcServerRequest(10, "mcpServer/elicitation/request", {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      serverName: "calendar",
+      mode: "form",
+      message: "Allow this request?",
+      requestedSchema: {
+        type: "object",
+        properties: {},
+      },
+    });
+    adapter.handleRpcServerRequest(11, "item/tool/call", {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      callId: "call_1",
+      tool: "lookup_ticket",
+      arguments: {},
+    });
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 10,
+        result: {
+          action: "decline",
+          content: null,
+          _meta: null,
+        },
+      },
+      {
+        id: 11,
+        result: {
+          contentItems: [
+            {
+              type: "inputText",
+              text: "Dynamic tool calls are not supported by the WeChat bridge.",
+            },
+          ],
+          success: false,
+        },
+      },
+    ]);
+  });
+
+  test("emits Codex user input requests and submits answers back to app-server", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string; request?: unknown }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string; request?: unknown }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleRpcServerRequest(
+      9,
+      "item/tool/requestUserInput",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        questions: [
+          {
+            id: "format",
+            header: "Format",
+            question: "Which output format should I use?",
+            options: [
+              {
+                label: "Markdown",
+                description: "Return Markdown.",
+              },
+            ],
+          },
+        ],
+      },
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "status",
+      "user_input_required",
+    ]);
+    expect(adapter.pendingUserInputRequest).toEqual({
+      requestId: 9,
+      method: "item/tool/requestUserInput",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    });
+    expect(adapter.state.status).toBe("awaiting_input");
+    expect(adapter.state.pendingUserInputOrigin).toBe("wechat");
+    expect(adapter.state.pendingUserInput).toMatchObject({
+      questions: [
+        {
+          id: "format",
+          header: "Format",
+        },
+      ],
+    });
+
+    await expect(adapter.submitUserInput({ format: ["Markdown"] })).resolves.toBe(true);
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 9,
+        result: {
+          answers: {
+            format: {
+              answers: ["Markdown"],
+            },
+          },
+        },
+      },
+    ]);
+    expect(adapter.pendingUserInputRequest).toBeNull();
+    expect(adapter.state.pendingUserInput).toBeNull();
+    expect(adapter.state.pendingUserInputOrigin).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("clears Codex user input state when the server resolves the request", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.pendingUserInputRequest = {
+      requestId: 10,
+      method: "item/tool/requestUserInput",
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.pendingUserInput = {
+      summary: "Codex needs more information before the tool can continue.",
+      questions: [
+        {
+          id: "format",
+          header: "Format",
+          question: "Which output format should I use?",
+          isOther: false,
+          isSecret: false,
+          options: null,
+        },
+      ],
+    };
+    adapter.state.pendingUserInputOrigin = "wechat";
+    adapter.state.status = "awaiting_input";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+
+    adapter.handleRpcNotification("serverRequest/resolved", {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      requestId: 10,
+    });
+
+    expect(adapter.pendingUserInputRequest).toBeNull();
+    expect(adapter.state.pendingUserInput).toBeNull();
+    expect(adapter.state.pendingUserInputOrigin).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
+    expect(events.map((event) => event.type)).toEqual(["status"]);
   });
 
   test("mirrors the first local turn after /resume before shared thread follow catches up", () => {

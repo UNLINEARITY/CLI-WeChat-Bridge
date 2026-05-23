@@ -339,6 +339,29 @@ export function containsWechatOutboundAttachmentPath(value: unknown): boolean {
   return WECHAT_OUTBOUND_ATTACHMENT_PATH_RE.test(normalized);
 }
 
+export function containsWechatOutboundAttachmentPathDeep(value: unknown): boolean {
+  const seen = new WeakSet<object>();
+
+  const visit = (candidate: unknown): boolean => {
+    if (containsWechatOutboundAttachmentPath(candidate)) {
+      return true;
+    }
+    if (!candidate || typeof candidate !== "object") {
+      return false;
+    }
+    if (seen.has(candidate)) {
+      return false;
+    }
+    seen.add(candidate);
+    if (Array.isArray(candidate)) {
+      return candidate.some((item) => visit(item));
+    }
+    return Object.values(candidate).some((item) => visit(item));
+  };
+
+  return visit(value);
+}
+
 export function isWechatOutboundAttachmentWriteCommand(command: unknown): boolean {
   return (
     typeof command === "string" &&
