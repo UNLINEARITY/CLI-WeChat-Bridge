@@ -1156,6 +1156,18 @@ function wireAdapterEvents(params: {
           }));
         }
         break;
+      case "thinking":
+        updateLastOutputAt();
+        if (event.text) {
+          const thinkingPreview = truncatePreview(event.text, 300);
+          if (thinkingPreview) {
+            stateStore.appendLog(`thinking: ${thinkingPreview}`);
+            trackWechatForwardTask((async () => {
+              await queueWechatMessage(authorizedUserId, `思考: ${thinkingPreview}`, "thinking");
+            })());
+          }
+        }
+        break;
       case "approval_required":
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           const pending = toPendingApproval(event.request);

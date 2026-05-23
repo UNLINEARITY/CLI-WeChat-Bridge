@@ -151,6 +151,11 @@ export type BridgeEvent =
       timestamp: string;
     }
   | {
+      type: "thinking";
+      text: string;
+      timestamp: string;
+    }
+  | {
       type: "approval_required";
       request: ApprovalRequest | PendingApproval;
       timestamp: string;
