@@ -64,6 +64,7 @@ const {
   buildCliEnvironment,
   buildCodexApprovalRequest,
   buildCodexCliArgs,
+  buildCodexPermissionsRequestApprovalResponse,
   buildCodexUserInputRequest,
   coerceWebSocketMessageData,
   delay,
@@ -2200,7 +2201,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   ): void {
     if (
       method !== "item/commandExecution/requestApproval" &&
-      method !== "item/fileChange/requestApproval"
+      method !== "item/fileChange/requestApproval" &&
+      method !== "item/permissions/requestApproval"
     ) {
       this.sendRpcMessage({
         id: requestId,
@@ -2219,6 +2221,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           code: -32602,
           message: "Invalid Codex approval request payload.",
         },
+      });
+      return;
+    }
+
+    if (method === "item/permissions/requestApproval") {
+      this.sendRpcMessage({
+        id: requestId,
+        result: buildCodexPermissionsRequestApprovalResponse(),
       });
       return;
     }

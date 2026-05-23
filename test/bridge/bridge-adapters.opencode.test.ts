@@ -1217,6 +1217,74 @@ describe("OpenCode permission.updated handling", () => {
     expect(internal.pendingPermission).toBeNull();
     expect(internal.state.status).toBe("busy");
   });
+
+  test("auto-rejects outbound external directory permissions from lowercase metadata paths", async () => {
+    const { events, internal } = createPermissionAdapter();
+    const responses: Array<Record<string, unknown>> = [];
+    internal.client = {
+      permission: {
+        respond: async (parameters: Record<string, unknown>) => {
+          responses.push(parameters);
+          return {
+            data: true,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    internal.handleSseEvent({
+      type: "permission.asked",
+      properties: {
+        id: "perm_outbound_dir",
+        sessionID: "session_perm_1",
+        permission: "external_directory",
+        patterns: ["C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/*"],
+        metadata: {
+          filepath:
+            "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx",
+          parentDir:
+            "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23",
+        },
+      },
+    });
+
+    await wait(10);
+
+    expect(responses).toEqual([
+      expect.objectContaining({
+        sessionID: "session_perm_1",
+        permissionID: "perm_outbound_dir",
+        response: "reject",
+      }),
+    ]);
+    expect(events.filter((e) => e.type === "approval_required")).toHaveLength(0);
+    expect(internal.pendingPermission).toBeNull();
+  });
+
+  test("keeps ordinary external directory permissions user-controlled", () => {
+    const { events, internal } = createPermissionAdapter();
+
+    internal.handleSseEvent({
+      type: "permission.asked",
+      properties: {
+        id: "perm_external_ok",
+        sessionID: "session_perm_1",
+        permission: "external_directory",
+        patterns: ["C:/Users/unlin/Desktop/*"],
+        metadata: {
+          filepath: "C:/Users/unlin/Desktop/report.docx",
+          parentDir: "C:/Users/unlin/Desktop",
+        },
+      },
+    });
+
+    const approvalEvents = events.filter((e) => e.type === "approval_required");
+    expect(approvalEvents).toHaveLength(1);
+    expect(internal.pendingPermission?.permissionId).toBe("perm_external_ok");
+  });
 });
 
 /* ------------------------------------------------------------------ */

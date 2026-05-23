@@ -407,6 +407,13 @@ export function getCodexWechatOutboundAttachmentDenyMessage(
   return null;
 }
 
+export function buildCodexPermissionsRequestApprovalResponse(): Record<string, unknown> {
+  return {
+    permissions: {},
+    scope: "turn",
+  };
+}
+
 export function buildCodexUserInputRequest(params: unknown): UserInputRequest | null {
   if (!isRecord(params) || !Array.isArray(params.questions)) {
     return null;

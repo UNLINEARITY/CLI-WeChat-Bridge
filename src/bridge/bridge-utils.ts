@@ -74,7 +74,7 @@ const WECHAT_OUTBOUND_ATTACHMENT_PATH_RE =
 const WECHAT_OUTBOUND_ATTACHMENT_WRITE_COMMAND_RE =
   /\b(cp|copy|copy-item|xcopy|robocopy|mv|move|move-item|mkdir|md|new-item|ni|set-content|add-content|out-file|write-output|touch)\b|>\s*["']?[^&|]*outbound-attachments/i;
 const WECHAT_OUTBOUND_ATTACHMENT_MUTATION_TOOL_RE =
-  /^(?:write|edit|multiedit|notebookedit|patch|create|mkdir|move|copy|file[_-]?change)$/i;
+  /^(?:write|edit|multiedit|notebookedit|patch|create|mkdir|move|copy|file[_-]?change|external_directory)$/i;
 
 const WECHAT_ATTACHMENT_KINDS = ["image", "file", "video", "voice"] as const;
 const INLINE_IMAGE_EXTENSIONS = new Set([

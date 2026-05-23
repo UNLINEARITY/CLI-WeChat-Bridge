@@ -1205,6 +1205,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       typeof metadata.path === "string" ? metadata.path : "",
       typeof metadata.file === "string" ? metadata.file : "",
       typeof metadata.filePath === "string" ? metadata.filePath : "",
+      typeof metadata.filepath === "string" ? metadata.filepath : "",
+      typeof metadata.parentDir === "string" ? metadata.parentDir : "",
       typeof metadata.target === "string" ? metadata.target : "",
       typeof metadata.detail === "string" ? metadata.detail : "",
       Array.isArray(properties.patterns)

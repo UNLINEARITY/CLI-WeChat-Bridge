@@ -218,6 +218,12 @@ describe("wechat inbound prompt injection", () => {
         "C:\\Users\\unlin\\.claude\\channels\\wechat\\outbound-attachments\\2026-05-23\\report.docx",
       ),
     ).toBe(true);
+    expect(
+      isWechatOutboundAttachmentMutationTool(
+        "external_directory",
+        "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23",
+      ),
+    ).toBe(true);
   });
 
   test("injects attachment guidance for short follow-up send commands", () => {

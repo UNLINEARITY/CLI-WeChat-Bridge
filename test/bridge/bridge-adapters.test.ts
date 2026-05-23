@@ -9,6 +9,7 @@ import {
   buildClaudeCliArgs,
   buildCodexCliArgs,
   buildCodexApprovalRequest,
+  buildCodexPermissionsRequestApprovalResponse,
   buildPtySpawnOptions,
   buildShellInputPayload,
   buildShellProfileCommand,
@@ -771,6 +772,13 @@ describe("buildCodexApprovalRequest", () => {
         },
       ),
     ).toBeNull();
+  });
+
+  test("builds an empty permissions response for Codex request_permissions prompts", () => {
+    expect(buildCodexPermissionsRequestApprovalResponse()).toEqual({
+      permissions: {},
+      scope: "turn",
+    });
   });
 });
 
@@ -1960,6 +1968,56 @@ describe("Codex panel completion recovery", () => {
       {
         id: 7,
         result: { decision: "decline" },
+      },
+    ]);
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+    expect(adapter.pendingApproval).toBeNull();
+    expect(adapter.state.pendingApproval).toBeUndefined();
+    expect(adapter.state.status).toBe("busy");
+  });
+
+  test("auto-resolves Codex permissions requests with an empty grant", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.state.status = "busy";
+
+    adapter.handleRpcServerRequest(
+      8,
+      "item/permissions/requestApproval",
+      {
+        threadId: "thread_1",
+        turnId: "turn_1",
+        itemId: "call_1",
+        cwd: "C:\\repo",
+        reason: "Select a workspace root",
+        permissions: {
+          fileSystem: {
+            read: null,
+            write: [
+              "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23",
+            ],
+          },
+        },
+      },
+    );
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 8,
+        result: {
+          permissions: {},
+          scope: "turn",
+        },
       },
     ]);
     expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
