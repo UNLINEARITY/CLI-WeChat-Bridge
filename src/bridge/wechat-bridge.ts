@@ -36,6 +36,7 @@ import {
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
+  formatThinkingForWechat,
   formatUserInputRequestMessage,
   MESSAGE_START_GRACE_MS,
   nowIso,
@@ -1159,7 +1160,7 @@ function wireAdapterEvents(params: {
       case "thinking":
         updateLastOutputAt();
         if (event.text) {
-          const thinkingPreview = truncatePreview(event.text, 300);
+          const thinkingPreview = formatThinkingForWechat(event.text, 500);
           if (thinkingPreview) {
             stateStore.appendLog(`thinking: ${thinkingPreview}`);
             trackWechatForwardTask((async () => {

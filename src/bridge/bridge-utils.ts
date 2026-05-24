@@ -208,6 +208,17 @@ export function truncatePreview(text: string, maxLength = 140): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
+export function formatThinkingForWechat(text: string, maxLength = 500): string {
+  const normalized = normalizeOutput(text).trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
 export function buildOneTimeCode(length = 6): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
