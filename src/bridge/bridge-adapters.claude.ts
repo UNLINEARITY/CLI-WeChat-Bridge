@@ -1,5 +1,6 @@
 ﻿import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { buildLocalCompanionToken } from "../companion/local-companion-link.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
@@ -61,6 +62,80 @@ const CLAUDE_COMPACT_DEDUP_MS = 2_000;
 const CLAUDE_BRACKETED_PASTE_START = "\u001b[200~";
 const CLAUDE_BRACKETED_PASTE_END = "\u001b[201~";
 const CLAUDE_REMOTE_ENTER_DELAY_MS = 40;
+const CLAUDE_STARTUP_OUTPUT_BUFFER_LIMIT = 4_000;
+
+function isClaudeWorkspaceTrustPrompt(text: string): boolean {
+  const compact = text.replace(/\s+/g, " ").trim();
+  return (
+    /Accessing workspace:/i.test(compact) &&
+    /Quick safety check:/i.test(compact) &&
+    /project you created or one you trust/i.test(compact) &&
+    /I trust this folder/i.test(compact)
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function normalizeClaudeProjectConfigKey(cwd: string): string {
+  return path.resolve(cwd).replace(/\\/g, "/");
+}
+
+export function ensureClaudeWorkspaceTrustAccepted(
+  cwd: string,
+  homeDir = process.env.USERPROFILE || process.env.HOME || os.homedir(),
+): boolean {
+  const configPath = path.join(homeDir, ".claude.json");
+  let config: Record<string, unknown> = {};
+
+  try {
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, "utf8");
+      config = raw.trim() ? JSON.parse(raw) as Record<string, unknown> : {};
+    }
+  } catch {
+    return false;
+  }
+
+  if (!isRecord(config)) {
+    return false;
+  }
+
+  const projectKey = normalizeClaudeProjectConfigKey(cwd);
+  const projects = isRecord(config.projects) ? config.projects : {};
+  const currentProject = isRecord(projects[projectKey])
+    ? projects[projectKey]
+    : {};
+  if (currentProject.hasTrustDialogAccepted === true) {
+    return false;
+  }
+
+  const nextConfig = {
+    ...config,
+    projects: {
+      ...projects,
+      [projectKey]: {
+        ...currentProject,
+        hasTrustDialogAccepted: true,
+      },
+    },
+  };
+  const tempPath = `${configPath}.tmp-${process.pid}-${Date.now()}`;
+
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(nextConfig, null, 2)}\n`, "utf8");
+    fs.renameSync(tempPath, configPath);
+    return true;
+  } catch {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best effort cleanup.
+    }
+    return false;
+  }
+}
 
 export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private hookServer: net.Server | null = null;
@@ -82,6 +157,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private workingNoticeSent = false;
   private workingNoticeDelayMs = CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS;
   private lastCompactCompletionAtMs = 0;
+  private startupOutputBuffer = "";
+  private hasAutoConfirmedWorkspaceTrustPrompt = false;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -104,6 +181,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (this.pty) {
       return;
     }
+
+    this.startupOutputBuffer = "";
+    this.hasAutoConfirmedWorkspaceTrustPrompt = false;
+    ensureClaudeWorkspaceTrustAccepted(this.options.cwd);
 
     // Validate transcript file exists before launching Claude CLI.
     // After a compact, the old transcript is deleted and the persisted
@@ -292,6 +373,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.state.lastOutputAt = nowIso();
+    if (this.maybeAutoConfirmWorkspaceTrustPrompt(text)) {
+      return;
+    }
+
     if (this.shouldTreatClaudeOutputAsCompactCompletion(text)) {
       this.completeClaudeCompact();
       return;
@@ -324,6 +409,23 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (!this.hasAcceptedInput) {
       return;
     }
+  }
+
+  private maybeAutoConfirmWorkspaceTrustPrompt(text: string): boolean {
+    if (this.hasAcceptedInput || this.hasAutoConfirmedWorkspaceTrustPrompt) {
+      return false;
+    }
+
+    this.startupOutputBuffer = `${this.startupOutputBuffer}${text}`.slice(
+      -CLAUDE_STARTUP_OUTPUT_BUFFER_LIMIT,
+    );
+    if (!isClaudeWorkspaceTrustPrompt(this.startupOutputBuffer)) {
+      return false;
+    }
+
+    this.hasAutoConfirmedWorkspaceTrustPrompt = true;
+    this.writeToPty("\r");
+    return true;
   }
 
   protected override handleExit(exitCode: number | undefined): void {

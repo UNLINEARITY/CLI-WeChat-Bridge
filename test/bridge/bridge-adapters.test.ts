@@ -35,6 +35,10 @@ import {
 } from "../../src/bridge/bridge-adapters.ts";
 import { CodexPtyAdapter } from "../../src/bridge/bridge-adapters.codex.ts";
 import {
+  ensureClaudeWorkspaceTrustAccepted,
+  normalizeClaudeProjectConfigKey,
+} from "../../src/bridge/bridge-adapters.claude.ts";
+import {
   ShellAdapter,
   ShellCommandRejectedError,
 } from "../../src/bridge/bridge-adapters.shell.ts";
@@ -1154,6 +1158,61 @@ describe("Claude CLI compatibility", () => {
     });
   });
 
+  test("marks the Claude workspace trust dialog accepted in Claude config", () => {
+    const homeDir = makeTempDirectory();
+    const cwd = path.join(homeDir, "project");
+    const projectKey = normalizeClaudeProjectConfigKey(cwd);
+    writeTextFile(
+      path.join(homeDir, ".claude.json"),
+      JSON.stringify(
+        {
+          numStartups: 3,
+          projects: {
+            [projectKey]: {
+              allowedTools: ["Read"],
+              hasTrustDialogAccepted: false,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    expect(ensureClaudeWorkspaceTrustAccepted(cwd, homeDir)).toBe(true);
+    const config = JSON.parse(
+      fs.readFileSync(path.join(homeDir, ".claude.json"), "utf8"),
+    ) as {
+      numStartups: number;
+      projects: Record<string, { allowedTools?: string[]; hasTrustDialogAccepted?: boolean }>;
+    };
+
+    expect(config.numStartups).toBe(3);
+    expect(config.projects[projectKey]).toMatchObject({
+      allowedTools: ["Read"],
+      hasTrustDialogAccepted: true,
+    });
+    expect(ensureClaudeWorkspaceTrustAccepted(cwd, homeDir)).toBe(false);
+  });
+
+  test("creates a Claude project trust entry when the config has no project yet", () => {
+    const homeDir = makeTempDirectory();
+    const cwd = path.join(homeDir, "new-project");
+    const projectKey = normalizeClaudeProjectConfigKey(cwd);
+    writeTextFile(path.join(homeDir, ".claude.json"), "{\"projects\":{}}\n");
+
+    expect(ensureClaudeWorkspaceTrustAccepted(cwd, homeDir)).toBe(true);
+    const config = JSON.parse(
+      fs.readFileSync(path.join(homeDir, ".claude.json"), "utf8"),
+    ) as {
+      projects: Record<string, { hasTrustDialogAccepted?: boolean }>;
+    };
+
+    expect(config.projects[projectKey]).toEqual({
+      hasTrustDialogAccepted: true,
+    });
+  });
+
   test("submits single-line Claude WeChat input with a delayed final enter", async () => {
     const adapter = createBridgeAdapter({
       kind: "claude",
@@ -1217,6 +1276,69 @@ describe("Claude CLI compatibility", () => {
     });
 
     await adapter.dispose();
+  });
+
+  test("auto-confirms Claude workspace trust prompt during startup", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    const writes: string[] = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+
+    adapter.handleData(
+      "Accessing workspace:\r\n\r\n C:\\Users\\unlin\r\n\r\n Quick safety check: Is this a project ",
+    );
+    expect(writes).toEqual([]);
+
+    adapter.handleData(
+      "you created or one you trust? If not, review it first.\r\n\r\n ❯ 1. Yes, I trust this folder\r\n   2. No, exit\r\n\r\n Enter to confirm · Esc to cancel",
+    );
+    adapter.handleData(
+      "you created or one you trust? If not, review it first.\r\n\r\n ❯ 1. Yes, I trust this folder\r\n   2. No, exit\r\n\r\n Enter to confirm · Esc to cancel",
+    );
+
+    expect(writes).toEqual(["\r"]);
+    expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
+  });
+
+  test("does not auto-confirm Claude workspace trust text during an active WeChat turn", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const writes: string[] = [];
+    adapter.setEventSink(() => undefined);
+    adapter.renderLocalOutput = () => undefined;
+    adapter.hasAcceptedInput = true;
+    adapter.state.status = "busy";
+    adapter.state.activeTurnOrigin = "wechat";
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+
+    adapter.handleData(
+      "Accessing workspace:\r\n\r\n C:\\Users\\unlin\r\n\r\n Quick safety check: Is this a project you created or one you trust?\r\n\r\n ❯ 1. Yes, I trust this folder\r\n   2. No, exit\r\n\r\n Enter to confirm · Esc to cancel",
+    );
+
+    expect(writes).toEqual([]);
   });
 
   test("suppresses raw Claude PTY output and waits for structured approval hooks", () => {
