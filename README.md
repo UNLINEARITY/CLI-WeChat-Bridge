@@ -142,6 +142,8 @@ wechat-daemon
 
 daemon 启动后，后续切换都可以直接从微信发起；如果对应 CLI 还没有可见窗口，daemon 会自动打开或复用它，不需要再手动运行 `wechat-codex`、`wechat-claude` 或 `wechat-opencode`。
 
+![多CLI 示例](docs/images/image-9.png)
+
 当前 daemon 行为如下：
 
 - daemon 绑定启动时的工作目录；暂不支持在微信里切换工作目录；
