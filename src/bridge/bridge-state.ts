@@ -9,6 +9,7 @@ import {
 import type {
   BridgeAdapterKind,
   BridgeLifecycleMode,
+  BridgeSessionStartMode,
   BridgeState,
   PendingApproval,
   PendingUserInputRequest,
@@ -21,6 +22,7 @@ type BridgeStateOptions = {
   cwd: string;
   profile?: string;
   lifecycle: BridgeLifecycleMode;
+  sessionStartMode?: BridgeSessionStartMode;
   authorizedUserId: string;
 };
 
@@ -283,18 +285,21 @@ export class BridgeStateStore {
 
     this.acquireLock();
 
+    const shouldRestoreSessionState = options.sessionStartMode !== "new";
     const persisted = this.readStateFile();
     const persistedSharedSessionId = resolveRestorableSharedSessionId(
-      persisted,
+      shouldRestoreSessionState ? persisted : null,
       options,
     );
     const persistedResumeConversationId =
+      shouldRestoreSessionState &&
       options.adapter === "claude" &&
       persisted?.cwd === options.cwd &&
       typeof persisted.resumeConversationId === "string"
         ? persisted.resumeConversationId
         : undefined;
     const persistedTranscriptPath =
+      shouldRestoreSessionState &&
       options.adapter === "claude" &&
       persisted?.cwd === options.cwd &&
       typeof persisted.transcriptPath === "string"

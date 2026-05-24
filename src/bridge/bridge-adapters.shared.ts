@@ -35,6 +35,7 @@ import type {
   BridgeAdapter,
   BridgeAdapterKind,
   BridgeLifecycleMode,
+  BridgeSessionStartMode,
   BridgeNoticeLevel,
   BridgeResumeSessionCandidate,
   BridgeResumeThreadCandidate,
@@ -96,6 +97,7 @@ export type AdapterOptions = {
   profile?: string;
   extraCliArgs?: string[];
   lifecycle?: BridgeLifecycleMode;
+  sessionStartMode?: BridgeSessionStartMode;
   companionLaunchMode?: "manual" | "daemon_auto";
   initialSharedSessionId?: string;
   initialSharedThreadId?: string;

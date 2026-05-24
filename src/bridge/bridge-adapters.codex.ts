@@ -162,7 +162,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   constructor(options: AdapterOptions) {
     super(options);
-    this.resumeThreadId = options.initialSharedSessionId ?? options.initialSharedThreadId ?? null;
+    this.resumeThreadId = options.sessionStartMode === "new"
+      ? null
+      : options.initialSharedSessionId ?? options.initialSharedThreadId ?? null;
     if (this.resumeThreadId && options.renderMode !== "panel") {
       this.state.sharedSessionId = this.resumeThreadId;
       this.state.sharedThreadId = this.resumeThreadId;

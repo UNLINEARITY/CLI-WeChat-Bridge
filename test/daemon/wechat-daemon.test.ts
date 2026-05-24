@@ -85,6 +85,19 @@ describe("wechat-daemon helpers", () => {
     expect(args).toContain("opencode");
   });
 
+  test("buildVisibleClientLaunchArgs can request a fresh local companion session", () => {
+    for (const adapter of ["claude", "opencode"] as const) {
+      const args = buildVisibleClientLaunchArgs({
+        adapter,
+        cwd: path.resolve("./tmp/project"),
+        sessionStartMode: "new",
+      });
+
+      expect(args).toContain("--session-start-mode");
+      expect(args).toContain("new");
+    }
+  });
+
   test("buildWindowsVisibleClientLaunchCommand opens a titled console window", () => {
     const command = buildWindowsVisibleClientLaunchCommand({
       adapter: "claude",

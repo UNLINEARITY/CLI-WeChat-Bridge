@@ -69,24 +69,33 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
 
   constructor(options: AdapterOptions) {
     this.options = options;
+    const shouldRestoreInitialSession = options.sessionStartMode !== "new";
+    const initialSharedSessionId = shouldRestoreInitialSession
+      ? options.initialSharedSessionId ?? options.initialSharedThreadId
+      : undefined;
     this.state = {
       kind: options.kind,
       status: "stopped",
       cwd: options.cwd,
       command: options.command,
       profile: options.profile,
-      sharedSessionId: options.initialSharedSessionId ?? options.initialSharedThreadId,
+      sharedSessionId: initialSharedSessionId,
       sharedThreadId:
         options.kind === "codex" || options.kind === "opencode"
-          ? options.initialSharedSessionId ?? options.initialSharedThreadId
+          ? initialSharedSessionId
           : undefined,
       activeRuntimeSessionId:
         options.kind === "claude" || options.kind === "opencode"
-          ? options.initialSharedSessionId ?? options.initialSharedThreadId
+          ? initialSharedSessionId
           : undefined,
       resumeConversationId:
-        options.kind === "claude" ? options.initialResumeConversationId : undefined,
-      transcriptPath: options.kind === "claude" ? options.initialTranscriptPath : undefined,
+        shouldRestoreInitialSession && options.kind === "claude"
+          ? options.initialResumeConversationId
+          : undefined,
+      transcriptPath:
+        shouldRestoreInitialSession && options.kind === "claude"
+          ? options.initialTranscriptPath
+          : undefined,
     };
   }
 

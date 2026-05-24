@@ -18,7 +18,10 @@ import {
   readLocalCompanionEndpoint,
   type LocalCompanionEndpoint,
 } from "./local-companion-link.ts";
-import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
+import type {
+  BridgeAdapterKind,
+  BridgeSessionStartMode,
+} from "../bridge/bridge-types.ts";
 import { runCodexRemoteClient } from "./codex-remote-client.ts";
 import { runLocalCompanion } from "./local-companion.ts";
 import {
@@ -37,6 +40,7 @@ type LocalCompanionStartCliOptions = {
   cwd: string;
   profile?: string;
   timeoutMs: number;
+  sessionStartMode: BridgeSessionStartMode;
   cliArgs: string[];
 };
 
@@ -69,6 +73,7 @@ type DecideLaunchActionInput = {
   endpoint: LocalCompanionEndpoint | null;
   endpointIsReachable: boolean;
   companionIsAlive: boolean;
+  sessionStartMode: BridgeSessionStartMode;
 };
 
 type VisibleClientRunners = {
@@ -117,6 +122,12 @@ export function formatRestartUnhealthyMessage(cwd: string): string {
   return `Detected unhealthy companion state for ${cwd}. Restarting bridge...`;
 }
 
+export function defaultSessionStartMode(
+  adapter: LocalCompanionLaunchAdapter,
+): BridgeSessionStartMode {
+  return adapter === "claude" || adapter === "opencode" ? "new" : "restore";
+}
+
 export function decideLaunchAction(
   input: DecideLaunchActionInput,
 ): LocalCompanionLaunchDecision {
@@ -138,6 +149,16 @@ export function decideLaunchAction(
       toCwd: input.requestedCwd,
       message: formatSwitchMessage(input.runningLock.cwd, input.requestedCwd),
       failureMessage: formatSwitchFailureMessage(input.runningLock.cwd),
+    };
+  }
+
+  if (
+    input.sessionStartMode === "new" &&
+    (input.requestedAdapter === "claude" || input.requestedAdapter === "opencode")
+  ) {
+    return {
+      kind: "start_bridge",
+      message: `Starting a fresh ${input.requestedAdapter} session for ${input.requestedCwd}...`,
     };
   }
 
@@ -194,7 +215,8 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
           "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...opencode args]",
           "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
           "",
-          "Starts or reuses a Codex, Claude, or OpenCode bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
+          "Starts a bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
+          "Claude and OpenCode launchers start a fresh CLI session by default.",
           "All adapters are companion-bound: closing the companion/panel also stops the bridge.",
           "Unknown arguments are forwarded to the visible CLI client.",
           "",
@@ -246,7 +268,14 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     cliArgs.push(arg);
   }
 
-  return { adapter, cwd, profile, timeoutMs, cliArgs };
+  return {
+    adapter,
+    cwd,
+    profile,
+    timeoutMs,
+    sessionStartMode: defaultSessionStartMode(adapter),
+    cliArgs,
+  };
 }
 
 function isPidAlive(pid: number): boolean {
@@ -385,6 +414,10 @@ export function buildBackgroundBridgeArgs(
     lifecycle,
   );
 
+  if (options.sessionStartMode !== "restore") {
+    args.push("--session-start-mode", options.sessionStartMode);
+  }
+
   if (options.profile) {
     args.push("--profile", options.profile);
   }
@@ -465,6 +498,7 @@ async function ensureBridgeReady(
     endpoint: endpointResult.endpoint,
     endpointIsReachable: Boolean(endpointResult.endpoint),
     companionIsAlive: isCompanionAlive(endpointResult.endpoint),
+    sessionStartMode: options.sessionStartMode,
   });
 
   log(options.adapter, decision.message);
@@ -533,6 +567,7 @@ export async function tryDelegateToDaemon(
     profile: options.profile,
     cliArgs: options.cliArgs,
     openVisible: true,
+    sessionStartMode: options.sessionStartMode,
   });
   if (!response.ok) {
     throw new Error(response.error);
@@ -561,6 +596,7 @@ export async function runVisibleClient(
   return await (runners.localCompanion ?? runLocalCompanion)({
     adapter: options.adapter,
     cwd: options.cwd,
+    sessionStartMode: options.sessionStartMode,
     cliArgs: options.cliArgs,
   });
 }

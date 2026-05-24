@@ -4,6 +4,7 @@ import net from "node:net";
 import path from "node:path";
 
 import { createBridgeAdapter } from "../bridge/bridge-adapters.ts";
+import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 import {
   LOCAL_COMPANION_RECONNECT_GRACE_MS,
 } from "../bridge/bridge-adapters.shared.ts";
@@ -27,12 +28,14 @@ function log(adapter: string, message: string): void {
 export type LocalCompanionCliOptions = {
   adapter: "codex" | "claude" | "opencode";
   cwd: string;
+  sessionStartMode?: BridgeSessionStartMode;
   cliArgs: string[];
 };
 
 function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
   let adapter: "codex" | "claude" | "opencode" | null = null;
   let cwd = process.cwd();
+  let sessionStartMode: BridgeSessionStartMode = "restore";
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -73,6 +76,15 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
       continue;
     }
 
+    if (arg === "--session-start-mode") {
+      if (!next || !["restore", "new"].includes(next)) {
+        throw new Error(`Invalid session start mode: ${next ?? "(missing)"}`);
+      }
+      sessionStartMode = next as BridgeSessionStartMode;
+      i += 1;
+      continue;
+    }
+
     cliArgs.push(arg);
   }
 
@@ -80,7 +92,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     throw new Error("Missing required --adapter <codex|claude|opencode>");
   }
 
-  return { adapter, cwd, cliArgs };
+  return { adapter, cwd, sessionStartMode, cliArgs };
 }
 
 function delay(ms: number): Promise<void> {
@@ -124,15 +136,23 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
     });
   }
 
+  const shouldRestoreInitialSession = options.sessionStartMode !== "new";
   const adapter = createBridgeAdapter({
     kind: initialEndpoint.kind,
     command: initialEndpoint.command,
     cwd: initialEndpoint.cwd,
     profile: initialEndpoint.profile,
     initialSharedSessionId:
-      initialEndpoint.sharedSessionId ?? initialEndpoint.sharedThreadId,
-    initialResumeConversationId: initialEndpoint.resumeConversationId,
-    initialTranscriptPath: initialEndpoint.transcriptPath,
+      shouldRestoreInitialSession
+        ? initialEndpoint.sharedSessionId ?? initialEndpoint.sharedThreadId
+        : undefined,
+    initialResumeConversationId: shouldRestoreInitialSession
+      ? initialEndpoint.resumeConversationId
+      : undefined,
+    initialTranscriptPath: shouldRestoreInitialSession
+      ? initialEndpoint.transcriptPath
+      : undefined,
+    sessionStartMode: options.sessionStartMode,
     renderMode: initialEndpoint.kind === "codex" ? "panel" : "companion",
     extraCliArgs: options.cliArgs,
   });

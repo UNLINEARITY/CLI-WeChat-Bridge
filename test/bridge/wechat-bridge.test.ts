@@ -21,6 +21,7 @@ describe("wechat-bridge cli helpers", () => {
     const options = parseCliArgs(["--adapter", "codex"]);
 
     expect(options.lifecycle).toBe("persistent");
+    expect(options.sessionStartMode).toBe("restore");
   });
 
   test("parseCliArgs accepts --lifecycle companion_bound", () => {
@@ -32,6 +33,17 @@ describe("wechat-bridge cli helpers", () => {
     ]);
 
     expect(options.lifecycle).toBe("companion_bound");
+  });
+
+  test("parseCliArgs accepts internal new session startup mode", () => {
+    const options = parseCliArgs([
+      "--adapter",
+      "claude",
+      "--session-start-mode",
+      "new",
+    ]);
+
+    expect(options.sessionStartMode).toBe("new");
   });
 
   test("shouldWatchParentProcess watches attached terminal bridges", () => {

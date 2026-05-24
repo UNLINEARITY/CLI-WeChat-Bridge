@@ -18,6 +18,7 @@ import type {
   BridgeAdapterKind,
   BridgeEvent,
   BridgeLifecycleMode,
+  BridgeSessionStartMode,
   BridgeTurnOrigin,
   BridgeWorkerStatus,
   PendingApproval,
@@ -67,6 +68,7 @@ type BridgeCliOptions = {
   cwd: string;
   profile?: string;
   lifecycle: BridgeLifecycleMode;
+  sessionStartMode: BridgeSessionStartMode;
 };
 
 type ActiveTask = {
@@ -311,6 +313,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
   let cwd = process.cwd();
   let profile: string | undefined;
   let lifecycle: BridgeLifecycleMode = "persistent";
+  let sessionStartMode: BridgeSessionStartMode = "restore";
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -352,6 +355,13 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
         lifecycle = next as BridgeLifecycleMode;
         i += 1;
         break;
+      case "--session-start-mode":
+        if (!next || !["restore", "new"].includes(next)) {
+          throw new Error(`Invalid session start mode: ${next ?? "(missing)"}`);
+        }
+        sessionStartMode = next as BridgeSessionStartMode;
+        i += 1;
+        break;
       case "--shutdown-on-parent-exit":
         lifecycle = "companion_bound";
         break;
@@ -375,13 +385,14 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
     cwd,
     profile,
     lifecycle,
+    sessionStartMode,
   };
 }
 
 function printUsageAndExit(): never {
   process.stdout.write(
     [
-      "Usage: wechat-bridge --adapter <codex|claude|opencode|shell> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>]",
+      "Usage: wechat-bridge --adapter <codex|claude|opencode|shell> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>] [--session-start-mode <restore|new>]",
       "",
       "Examples:",
       "  wechat-bridge-codex",
@@ -488,6 +499,7 @@ async function main(): Promise<void> {
     cwd: options.cwd,
     profile: options.profile,
     lifecycle: options.lifecycle,
+    sessionStartMode: options.sessionStartMode,
     initialSharedSessionId:
       stateStore.getState().sharedSessionId ?? stateStore.getState().sharedThreadId,
     initialResumeConversationId: stateStore.getState().resumeConversationId,

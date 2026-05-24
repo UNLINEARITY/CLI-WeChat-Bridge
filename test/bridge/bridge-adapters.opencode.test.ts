@@ -147,9 +147,57 @@ describe("OpenCodeServerAdapter initial state", () => {
     await expect(internal.buildNativeAttachArgs()).resolves.toEqual([
       "attach",
       "http://127.0.0.1:8123",
+      "--dir",
+      process.cwd(),
       "--theme",
       "system",
     ]);
+  });
+
+  test("passes the active session and cwd to the native attach client", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      serverPort: number;
+      activeSessionId: string | null;
+      client: {
+        session: {
+          get(options: { sessionID: string }): Promise<unknown>;
+        };
+      };
+      buildNativeAttachArgs(): Promise<string[]>;
+      buildNativeClientEnv(): Record<string, string>;
+    };
+
+    internal.serverPort = 8123;
+    internal.activeSessionId = "ses_fresh";
+    internal.client = {
+      session: {
+        get: async ({ sessionID }) => ({
+          data: createSdkSessionRecord(sessionID),
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+      },
+    };
+
+    await expect(internal.buildNativeAttachArgs()).resolves.toEqual([
+      "attach",
+      "http://127.0.0.1:8123",
+      "--dir",
+      process.cwd(),
+      "--session",
+      "ses_fresh",
+    ]);
+    expect(JSON.parse(internal.buildNativeClientEnv().OPENCODE_ROUTE)).toEqual({
+      type: "session",
+      sessionID: "ses_fresh",
+    });
   });
 });
 
@@ -171,6 +219,67 @@ describe("OpenCode startup session restore", () => {
       },
     };
   }
+
+  test("starts a fresh session when requested by the start launcher", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      sessionStartMode: "new",
+      initialSharedSessionId: "session_old",
+    });
+    const calls: string[] = [];
+    const internal = adapter as unknown as {
+      client: {
+        session: {
+          list(): Promise<unknown>;
+          create(options?: Record<string, unknown>): Promise<unknown>;
+        };
+      };
+      activeSessionId: string | null;
+      state: {
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+        lastSessionSwitchSource?: string;
+        lastSessionSwitchReason?: string;
+      };
+      initializeSessions(): Promise<void>;
+    };
+
+    internal.client = {
+      session: {
+        list: async () => {
+          calls.push("list");
+          return {
+            data: [createSdkSession("session_old")],
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+        create: async (options = {}) => {
+          calls.push(`create:${options.directory ?? ""}`);
+          return {
+            data: createSdkSession("session_fresh"),
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    await internal.initializeSessions();
+
+    expect(calls).toEqual([`create:${process.cwd()}`]);
+    expect(internal.activeSessionId).toBe("session_fresh");
+    expect(internal.state.sharedSessionId).toBe("session_fresh");
+    expect(internal.state.sharedThreadId).toBe("session_fresh");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_fresh");
+    expect(internal.state.lastSessionSwitchSource).toBeUndefined();
+    expect(internal.state.lastSessionSwitchReason).toBeUndefined();
+  });
 
   test("keeps the latest live session when the persisted shared session is gone", async () => {
     const adapter = new OpenCodeServerAdapter({

@@ -6,6 +6,7 @@ import {
   DAEMON_ENDPOINT_FILE,
   ensureChannelDataDir,
 } from "../wechat/channel-config.ts";
+import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode";
@@ -43,6 +44,7 @@ export type DaemonRequest =
       profile?: string;
       cliArgs?: string[];
       openVisible?: boolean;
+      sessionStartMode?: BridgeSessionStartMode;
     }
   | {
       command: "switch_adapter";
@@ -50,6 +52,7 @@ export type DaemonRequest =
       profile?: string;
       cliArgs?: string[];
       openVisible?: boolean;
+      sessionStartMode?: BridgeSessionStartMode;
     }
   | { command: "status" }
   | { command: "shutdown" };

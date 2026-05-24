@@ -162,9 +162,16 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
   constructor(options: AdapterOptions) {
     super(options);
-    this.runtimeSessionId = options.initialSharedSessionId ?? options.initialSharedThreadId ?? null;
-    this.resumeConversationId = options.initialResumeConversationId ?? null;
-    this.transcriptPath = options.initialTranscriptPath ?? null;
+    const shouldRestoreInitialSession = options.sessionStartMode !== "new";
+    this.runtimeSessionId = shouldRestoreInitialSession
+      ? options.initialSharedSessionId ?? options.initialSharedThreadId ?? null
+      : null;
+    this.resumeConversationId = shouldRestoreInitialSession
+      ? options.initialResumeConversationId ?? null
+      : null;
+    this.transcriptPath = shouldRestoreInitialSession
+      ? options.initialTranscriptPath ?? null
+      : null;
     if (this.runtimeSessionId) {
       this.state.sharedSessionId = this.runtimeSessionId;
       this.state.activeRuntimeSessionId = this.runtimeSessionId;

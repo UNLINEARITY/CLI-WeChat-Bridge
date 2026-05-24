@@ -214,6 +214,7 @@ const OPENCODE_DUPLICATE_EVENT_TTL_MS = 150;
 const OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS = 30_000;
 const OPENCODE_RECENT_LOCAL_PROMPT_TTL_MS = 10_000;
 const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
+const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 
 /* ------------------------------------------------------------------ */
 /*  Adapter                                                            */
@@ -311,7 +312,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.startSseListener();
       if (this.options.renderMode === "companion") {
         await this.startNativeClient();
-        await this.syncVisibleSessionToShared({ force: true });
+        await this.syncVisibleSessionToShared({ force: true, retry: true });
       } else {
         this.state.pid = serverProcess.pid;
         this.state.startedAt = nowIso();
@@ -420,6 +421,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       clearTrackedTurn: true,
       syncVisible: true,
       forceVisibleSync: true,
+      retryVisibleSync: true,
     });
   }
 
@@ -630,7 +632,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const env = buildCliEnvironment(this.options.kind);
+    const env = this.buildNativeClientEnv();
     const attachArgs = await this.buildNativeAttachArgs();
     const target = resolveSpawnTarget(this.options.command, this.options.kind, { env });
     const startedAt = nowIso();
@@ -680,12 +682,24 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async buildNativeAttachArgs(): Promise<string[]> {
     const args = ["attach", this.getServerUrl()];
+    args.push("--dir", this.options.cwd);
     const sessionId = this.activeSessionId;
     if (sessionId && (await this.hasSession(sessionId))) {
       args.push("--session", sessionId);
     }
     args.push(...(this.options.extraCliArgs ?? []));
     return args;
+  }
+
+  private buildNativeClientEnv(): Record<string, string> {
+    const env = buildCliEnvironment(this.options.kind);
+    if (this.activeSessionId) {
+      env.OPENCODE_ROUTE = JSON.stringify({
+        type: "session",
+        sessionID: this.activeSessionId,
+      });
+    }
+    return env;
   }
 
   private async createSdkClient(): Promise<void> {
@@ -714,6 +728,24 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async initializeSessions(): Promise<void> {
     if (!this.client) {
+      return;
+    }
+
+    if (this.options.sessionStartMode === "new") {
+      const session = this.unwrapOrThrow(
+        await this.client.session.create({
+          directory: this.options.cwd,
+          workspace: this.activeWorkspaceId ?? undefined,
+        }),
+      );
+      this.switchSharedSession(session, {
+        source: "local",
+        reason: "local_follow",
+        syncVisible: false,
+      });
+      this.state.lastSessionSwitchAt = undefined;
+      this.state.lastSessionSwitchSource = undefined;
+      this.state.lastSessionSwitchReason = undefined;
       return;
     }
 
@@ -2512,6 +2544,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       clearTrackedTurn?: boolean;
       syncVisible?: boolean;
       forceVisibleSync?: boolean;
+      retryVisibleSync?: boolean;
     },
   ): boolean {
     const sessionId = typeof session === "string" ? session : session.id;
@@ -2527,12 +2560,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.recordSessionSwitch(sessionId, options.source, options.reason, options.notify);
     }
     if (options.syncVisible !== false && (changed || options.forceVisibleSync)) {
-      void this.syncVisibleSessionSelection(typeof session === "string" ? { id: session } : session);
+      void this.syncVisibleSessionSelection(typeof session === "string" ? { id: session } : session, {
+        retry: options.retryVisibleSync,
+      });
     }
     return changed;
   }
 
-  private async syncVisibleSessionToShared(options: { force?: boolean } = {}): Promise<void> {
+  private async syncVisibleSessionToShared(
+    options: { force?: boolean; retry?: boolean } = {},
+  ): Promise<void> {
     if (!this.activeSessionId) {
       return;
     }
@@ -2542,7 +2579,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         id: this.activeSessionId,
         workspaceID: this.activeWorkspaceId ?? undefined,
       },
-      { force: options.force },
+      { force: options.force, retry: options.retry },
     );
   }
 
@@ -2550,6 +2587,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     session: { id: string; workspaceID?: string },
     options: {
       force?: boolean;
+      retry?: boolean;
     } = {},
   ): Promise<void> {
     if (
@@ -2566,13 +2604,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     );
 
     try {
-      const result = await this.client.tui.selectSession({
-        directory: this.options.cwd,
-        workspace: session.workspaceID ?? this.activeWorkspaceId ?? undefined,
-        sessionID: session.id,
-      });
-      if (result.error !== undefined) {
-        throw result.error;
+      await this.sendVisibleSessionSelection(session);
+      if (options.retry === true) {
+        this.scheduleVisibleSessionSelectionRetries(session);
       }
     } catch (err) {
       if (this.suppressedTuiSessionSelectId === session.id) {
@@ -2581,6 +2615,44 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.logDebug(
         `[opencode-adapter:tui] selectSession failed for ${session.id}: ${describeUnknownError(err)}`,
       );
+    }
+  }
+
+  private async sendVisibleSessionSelection(
+    session: { id: string; workspaceID?: string },
+  ): Promise<void> {
+    if (!this.client?.tui) {
+      return;
+    }
+
+    const result = await this.client.tui.selectSession({
+      directory: this.options.cwd,
+      workspace: session.workspaceID ?? this.activeWorkspaceId ?? undefined,
+      sessionID: session.id,
+    });
+    if (result.error !== undefined) {
+      throw result.error;
+    }
+  }
+
+  private scheduleVisibleSessionSelectionRetries(
+    session: { id: string; workspaceID?: string },
+  ): void {
+    for (const retryDelayMs of OPENCODE_TUI_SELECT_RETRY_DELAYS_MS) {
+      setTimeout(() => {
+        if (
+          this.shuttingDown ||
+          this.options.renderMode !== "companion" ||
+          this.activeSessionId !== session.id
+        ) {
+          return;
+        }
+        void this.sendVisibleSessionSelection(session).catch((err) => {
+          this.logDebug(
+            `[opencode-adapter:tui] selectSession retry failed for ${session.id}: ${describeUnknownError(err)}`,
+          );
+        });
+      }, retryDelayMs).unref?.();
     }
   }
 

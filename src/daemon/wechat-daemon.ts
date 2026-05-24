@@ -27,6 +27,7 @@ import {
 import type {
   BridgeAdapter,
   BridgeEvent,
+  BridgeSessionStartMode,
   PendingApproval,
   PendingUserInputRequest,
   UserInputRequest,
@@ -303,6 +304,7 @@ function prefixDaemonAdapterMessage(adapter: DaemonAdapterKind, text: string): s
 export function buildVisibleClientLaunchArgs(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
+  sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
 }): string[] {
   const entryPath =
@@ -326,6 +328,9 @@ export function buildVisibleClientLaunchArgs(params: {
   args.push(entryPath);
   if (params.adapter !== "codex") {
     args.push("--adapter", params.adapter);
+  }
+  if (params.sessionStartMode && params.sessionStartMode !== "restore") {
+    args.push("--session-start-mode", params.sessionStartMode);
   }
   args.push("--cwd", params.cwd, ...(params.cliArgs ?? []));
   return args;
@@ -359,6 +364,7 @@ function formatLaunchPreview(launch: VisibleClientLaunch): string {
 function openVisibleClient(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
+  sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
   onError?: (error: Error) => void;
 }): VisibleClientLaunch {
@@ -795,12 +801,14 @@ class WechatDaemon {
           profile: request.profile,
           cliArgs: request.cliArgs,
           openVisible: request.openVisible ?? true,
+          sessionStartMode: request.sessionStartMode,
         });
       case "switch_adapter":
         return await this.ensureSlot(request.adapter, {
           profile: request.profile,
           cliArgs: request.cliArgs,
           openVisible: request.openVisible ?? true,
+          sessionStartMode: request.sessionStartMode,
         });
     }
   }
@@ -811,6 +819,7 @@ class WechatDaemon {
       profile?: string;
       cliArgs?: string[];
       openVisible?: boolean;
+      sessionStartMode?: BridgeSessionStartMode;
     } = {},
   ): Promise<{
     activeAdapter: DaemonAdapterKind;
@@ -823,6 +832,7 @@ class WechatDaemon {
     if (!slot) {
       slot = await this.createSlot(adapter, {
         profile: options.profile ?? this.profile,
+        sessionStartMode: options.sessionStartMode,
       });
       this.slots.set(adapter, slot);
       created = true;
@@ -831,10 +841,21 @@ class WechatDaemon {
     this.activeAdapter = adapter;
     let openedVisible = false;
     let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
+    if (
+      !created &&
+      options.sessionStartMode === "new" &&
+      (adapter === "claude" || adapter === "opencode") &&
+      visibleConnected
+    ) {
+      await this.startFreshSlotSession(slot);
+      appendDaemonLog(`fresh_session_started: adapter=${adapter} source=start_command`);
+    }
+
     if (options.openVisible !== false && !visibleConnected) {
       const launch = openVisibleClient({
         adapter,
         cwd: this.cwd,
+        sessionStartMode: options.sessionStartMode,
         cliArgs: options.cliArgs,
         onError: (error) => {
           appendDaemonLog(
@@ -876,7 +897,7 @@ class WechatDaemon {
 
   private async createSlot(
     adapter: DaemonAdapterKind,
-    options: { profile?: string },
+    options: { profile?: string; sessionStartMode?: BridgeSessionStartMode },
   ): Promise<DaemonSlot> {
     clearLocalCompanionEndpoint(this.cwd, undefined, { adapter });
     const runtime = createRuntimeHost({
@@ -885,6 +906,7 @@ class WechatDaemon {
       cwd: this.cwd,
       profile: options.profile,
       lifecycle: "persistent",
+      sessionStartMode: options.sessionStartMode,
       companionLaunchMode: "daemon_auto",
     });
     const controller = new BridgeController(runtime, this.cwd);
@@ -913,6 +935,25 @@ class WechatDaemon {
       `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.cwd}`,
     );
     return slot;
+  }
+
+  private async startFreshSlotSession(slot: DaemonSlot): Promise<void> {
+    await slot.outputBatcher.flushNow();
+    slot.outputBatcher.clear();
+    slot.pendingConfirmation = null;
+    slot.pendingUserInput = null;
+    slot.activeTask = null;
+
+    if (slot.adapter === "claude") {
+      await slot.runtime.reset();
+    } else if (slot.adapter === "opencode") {
+      if (!slot.runtime.createSession) {
+        throw new Error("/new is not available in opencode mode.");
+      }
+      await slot.runtime.createSession();
+    }
+
+    slot.controller.syncLocalClientEndpoint();
   }
 
   private handleSlotEvent(slot: DaemonSlot, event: BridgeEvent): void {

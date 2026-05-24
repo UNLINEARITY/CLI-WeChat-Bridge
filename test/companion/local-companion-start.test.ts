@@ -26,6 +26,7 @@ describe("local-companion-start helpers", () => {
     expect(options.adapter).toBe("codex");
     expect(options.cwd).toBe(process.cwd());
     expect(options.timeoutMs).toBe(15000);
+    expect(options.sessionStartMode).toBe("restore");
     expect(options.cliArgs).toEqual([]);
   });
 
@@ -48,6 +49,7 @@ describe("local-companion-start helpers", () => {
     expect(options.cwd).toBe(path.resolve("./tmp/project"));
     expect(options.profile).toBe("work");
     expect(options.timeoutMs).toBe(25000);
+    expect(options.sessionStartMode).toBe("new");
     expect(options.cliArgs).toEqual([
       "--model",
       "sonnet",
@@ -61,6 +63,7 @@ describe("local-companion-start helpers", () => {
       cwd: path.resolve("./tmp/project"),
       profile: "work",
       timeoutMs: 15000,
+      sessionStartMode: "restore",
     });
 
     expect(args).toEqual([
@@ -83,6 +86,7 @@ describe("local-companion-start helpers", () => {
       adapter: "claude",
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
+      sessionStartMode: "new",
     });
 
     expect(args).toEqual([
@@ -95,6 +99,8 @@ describe("local-companion-start helpers", () => {
       path.resolve("./tmp/project"),
       "--lifecycle",
       "companion_bound",
+      "--session-start-mode",
+      "new",
     ]);
   });
 
@@ -103,6 +109,7 @@ describe("local-companion-start helpers", () => {
       adapter: "opencode",
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
+      sessionStartMode: "new",
     });
 
     expect(args).toEqual([
@@ -115,6 +122,8 @@ describe("local-companion-start helpers", () => {
       path.resolve("./tmp/project"),
       "--lifecycle",
       "companion_bound",
+      "--session-start-mode",
+      "new",
     ]);
   });
 
@@ -123,6 +132,7 @@ describe("local-companion-start helpers", () => {
       adapter: "codex",
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
+      sessionStartMode: "restore",
     });
 
     expect(args).toEqual([
@@ -144,6 +154,7 @@ describe("local-companion-start helpers", () => {
         adapter: "codex",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        sessionStartMode: "restore",
         cliArgs: ["--yolo"],
       },
       {
@@ -215,6 +226,7 @@ describe("local-companion-start helpers", () => {
         cwd,
         profile: "work",
         timeoutMs: 15000,
+        sessionStartMode: "new",
         cliArgs: ["--mode", "build"],
       },
       {
@@ -236,6 +248,7 @@ describe("local-companion-start helpers", () => {
         profile: "work",
         cliArgs: ["--mode", "build"],
         openVisible: true,
+        sessionStartMode: "new",
       },
     ]);
   });
@@ -256,6 +269,7 @@ describe("local-companion-start helpers", () => {
           adapter: "codex",
           cwd: "D:/work/project-b",
           timeoutMs: 15000,
+          sessionStartMode: "restore",
           cliArgs: [],
         },
         {
@@ -282,6 +296,7 @@ describe("local-companion-start helpers", () => {
         adapter: "codex",
         cwd: endpoint.cwd,
         timeoutMs: 15000,
+        sessionStartMode: "restore",
         cliArgs: [],
       },
       {
@@ -304,6 +319,7 @@ describe("local-companion-start helpers", () => {
         adapter: "opencode",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        sessionStartMode: "new",
         cliArgs: ["--mode", "build"],
       },
       {
@@ -322,6 +338,7 @@ describe("local-companion-start helpers", () => {
       {
         adapter: "opencode",
         cwd: path.resolve("./tmp/project"),
+        sessionStartMode: "new",
         cliArgs: ["--mode", "build"],
       },
     ]);
@@ -334,6 +351,7 @@ describe("local-companion-start helpers", () => {
         adapter: "claude",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        sessionStartMode: "new",
         cliArgs: ["--debug"],
       },
       {
@@ -352,6 +370,7 @@ describe("local-companion-start helpers", () => {
       {
         adapter: "claude",
         cwd: path.resolve("./tmp/project"),
+        sessionStartMode: "new",
         cliArgs: ["--debug"],
       },
     ]);
@@ -362,6 +381,7 @@ describe("local-companion-start helpers", () => {
       adapter: "codex",
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
+      sessionStartMode: "restore",
     });
 
     expect(args).toEqual([
@@ -418,6 +438,7 @@ describe("local-companion-start helpers", () => {
       },
       endpointIsReachable: true,
       companionIsAlive: true,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
@@ -454,6 +475,7 @@ describe("local-companion-start helpers", () => {
       },
       endpointIsReachable: true,
       companionIsAlive: false,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
@@ -480,6 +502,7 @@ describe("local-companion-start helpers", () => {
       endpoint: null,
       endpointIsReachable: false,
       companionIsAlive: false,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
@@ -506,6 +529,7 @@ describe("local-companion-start helpers", () => {
       endpoint: null,
       endpointIsReachable: false,
       companionIsAlive: false,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
@@ -535,6 +559,7 @@ describe("local-companion-start helpers", () => {
       endpoint: null,
       endpointIsReachable: false,
       companionIsAlive: false,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
@@ -576,11 +601,52 @@ describe("local-companion-start helpers", () => {
       },
       endpointIsReachable: true,
       companionIsAlive: true,
+      sessionStartMode: "restore",
     });
 
     expect(decision).toEqual({
       kind: "restart_unhealthy",
       message: formatRestartUnhealthyMessage("D:/work/project"),
+    });
+  });
+
+  test("same workspace start request replaces Claude when a fresh session is requested", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "claude",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "claude",
+        command: "claude",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockShouldAutoReclaim: false,
+      endpoint: {
+        protocolVersion: 2,
+        runtimeKind: "legacy_adapter",
+        instanceId: "bridge-1",
+        kind: "claude",
+        port: 8123,
+        token: "token",
+        cwd: "D:/work/project",
+        command: "claude",
+        startedAt: "2026-03-28T00:01:00.000Z",
+        companionPid: 456,
+        companionConnectedAt: "2026-03-28T00:02:00.000Z",
+        companionStatus: "idle",
+      },
+      endpointIsReachable: true,
+      companionIsAlive: true,
+      sessionStartMode: "new",
+    });
+
+    expect(decision).toEqual({
+      kind: "start_bridge",
+      message: "Starting a fresh claude session for D:/work/project...",
     });
   });
 });

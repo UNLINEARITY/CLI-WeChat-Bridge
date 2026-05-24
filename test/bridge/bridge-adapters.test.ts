@@ -1158,6 +1158,24 @@ describe("Claude CLI compatibility", () => {
     });
   });
 
+  test("ignores saved Claude resume ids when start launcher requests a fresh session", () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+      sessionStartMode: "new",
+      initialSharedSessionId: "runtime-session-123",
+      initialResumeConversationId: "resume-conversation-456",
+      initialTranscriptPath: "/tmp/resume-conversation-456.jsonl",
+    });
+
+    expect(adapter.getState().sharedSessionId).toBeUndefined();
+    expect(adapter.getState().activeRuntimeSessionId).toBeUndefined();
+    expect(adapter.getState().resumeConversationId).toBeUndefined();
+    expect(adapter.getState().transcriptPath).toBeUndefined();
+  });
+
   test("marks the Claude workspace trust dialog accepted in Claude config", () => {
     const homeDir = makeTempDirectory();
     const cwd = path.join(homeDir, "project");
