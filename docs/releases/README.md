@@ -4,6 +4,16 @@
 
 ## 版本列表
 
+### [v1.0.7](./1.0.7.md) / [中文说明](./1.0.7_CN.md)
+**daemon 切换可靠性 + fresh session 启动 + 文档拆分** - 修复可见 CLI 连接失败后污染 active adapter 的问题，Codex endpoint 丢失后可重新发布并恢复连接，daemon 启动会清理同工作区残留 peer，同时 Claude Code / OpenCode 启动器默认进入 fresh session
+- **daemon 切换保护**：`/codex`、`/claude`、`/opencode` 只有在可见 CLI 成功连接后才会激活目标 adapter；失败时保留原 active adapter 并记录 `activated`、`previous_active` 和 `session_start_mode`
+- **Codex 可见端重连**：复用已有 Codex slot 前会重新发布 local companion endpoint，避免 endpoint 文件被删除后 remote client 直接退出
+- **daemon 启动清理**：即使 `daemon-endpoint.json` 缺失或 pid 指错，也会扫描并清理同 cwd 的 `wechat-daemon` peer 进程
+- **fresh session 默认值**：`wechat-claude-start`、`wechat-opencode-start` 和 daemon 新建 Claude/OpenCode slot 默认创建新会话，避免误恢复旧 session
+- **Claude / OpenCode 启动细节**：Claude 自动处理 workspace trust prompt；OpenCode attach 会携带目录和 active session route，并重试 TUI session 选择
+- **代码与文档清理**：删除旧 standalone Claude bot、旧 Codex panel IPC 和未使用 media transport，移除过期依赖，新增 `CONTRIBUTING.md`，并把配置、排查、开发说明拆分到独立文档
+- **统计**：34 个文件，新增 2,175 行，删除 1,371 行
+
 ### [v1.0.6](./1.0.6.md) / [中文说明](./1.0.6_CN.md)
 **审批体验 + 微信附件发送保护** - 低风险 Codex / Claude 查找读取操作自动通过，高风险操作继续进入微信审批，并阻止 Claude、Codex、OpenCode 把待发送文件错误 staging 到 `.claude`、`.cli-bridge` 或 `outbound-attachments` 目录
 - **Codex 审批链路**：命令、文件变更、权限请求和 `request_user_input` 现在由 bridge 接管，低风险自动通过，高风险转发到微信，追问可用 `/answer` 回复
@@ -121,6 +131,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.7 | 2026-05-26 | daemon 切换失败不再污染 active adapter，Codex endpoint 丢失可恢复，旧 daemon peer 自动清理，Claude/OpenCode 默认 fresh session，文档拆分与旧代码清理 | 34 个文件，+2,175/-1,371 |
 | 1.0.6 | 2026-05-23 | Codex / Claude 低风险审批自动通过、微信附件发送 staging 保护、Codex `/answer` 用户输入回传 | 15 个文件，+2,739/-132 |
 | 1.0.5 | 2026-05-22 | 常驻 daemon、多 CLI 微信切换、短 npm 包名、`.cli-bridge` 自动迁移、入站附件落盘与 stale context token 诊断 | 32 个文件，+4,703/-178 |
 | 1.0.4 | 2026-05-16 | 桥接回复可靠性、源码质量门禁、真实全局 npm 安装烟测与 README 工作流刷新 | 36 个文件，+3,354/-1,009 |
