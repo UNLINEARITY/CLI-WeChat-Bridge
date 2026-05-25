@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 export type BridgeProcessRecord = {
   pid: number;
@@ -43,6 +44,40 @@ export function isWechatBridgeCommandLine(commandLine: string): boolean {
 
 export function isWechatDaemonCommandLine(commandLine: string): boolean {
   return /wechat-daemon\.(?:ts|js|mjs)/i.test(commandLine);
+}
+
+function normalizeComparablePath(filePath: string): string {
+  const normalized = path.resolve(filePath);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function extractCommandLineOption(
+  commandLine: string,
+  optionName: string,
+): string | null {
+  const escaped = optionName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(
+    `(?:^|\\s|["'])--${escaped}(?:(?:["']?\\s+)|=)(?:"([^"]+)"|'([^']+)'|(\\S+))`,
+    "i",
+  );
+  const match = pattern.exec(commandLine);
+  return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
+}
+
+export function isWechatDaemonCommandLineForCwd(
+  commandLine: string,
+  cwd: string,
+): boolean {
+  if (!isWechatDaemonCommandLine(commandLine)) {
+    return false;
+  }
+
+  const commandCwd = extractCommandLineOption(commandLine, "cwd");
+  if (!commandCwd) {
+    return true;
+  }
+
+  return normalizeComparablePath(commandCwd) === normalizeComparablePath(cwd);
 }
 
 /**
@@ -230,6 +265,22 @@ export function getProcessRecordByPid(
     return null;
   }
   return listAllProcessesRaw(currentPid).find((record) => record.pid === pid) ?? null;
+}
+
+export function listWechatDaemonProcesses(params: {
+  cwd?: string;
+  currentPid?: number;
+  excludePids?: Iterable<number>;
+} = {}): BridgeProcessRecord[] {
+  const currentPid = params.currentPid ?? process.pid;
+  const excludePids = new Set(params.excludePids ?? []);
+  return listAllProcessesRaw(currentPid)
+    .filter((record) => !excludePids.has(record.pid))
+    .filter((record) =>
+      params.cwd
+        ? isWechatDaemonCommandLineForCwd(record.commandLine, params.cwd)
+        : isWechatDaemonCommandLine(record.commandLine),
+    );
 }
 
 /**

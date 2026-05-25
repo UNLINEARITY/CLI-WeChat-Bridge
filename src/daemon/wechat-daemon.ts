@@ -21,9 +21,11 @@ import {
   type BridgeLockPayload,
 } from "../bridge/bridge-state.ts";
 import {
+  type BridgeProcessRecord,
   getProcessRecordByPid,
   isWechatDaemonCommandLine,
   killProcessTreeSync,
+  listWechatDaemonProcesses,
   reapOrphanedOpencodeProcesses,
   reapPeerBridgeProcesses,
 } from "../bridge/bridge-process-reaper.ts";
@@ -546,7 +548,22 @@ export function formatDaemonSwitchResultDetail(result: {
   created: boolean;
   openedVisible: boolean;
   visibleConnected: boolean;
+  activated?: boolean;
+  previousActiveAdapter?: DaemonAdapterKind;
 }): string {
+  if (result.activated === false) {
+    const previous = result.previousActiveAdapter
+      ? ` Active terminal remains ${result.previousActiveAdapter}.`
+      : " No terminal is active yet.";
+    if (result.openedVisible) {
+      return result.created
+        ? `Started the bridge slot and tried to open the visible CLI, but it has not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`
+        : `Tried to open a visible CLI for the existing slot, but it has not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
+    }
+
+    return `The visible CLI is not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
+  }
+
   if (result.openedVisible && result.visibleConnected) {
     return result.created
       ? "Started a new visible CLI."
@@ -869,7 +886,10 @@ class WechatDaemon {
     created: boolean;
     openedVisible: boolean;
     visibleConnected: boolean;
+    activated: boolean;
+    previousActiveAdapter?: DaemonAdapterKind;
   }> {
+    const previousActiveAdapter = this.activeAdapter ?? undefined;
     let slot = this.slots.get(adapter);
     let created = false;
     if (!slot) {
@@ -883,7 +903,6 @@ class WechatDaemon {
       created = true;
     }
 
-    this.activeAdapter = adapter;
     let openedVisible = false;
     let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
     const sessionStartMode = resolveDaemonSessionStartMode({
@@ -906,6 +925,7 @@ class WechatDaemon {
     }
 
     if (options.openVisible !== false && !visibleConnected) {
+      slot.controller.syncLocalClientEndpoint();
       const launch = openVisibleClient({
         adapter,
         cwd: this.cwd,
@@ -938,14 +958,21 @@ class WechatDaemon {
       }
     }
 
+    const activated = options.openVisible === false || visibleConnected;
+    if (activated) {
+      this.activeAdapter = adapter;
+    }
+
     appendDaemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} session_start_mode=${sessionStartMode}`,
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
     );
     return {
       activeAdapter: adapter,
       created,
       openedVisible,
       visibleConnected,
+      activated,
+      previousActiveAdapter,
     };
   }
 
@@ -1256,9 +1283,12 @@ class WechatDaemon {
         reuseExistingVisible: true,
       });
       const detail = formatDaemonSwitchResultDetail(result);
+      const heading = result.activated
+        ? `Active terminal: ${switchAdapter}.`
+        : `Could not activate terminal: ${switchAdapter}.`;
       await this.queueWechatMessage(
         message.senderId,
-        `Active terminal: ${switchAdapter}.\n${detail}`,
+        `${heading}\n${detail}`,
       );
       return;
     }
@@ -1668,6 +1698,7 @@ export type DaemonCleanupResult =
   | { action: "stopped"; endpoint: DaemonEndpoint; forced: boolean };
 
 type DaemonCleanupDeps = {
+  cwd?: string;
   readEndpoint?: () => DaemonEndpoint | null;
   isAlive?: (pid: number) => boolean;
   sendRequest?: (
@@ -1679,8 +1710,10 @@ type DaemonCleanupDeps = {
   clearEndpoint?: (pid?: number) => void;
   clearWorkspaceEndpoints?: (endpoint: DaemonEndpoint) => void;
   isDaemonProcess?: (endpoint: DaemonEndpoint) => boolean;
+  listDaemonProcesses?: (cwd: string) => BridgeProcessRecord[];
   sleep?: (ms: number) => Promise<void>;
   log?: (message: string) => void;
+  daemonLog?: (message: string) => void;
   stopTimeoutMs?: number;
   forceStopTimeoutMs?: number;
   pollMs?: number;
@@ -1697,6 +1730,64 @@ function isEndpointDaemonProcess(endpoint: DaemonEndpoint): boolean {
   return Boolean(record && isWechatDaemonCommandLine(record.commandLine));
 }
 
+function selectDaemonProcessesToStop(
+  records: BridgeProcessRecord[],
+  excludedPids: Set<number>,
+): BridgeProcessRecord[] {
+  const recordPids = new Set(records.map((record) => record.pid));
+  return records.filter((record) => {
+    if (excludedPids.has(record.pid)) {
+      return false;
+    }
+
+    return !records.some(
+      (candidate) =>
+        candidate.parentPid === record.pid &&
+        recordPids.has(candidate.pid) &&
+        !excludedPids.has(candidate.pid),
+    );
+  });
+}
+
+async function stopDaemonPeerProcesses(params: {
+  cwd: string;
+  listDaemonProcesses: (cwd: string) => BridgeProcessRecord[];
+  killProcess: (pid: number) => void;
+  isAlive: (pid: number) => boolean;
+  sleep: (ms: number) => Promise<void>;
+  timeoutMs: number;
+  pollMs: number;
+  daemonLog: (message: string) => void;
+}): Promise<number[]> {
+  const excludedPids = new Set([process.pid, process.ppid]);
+  const peerRecords = selectDaemonProcessesToStop(
+    params.listDaemonProcesses(params.cwd),
+    excludedPids,
+  );
+  const stoppedPids: number[] = [];
+
+  for (const peer of peerRecords) {
+    params.daemonLog(
+      `daemon_peer_takeover_attempt: pid=${peer.pid} cwd=${params.cwd} command=${truncatePreview(peer.commandLine, 400)}`,
+    );
+    params.killProcess(peer.pid);
+    if (await waitForProcessExit({
+      pid: peer.pid,
+      timeoutMs: params.timeoutMs,
+      pollMs: params.pollMs,
+      isAlive: params.isAlive,
+      sleep: params.sleep,
+    })) {
+      stoppedPids.push(peer.pid);
+      params.daemonLog(`daemon_peer_takeover_complete: pid=${peer.pid}`);
+    } else {
+      params.daemonLog(`daemon_peer_takeover_timeout: pid=${peer.pid}`);
+    }
+  }
+
+  return stoppedPids;
+}
+
 export async function cleanupDaemonBeforeStart(
   deps: DaemonCleanupDeps = {},
 ): Promise<DaemonCleanupResult> {
@@ -1708,15 +1799,36 @@ export async function cleanupDaemonBeforeStart(
   const clearWorkspaceEndpoints =
     deps.clearWorkspaceEndpoints ?? clearDaemonWorkspaceEndpoints;
   const isDaemonProcess = deps.isDaemonProcess ?? isEndpointDaemonProcess;
+  const listDaemonProcesses =
+    deps.listDaemonProcesses ??
+    ((cwd: string) =>
+      listWechatDaemonProcesses({
+        cwd,
+        excludePids: [process.pid, process.ppid],
+      }));
   const sleepFn = deps.sleep ?? sleep;
   const cleanupLog = deps.log ?? log;
+  const daemonLog = deps.daemonLog ?? appendDaemonLog;
   const stopTimeoutMs = deps.stopTimeoutMs ?? DAEMON_TAKEOVER_STOP_TIMEOUT_MS;
   const forceStopTimeoutMs =
     deps.forceStopTimeoutMs ?? DAEMON_TAKEOVER_FORCE_STOP_TIMEOUT_MS;
   const pollMs = deps.pollMs ?? DAEMON_TAKEOVER_STOP_POLL_MS;
   const endpoint = readEndpoint();
+  const cleanupCwd = endpoint?.cwd ?? deps.cwd;
 
   if (!endpoint) {
+    if (cleanupCwd) {
+      await stopDaemonPeerProcesses({
+        cwd: cleanupCwd,
+        listDaemonProcesses,
+        killProcess,
+        isAlive,
+        sleep: sleepFn,
+        timeoutMs: forceStopTimeoutMs,
+        pollMs,
+        daemonLog,
+      });
+    }
     return { action: "none" };
   }
 
@@ -1729,17 +1841,27 @@ export async function cleanupDaemonBeforeStart(
     cleanupLog(
       `Found stale wechat-daemon endpoint for ${endpoint.cwd} (pid=${endpoint.pid}). Cleaning it before daemon startup.`,
     );
-    appendDaemonLog(
+    daemonLog(
       `daemon_stale_endpoint_cleanup: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
     );
     clearDaemonArtifacts();
+    await stopDaemonPeerProcesses({
+      cwd: endpoint.cwd,
+      listDaemonProcesses,
+      killProcess,
+      isAlive,
+      sleep: sleepFn,
+      timeoutMs: forceStopTimeoutMs,
+      pollMs,
+      daemonLog,
+    });
     return { action: "cleared_stale_endpoint", endpoint };
   }
 
   cleanupLog(
     `Found existing wechat-daemon for ${endpoint.cwd} (pid=${endpoint.pid}). Stopping it before daemon startup...`,
   );
-  appendDaemonLog(
+  daemonLog(
     `daemon_takeover_attempt: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
   );
 
@@ -1753,12 +1875,12 @@ export async function cleanupDaemonBeforeStart(
     if (response.ok) {
       shutdownAcknowledged = true;
     } else {
-      appendDaemonLog(
+      daemonLog(
         `daemon_shutdown_request_failed: pid=${endpoint.pid} error=${truncatePreview(response.error, 400)}`,
       );
     }
   } catch (error) {
-    appendDaemonLog(
+    daemonLog(
       `daemon_shutdown_request_failed: pid=${endpoint.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
     );
   }
@@ -1774,10 +1896,20 @@ export async function cleanupDaemonBeforeStart(
 
   if (!stopped) {
     if (!shutdownAcknowledged && !isDaemonProcess(endpoint)) {
-      appendDaemonLog(
+      daemonLog(
         `daemon_force_stop_skipped_unverified: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
       );
       clearDaemonArtifacts();
+      await stopDaemonPeerProcesses({
+        cwd: endpoint.cwd,
+        listDaemonProcesses,
+        killProcess,
+        isAlive,
+        sleep: sleepFn,
+        timeoutMs: forceStopTimeoutMs,
+        pollMs,
+        daemonLog,
+      });
       return { action: "cleared_stale_endpoint", endpoint };
     }
 
@@ -1785,14 +1917,14 @@ export async function cleanupDaemonBeforeStart(
     cleanupLog(
       `Existing daemon pid=${endpoint.pid} did not stop in ${formatDuration(stopTimeoutMs)}. Forcing cleanup...`,
     );
-    appendDaemonLog(
+    daemonLog(
       `daemon_force_stop_attempt: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
     );
     try {
       killProcess(endpoint.pid);
     } catch (error) {
       if (isAlive(endpoint.pid)) {
-        appendDaemonLog(
+        daemonLog(
           `daemon_force_stop_failed: pid=${endpoint.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
         );
       }
@@ -1816,9 +1948,19 @@ export async function cleanupDaemonBeforeStart(
   cleanupLog(
     `Cleaned previous wechat-daemon for ${endpoint.cwd}; daemon startup can continue.`,
   );
-  appendDaemonLog(
+  daemonLog(
     `daemon_takeover_complete: pid=${endpoint.pid} cwd=${endpoint.cwd} forced=${forced}`,
   );
+  await stopDaemonPeerProcesses({
+    cwd: endpoint.cwd,
+    listDaemonProcesses,
+    killProcess,
+    isAlive,
+    sleep: sleepFn,
+    timeoutMs: forceStopTimeoutMs,
+    pollMs,
+    daemonLog,
+  });
   return { action: "stopped", endpoint, forced };
 }
 
@@ -1835,6 +1977,7 @@ type SingleBridgeCleanupDeps = {
   clearEndpoint?: (lock: BridgeLockPayload) => void;
   sleep?: (ms: number) => Promise<void>;
   log?: (message: string) => void;
+  daemonLog?: (message: string) => void;
   stopTimeoutMs?: number;
   forceStopTimeoutMs?: number;
   pollMs?: number;
@@ -1892,6 +2035,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
   const clearEndpoint = deps.clearEndpoint ?? clearSingleBridgeEndpoint;
   const sleepFn = deps.sleep ?? sleep;
   const cleanupLog = deps.log ?? log;
+  const daemonLog = deps.daemonLog ?? appendDaemonLog;
   const stopTimeoutMs = deps.stopTimeoutMs ?? SINGLE_BRIDGE_STOP_TIMEOUT_MS;
   const forceStopTimeoutMs =
     deps.forceStopTimeoutMs ?? SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS;
@@ -1911,7 +2055,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
     cleanupLog(
       `Found stale single bridge lock for ${lock.cwd} (pid=${lock.pid} dead). Cleaning it before daemon startup.`,
     );
-    appendDaemonLog(
+    daemonLog(
       `single_bridge_stale_cleanup: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
     );
     clearBridgeArtifacts();
@@ -1921,7 +2065,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
   cleanupLog(
     `Found existing single bridge for ${lock.cwd} (pid=${lock.pid}, adapter=${lock.adapter}). Stopping it before daemon startup...`,
   );
-  appendDaemonLog(
+  daemonLog(
     `single_bridge_takeover_attempt: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
   );
 
@@ -1929,7 +2073,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
     killProcess(lock.pid, "SIGTERM");
   } catch (error) {
     if (isAlive(lock.pid)) {
-      appendDaemonLog(
+      daemonLog(
         `single_bridge_sigterm_failed: pid=${lock.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
       );
     }
@@ -1949,14 +2093,14 @@ export async function cleanupSingleBridgeBeforeDaemon(
     cleanupLog(
       `Single bridge pid=${lock.pid} did not stop in ${formatDuration(stopTimeoutMs)}. Forcing cleanup...`,
     );
-    appendDaemonLog(
+    daemonLog(
       `single_bridge_force_stop_attempt: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd}`,
     );
     try {
       killProcess(lock.pid, "SIGKILL");
     } catch (error) {
       if (isAlive(lock.pid)) {
-        appendDaemonLog(
+        daemonLog(
           `single_bridge_sigkill_failed: pid=${lock.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
         );
       }
@@ -1980,7 +2124,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
   cleanupLog(
     `Cleaned previous single bridge for ${lock.cwd}; daemon startup can continue.`,
   );
-  appendDaemonLog(
+  daemonLog(
     `single_bridge_takeover_complete: pid=${lock.pid} adapter=${lock.adapter} cwd=${lock.cwd} forced=${forced}`,
   );
   return { action: "stopped", lock, forced };
@@ -1990,7 +2134,7 @@ export async function runDaemon(
   options: DaemonCliOptions,
 ): Promise<void> {
   migrateLegacyChannelFiles((message) => log(message));
-  await cleanupDaemonBeforeStart();
+  await cleanupDaemonBeforeStart({ cwd: options.cwd });
   await cleanupSingleBridgeBeforeDaemon();
   const reapedPeerPids = await reapPeerBridgeProcesses({
     logger: (message) => appendDaemonLog(message),

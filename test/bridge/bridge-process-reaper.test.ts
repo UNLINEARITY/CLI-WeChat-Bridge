@@ -5,6 +5,7 @@ import {
   isOpencodeServeCommandLine,
   isWechatBridgeCommandLine,
   isWechatDaemonCommandLine,
+  isWechatDaemonCommandLineForCwd,
   parsePosixBridgeProcessProbeOutput,
   parseWindowsBridgeProcessProbeOutput,
 } from "../../src/bridge/bridge-process-reaper.ts";
@@ -42,6 +43,36 @@ describe("bridge peer process reaper", () => {
     expect(
       isWechatDaemonCommandLine(
         '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\src\\bridge\\wechat-bridge.ts --adapter codex',
+      ),
+    ).toBe(false);
+  });
+
+  test("matches wechat-daemon command lines for a startup cwd", () => {
+    expect(
+      isWechatDaemonCommandLineForCwd(
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\bin\\wechat-daemon.mjs" "--cwd" "C:\\Users\\unlin"',
+        "C:\\Users\\unlin",
+      ),
+    ).toBe(true);
+
+    expect(
+      isWechatDaemonCommandLineForCwd(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\dist\\daemon\\wechat-daemon.js --cwd=C:\\Users\\unlin',
+        "C:\\Users\\unlin",
+      ),
+    ).toBe(true);
+
+    expect(
+      isWechatDaemonCommandLineForCwd(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\dist\\daemon\\wechat-daemon.js --cwd C:\\Users\\other',
+        "C:\\Users\\unlin",
+      ),
+    ).toBe(false);
+
+    expect(
+      isWechatDaemonCommandLineForCwd(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\src\\bridge\\wechat-bridge.ts --adapter codex --cwd C:\\Users\\unlin',
+        "C:\\Users\\unlin",
       ),
     ).toBe(false);
   });

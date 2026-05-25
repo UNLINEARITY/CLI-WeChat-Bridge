@@ -250,8 +250,10 @@ describe("wechat-daemon helpers", () => {
         created: true,
         openedVisible: true,
         visibleConnected: false,
+        activated: false,
+        previousActiveAdapter: "claude",
       }),
-    ).toContain("tried to open the visible CLI");
+    ).toContain("Active terminal remains claude");
   });
 
   test("waitForVisibleClientConnection resolves when the visible companion appears", async () => {
@@ -308,8 +310,49 @@ describe("wechat-daemon helpers", () => {
     await expect(
       cleanupDaemonBeforeStart({
         readEndpoint: () => null,
+        listDaemonProcesses: () => [],
       }),
     ).resolves.toEqual({ action: "none" });
+  });
+
+  test("cleanupDaemonBeforeStart stops same-cwd daemon peers when no endpoint exists", async () => {
+    const killed: number[] = [];
+    const alive = new Set([100, 101]);
+
+    const result = await cleanupDaemonBeforeStart({
+      cwd: "C:\\Users\\unlin",
+      readEndpoint: () => null,
+      listDaemonProcesses: (cwd) => {
+        expect(cwd).toBe("C:\\Users\\unlin");
+        return [
+          {
+            pid: 100,
+            parentPid: 50,
+            commandLine:
+              '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\bin\\wechat-daemon.mjs --cwd C:\\Users\\unlin',
+          },
+          {
+            pid: 101,
+            parentPid: 100,
+            commandLine:
+              '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\dist\\daemon\\wechat-daemon.js --cwd C:\\Users\\unlin',
+          },
+        ];
+      },
+      killProcess: (pid) => {
+        killed.push(pid);
+        alive.delete(pid);
+      },
+      isAlive: (pid) => alive.has(pid),
+      sleep: async () => undefined,
+      log: () => undefined,
+      daemonLog: () => undefined,
+      forceStopTimeoutMs: 1,
+      pollMs: 1,
+    });
+
+    expect(result).toEqual({ action: "none" });
+    expect(killed).toEqual([101]);
   });
 
   test("cleanupDaemonBeforeStart clears stale daemon endpoint and workspace endpoints", async () => {
@@ -325,7 +368,9 @@ describe("wechat-daemon helpers", () => {
       clearWorkspaceEndpoints: (payload) => {
         cleared.push(`workspace:${payload.cwd}`);
       },
+      listDaemonProcesses: () => [],
       log: () => undefined,
+      daemonLog: () => undefined,
     });
 
     expect(result).toEqual({ action: "cleared_stale_endpoint", endpoint });
@@ -352,8 +397,10 @@ describe("wechat-daemon helpers", () => {
       clearWorkspaceEndpoints: (payload) => {
         cleared.push(`workspace:${payload.cwd}`);
       },
+      listDaemonProcesses: () => [],
       sleep: async () => undefined,
       log: () => undefined,
+      daemonLog: () => undefined,
     });
 
     expect(result).toEqual({ action: "stopped", endpoint, forced: false });
@@ -377,10 +424,12 @@ describe("wechat-daemon helpers", () => {
       },
       clearEndpoint: () => undefined,
       clearWorkspaceEndpoints: () => undefined,
+      listDaemonProcesses: () => [],
       sleep: async () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
       log: () => undefined,
+      daemonLog: () => undefined,
       stopTimeoutMs: 1,
       forceStopTimeoutMs: 1,
       pollMs: 1,
@@ -409,8 +458,10 @@ describe("wechat-daemon helpers", () => {
       clearWorkspaceEndpoints: (payload) => {
         cleared.push(`workspace:${payload.cwd}`);
       },
+      listDaemonProcesses: () => [],
       sleep: async () => undefined,
       log: () => undefined,
+      daemonLog: () => undefined,
       stopTimeoutMs: 1,
       pollMs: 1,
     });
@@ -442,6 +493,7 @@ describe("wechat-daemon helpers", () => {
         cleared.push(`lock:${payload.pid}`);
       },
       log: () => undefined,
+      daemonLog: () => undefined,
     });
 
     expect(result).toEqual({ action: "cleared_stale_lock", lock });
@@ -472,6 +524,7 @@ describe("wechat-daemon helpers", () => {
       },
       sleep: async () => undefined,
       log: () => undefined,
+      daemonLog: () => undefined,
     });
 
     expect(result).toEqual({ action: "stopped", lock, forced: false });
@@ -503,6 +556,7 @@ describe("wechat-daemon helpers", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       },
       log: () => undefined,
+      daemonLog: () => undefined,
       stopTimeoutMs: 1,
       forceStopTimeoutMs: 1,
       pollMs: 1,

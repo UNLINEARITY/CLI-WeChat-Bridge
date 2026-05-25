@@ -115,4 +115,42 @@ describe("BridgeController local client endpoint sync", () => {
       token: "token-1",
     });
   });
+
+  test("rewrites provider endpoints when the endpoint file was removed", () => {
+    const cwd = makeTempCwd();
+    const endpoint = buildEndpoint(cwd, {
+      runtimeKind: "codex_runtime_host",
+      instanceId: "codex-runtime-1",
+      kind: "codex",
+      port: 9123,
+      token: "codex-token",
+      command: "codex",
+      serverPort: 9123,
+      serverUrl: "ws://127.0.0.1:9123",
+    });
+    const adapter = {
+      ...buildAdapter({
+        kind: "codex",
+        status: "idle",
+        cwd,
+        command: "codex",
+      }),
+      getLocalClientEndpoint: () => endpoint,
+    };
+    const controller = new BridgeController(adapter, cwd);
+
+    controller.syncLocalClientEndpoint();
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: "codex" });
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "codex" })).toBeNull();
+
+    controller.syncLocalClientEndpoint();
+
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "codex" })).toMatchObject({
+      instanceId: "codex-runtime-1",
+      kind: "codex",
+      runtimeKind: "codex_runtime_host",
+      serverUrl: "ws://127.0.0.1:9123",
+      companionStatus: "idle",
+    });
+  });
 });
