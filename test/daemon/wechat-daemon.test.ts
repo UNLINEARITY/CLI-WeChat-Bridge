@@ -7,10 +7,12 @@ import {
   buildVisibleClientLaunchArgs,
   buildWindowsVisibleClientLaunchCommand,
   cleanupSingleBridgeBeforeDaemon,
+  defaultDaemonSessionStartMode,
   formatDaemonSwitchResultDetail,
   formatDaemonStatus,
   parseDaemonCliArgs,
   parseDaemonSwitchCommand,
+  resolveDaemonSessionStartMode,
   waitForVisibleClientConnection,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
@@ -96,6 +98,66 @@ describe("wechat-daemon helpers", () => {
       expect(args).toContain("--session-start-mode");
       expect(args).toContain("new");
     }
+  });
+
+  test("defaultDaemonSessionStartMode starts Claude and OpenCode fresh", () => {
+    expect(defaultDaemonSessionStartMode("codex")).toBe("restore");
+    expect(defaultDaemonSessionStartMode("claude")).toBe("new");
+    expect(defaultDaemonSessionStartMode("opencode")).toBe("new");
+  });
+
+  test("resolveDaemonSessionStartMode avoids restoring stale OpenCode sessions", () => {
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        slotCreated: true,
+        visibleConnected: false,
+      }),
+    ).toBe("new");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        slotCreated: false,
+        visibleConnected: false,
+      }),
+    ).toBe("new");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        slotCreated: false,
+        visibleConnected: false,
+        sharedSessionId: "session_current",
+      }),
+    ).toBe("restore");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        slotCreated: false,
+        visibleConnected: true,
+        sharedSessionId: "session_current",
+      }),
+    ).toBe("restore");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        explicitSessionStartMode: "new",
+        slotCreated: false,
+        visibleConnected: true,
+        sharedSessionId: "session_current",
+      }),
+    ).toBe("new");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "codex",
+        slotCreated: true,
+        visibleConnected: false,
+      }),
+    ).toBe("restore");
   });
 
   test("buildWindowsVisibleClientLaunchCommand opens a titled console window", () => {

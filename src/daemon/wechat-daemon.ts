@@ -11,6 +11,7 @@ import {
 } from "../bridge/bridge-adapters.ts";
 import {
   delay,
+  getSharedSessionIdFromAdapterState,
   quoteWindowsCommandArg,
 } from "../bridge/bridge-adapters.shared.ts";
 import { BridgeController } from "../bridge/bridge-controller.ts";
@@ -270,6 +271,34 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
     default:
       return null;
   }
+}
+
+export function defaultDaemonSessionStartMode(
+  adapter: DaemonAdapterKind,
+): BridgeSessionStartMode {
+  return adapter === "claude" || adapter === "opencode" ? "new" : "restore";
+}
+
+export function resolveDaemonSessionStartMode(params: {
+  adapter: DaemonAdapterKind;
+  explicitSessionStartMode?: BridgeSessionStartMode;
+  slotCreated: boolean;
+  visibleConnected: boolean;
+  sharedSessionId?: string;
+}): BridgeSessionStartMode {
+  if (params.explicitSessionStartMode) {
+    return params.explicitSessionStartMode;
+  }
+  if (params.adapter === "codex") {
+    return "restore";
+  }
+  if (params.slotCreated) {
+    return "new";
+  }
+  if (!params.visibleConnected && !params.sharedSessionId) {
+    return "new";
+  }
+  return "restore";
 }
 
 function toPendingApproval(request: BridgeEvent & { type: "approval_required" }): PendingApproval {
@@ -830,9 +859,11 @@ class WechatDaemon {
     let slot = this.slots.get(adapter);
     let created = false;
     if (!slot) {
+      const createSessionStartMode =
+        options.sessionStartMode ?? defaultDaemonSessionStartMode(adapter);
       slot = await this.createSlot(adapter, {
         profile: options.profile ?? this.profile,
-        sessionStartMode: options.sessionStartMode,
+        sessionStartMode: createSessionStartMode,
       });
       this.slots.set(adapter, slot);
       created = true;
@@ -841,9 +872,16 @@ class WechatDaemon {
     this.activeAdapter = adapter;
     let openedVisible = false;
     let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
+    const sessionStartMode = resolveDaemonSessionStartMode({
+      adapter,
+      explicitSessionStartMode: options.sessionStartMode,
+      slotCreated: created,
+      visibleConnected,
+      sharedSessionId: getSharedSessionIdFromAdapterState(slot.runtime.getState()),
+    });
     if (
       !created &&
-      options.sessionStartMode === "new" &&
+      sessionStartMode === "new" &&
       (adapter === "claude" || adapter === "opencode") &&
       visibleConnected
     ) {
@@ -855,7 +893,7 @@ class WechatDaemon {
       const launch = openVisibleClient({
         adapter,
         cwd: this.cwd,
-        sessionStartMode: options.sessionStartMode,
+        sessionStartMode,
         cliArgs: options.cliArgs,
         onError: (error) => {
           appendDaemonLog(
@@ -885,7 +923,7 @@ class WechatDaemon {
     }
 
     appendDaemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected}`,
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} session_start_mode=${sessionStartMode}`,
     );
     return {
       activeAdapter: adapter,
@@ -932,7 +970,7 @@ class WechatDaemon {
     await runtime.start();
     controller.syncLocalClientEndpoint();
     appendDaemonLog(
-      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.cwd}`,
+      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
     return slot;
   }
