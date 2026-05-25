@@ -568,6 +568,7 @@ export async function tryDelegateToDaemon(
     cliArgs: options.cliArgs,
     openVisible: true,
     sessionStartMode: options.sessionStartMode,
+    reuseExistingVisible: true,
   });
   if (!response.ok) {
     throw new Error(response.error);

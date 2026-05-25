@@ -7,7 +7,6 @@ import type {
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
-  BridgeTurnOrigin,
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
@@ -48,7 +47,6 @@ type CodexPendingThreadAnnouncement = {
 
 const {
   CODEX_APP_SERVER_HOST,
-  CODEX_APP_SERVER_LOG_LIMIT,
   CODEX_APP_SERVER_READY_TIMEOUT_MS,
   CODEX_FINAL_REPLY_SETTLE_DELAY_MS,
   CODEX_RECENT_SESSION_KEY_LIMIT,
@@ -61,7 +59,6 @@ const {
   CODEX_THREAD_SIGNAL_TTL_MS,
   INTERRUPT_SETTLE_DELAY_MS,
   appendBoundedLog,
-  buildCliEnvironment,
   buildCodexApprovalRequest,
   buildCodexCliArgs,
   buildCodexDynamicToolCallFailureResponse,

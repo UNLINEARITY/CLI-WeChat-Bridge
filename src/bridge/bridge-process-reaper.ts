@@ -37,8 +37,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export function isWechatBridgeCommandLine(commandLine: string): boolean {
   return (
     /wechat-bridge\.(?:ts|js|mjs)/i.test(commandLine) &&
-    /(?:^|\s)--adapter(?:\s|=)/i.test(commandLine)
+    /(?:^|\s|["'])--adapter(?:(?:["']?\s)|=)/i.test(commandLine)
   );
+}
+
+export function isWechatDaemonCommandLine(commandLine: string): boolean {
+  return /wechat-daemon\.(?:ts|js|mjs)/i.test(commandLine);
 }
 
 /**
@@ -216,6 +220,16 @@ export function listPeerBridgeProcesses(currentPid = process.pid): BridgeProcess
   return process.platform === "win32"
     ? listWindowsBridgeProcesses(currentPid)
     : listPosixBridgeProcesses(currentPid);
+}
+
+export function getProcessRecordByPid(
+  pid: number,
+  currentPid = process.pid,
+): BridgeProcessRecord | null {
+  if (!Number.isInteger(pid) || pid <= 0 || pid === currentPid) {
+    return null;
+  }
+  return listAllProcessesRaw(currentPid).find((record) => record.pid === pid) ?? null;
 }
 
 /**

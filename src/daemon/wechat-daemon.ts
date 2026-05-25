@@ -21,6 +21,8 @@ import {
   type BridgeLockPayload,
 } from "../bridge/bridge-state.ts";
 import {
+  getProcessRecordByPid,
+  isWechatDaemonCommandLine,
   killProcessTreeSync,
   reapOrphanedOpencodeProcesses,
   reapPeerBridgeProcesses,
@@ -87,13 +89,15 @@ import {
   buildDaemonToken,
   clearDaemonEndpoint,
   DAEMON_PROTOCOL_VERSION,
-  isDaemonEndpointAlive,
   isPidAlive,
   readDaemonEndpoint,
+  sendDaemonRequest,
   sendDaemonResponse,
   writeDaemonEndpoint,
   type DaemonAdapterKind,
+  type DaemonEndpoint,
   type DaemonRequest,
+  type DaemonResponse,
   type DaemonSlotSummary,
   type DaemonStatus,
 } from "./daemon-link.ts";
@@ -145,6 +149,9 @@ const WECHAT_SEND_RETRY_BASE_MS = 750;
 const SINGLE_BRIDGE_STOP_TIMEOUT_MS = 10_000;
 const SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS = 3_000;
 const SINGLE_BRIDGE_STOP_POLL_MS = 250;
+const DAEMON_TAKEOVER_STOP_TIMEOUT_MS = 10_000;
+const DAEMON_TAKEOVER_FORCE_STOP_TIMEOUT_MS = 3_000;
+const DAEMON_TAKEOVER_STOP_POLL_MS = 250;
 const VISIBLE_CLIENT_CONNECT_TIMEOUT_MS = 15_000;
 const VISIBLE_CLIENT_CONNECT_POLL_MS = 250;
 const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode"];
@@ -285,7 +292,11 @@ export function resolveDaemonSessionStartMode(params: {
   slotCreated: boolean;
   visibleConnected: boolean;
   sharedSessionId?: string;
+  reuseExistingVisible?: boolean;
 }): BridgeSessionStartMode {
+  if (params.reuseExistingVisible && params.visibleConnected) {
+    return "restore";
+  }
   if (params.explicitSessionStartMode) {
     return params.explicitSessionStartMode;
   }
@@ -831,6 +842,7 @@ class WechatDaemon {
           cliArgs: request.cliArgs,
           openVisible: request.openVisible ?? true,
           sessionStartMode: request.sessionStartMode,
+          reuseExistingVisible: request.reuseExistingVisible ?? true,
         });
       case "switch_adapter":
         return await this.ensureSlot(request.adapter, {
@@ -838,6 +850,7 @@ class WechatDaemon {
           cliArgs: request.cliArgs,
           openVisible: request.openVisible ?? true,
           sessionStartMode: request.sessionStartMode,
+          reuseExistingVisible: request.reuseExistingVisible ?? true,
         });
     }
   }
@@ -849,6 +862,7 @@ class WechatDaemon {
       cliArgs?: string[];
       openVisible?: boolean;
       sessionStartMode?: BridgeSessionStartMode;
+      reuseExistingVisible?: boolean;
     } = {},
   ): Promise<{
     activeAdapter: DaemonAdapterKind;
@@ -878,9 +892,11 @@ class WechatDaemon {
       slotCreated: created,
       visibleConnected,
       sharedSessionId: getSharedSessionIdFromAdapterState(slot.runtime.getState()),
+      reuseExistingVisible: options.reuseExistingVisible !== false,
     });
     if (
       !created &&
+      options.reuseExistingVisible === false &&
       sessionStartMode === "new" &&
       (adapter === "claude" || adapter === "opencode") &&
       visibleConnected
@@ -1237,6 +1253,7 @@ class WechatDaemon {
     if (switchAdapter) {
       const result = await this.ensureSlot(switchAdapter, {
         openVisible: true,
+        reuseExistingVisible: true,
       });
       const detail = formatDaemonSwitchResultDetail(result);
       await this.queueWechatMessage(
@@ -1645,19 +1662,164 @@ class WechatDaemon {
   }
 }
 
-async function assertNoLiveDaemon(): Promise<void> {
-  const endpoint = readDaemonEndpoint();
+export type DaemonCleanupResult =
+  | { action: "none" }
+  | { action: "cleared_stale_endpoint"; endpoint: DaemonEndpoint }
+  | { action: "stopped"; endpoint: DaemonEndpoint; forced: boolean };
+
+type DaemonCleanupDeps = {
+  readEndpoint?: () => DaemonEndpoint | null;
+  isAlive?: (pid: number) => boolean;
+  sendRequest?: (
+    endpoint: DaemonEndpoint,
+    payload: DaemonRequest,
+    options?: { timeoutMs?: number },
+  ) => Promise<DaemonResponse>;
+  killProcess?: (pid: number) => void;
+  clearEndpoint?: (pid?: number) => void;
+  clearWorkspaceEndpoints?: (endpoint: DaemonEndpoint) => void;
+  isDaemonProcess?: (endpoint: DaemonEndpoint) => boolean;
+  sleep?: (ms: number) => Promise<void>;
+  log?: (message: string) => void;
+  stopTimeoutMs?: number;
+  forceStopTimeoutMs?: number;
+  pollMs?: number;
+};
+
+function clearDaemonWorkspaceEndpoints(endpoint: DaemonEndpoint): void {
+  for (const adapter of DAEMON_ADAPTERS) {
+    clearLocalCompanionEndpoint(endpoint.cwd, undefined, { adapter });
+  }
+}
+
+function isEndpointDaemonProcess(endpoint: DaemonEndpoint): boolean {
+  const record = getProcessRecordByPid(endpoint.pid);
+  return Boolean(record && isWechatDaemonCommandLine(record.commandLine));
+}
+
+export async function cleanupDaemonBeforeStart(
+  deps: DaemonCleanupDeps = {},
+): Promise<DaemonCleanupResult> {
+  const readEndpoint = deps.readEndpoint ?? readDaemonEndpoint;
+  const isAlive = deps.isAlive ?? isPidAlive;
+  const sendRequest = deps.sendRequest ?? sendDaemonRequest;
+  const killProcess = deps.killProcess ?? killProcessTreeSync;
+  const clearEndpoint = deps.clearEndpoint ?? clearDaemonEndpoint;
+  const clearWorkspaceEndpoints =
+    deps.clearWorkspaceEndpoints ?? clearDaemonWorkspaceEndpoints;
+  const isDaemonProcess = deps.isDaemonProcess ?? isEndpointDaemonProcess;
+  const sleepFn = deps.sleep ?? sleep;
+  const cleanupLog = deps.log ?? log;
+  const stopTimeoutMs = deps.stopTimeoutMs ?? DAEMON_TAKEOVER_STOP_TIMEOUT_MS;
+  const forceStopTimeoutMs =
+    deps.forceStopTimeoutMs ?? DAEMON_TAKEOVER_FORCE_STOP_TIMEOUT_MS;
+  const pollMs = deps.pollMs ?? DAEMON_TAKEOVER_STOP_POLL_MS;
+  const endpoint = readEndpoint();
+
   if (!endpoint) {
-    return;
+    return { action: "none" };
   }
 
-  if (await isDaemonEndpointAlive(endpoint, { timeoutMs: 500 })) {
-    throw new Error(
-      `wechat-daemon is already running (pid=${endpoint.pid}, cwd=${endpoint.cwd}).`,
+  const clearDaemonArtifacts = () => {
+    clearWorkspaceEndpoints(endpoint);
+    clearEndpoint(endpoint.pid);
+  };
+
+  if (endpoint.pid === process.pid || !isAlive(endpoint.pid)) {
+    cleanupLog(
+      `Found stale wechat-daemon endpoint for ${endpoint.cwd} (pid=${endpoint.pid}). Cleaning it before daemon startup.`,
+    );
+    appendDaemonLog(
+      `daemon_stale_endpoint_cleanup: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
+    );
+    clearDaemonArtifacts();
+    return { action: "cleared_stale_endpoint", endpoint };
+  }
+
+  cleanupLog(
+    `Found existing wechat-daemon for ${endpoint.cwd} (pid=${endpoint.pid}). Stopping it before daemon startup...`,
+  );
+  appendDaemonLog(
+    `daemon_takeover_attempt: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
+  );
+
+  let shutdownAcknowledged = false;
+  try {
+    const response = await sendRequest(
+      endpoint,
+      { command: "shutdown" },
+      { timeoutMs: 1_000 },
+    );
+    if (response.ok) {
+      shutdownAcknowledged = true;
+    } else {
+      appendDaemonLog(
+        `daemon_shutdown_request_failed: pid=${endpoint.pid} error=${truncatePreview(response.error, 400)}`,
+      );
+    }
+  } catch (error) {
+    appendDaemonLog(
+      `daemon_shutdown_request_failed: pid=${endpoint.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
     );
   }
 
-  clearDaemonEndpoint(endpoint.pid);
+  let forced = false;
+  let stopped = await waitForProcessExit({
+    pid: endpoint.pid,
+    timeoutMs: stopTimeoutMs,
+    pollMs,
+    isAlive,
+    sleep: sleepFn,
+  });
+
+  if (!stopped) {
+    if (!shutdownAcknowledged && !isDaemonProcess(endpoint)) {
+      appendDaemonLog(
+        `daemon_force_stop_skipped_unverified: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
+      );
+      clearDaemonArtifacts();
+      return { action: "cleared_stale_endpoint", endpoint };
+    }
+
+    forced = true;
+    cleanupLog(
+      `Existing daemon pid=${endpoint.pid} did not stop in ${formatDuration(stopTimeoutMs)}. Forcing cleanup...`,
+    );
+    appendDaemonLog(
+      `daemon_force_stop_attempt: pid=${endpoint.pid} cwd=${endpoint.cwd}`,
+    );
+    try {
+      killProcess(endpoint.pid);
+    } catch (error) {
+      if (isAlive(endpoint.pid)) {
+        appendDaemonLog(
+          `daemon_force_stop_failed: pid=${endpoint.pid} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
+        );
+      }
+    }
+    stopped = await waitForProcessExit({
+      pid: endpoint.pid,
+      timeoutMs: forceStopTimeoutMs,
+      pollMs,
+      isAlive,
+      sleep: sleepFn,
+    });
+  }
+
+  if (!stopped && isAlive(endpoint.pid)) {
+    throw new Error(
+      `Could not stop existing wechat-daemon automatically (pid=${endpoint.pid}, cwd=${endpoint.cwd}).`,
+    );
+  }
+
+  clearDaemonArtifacts();
+  cleanupLog(
+    `Cleaned previous wechat-daemon for ${endpoint.cwd}; daemon startup can continue.`,
+  );
+  appendDaemonLog(
+    `daemon_takeover_complete: pid=${endpoint.pid} cwd=${endpoint.cwd} forced=${forced}`,
+  );
+  return { action: "stopped", endpoint, forced };
 }
 
 export type SingleBridgeCleanupResult =
@@ -1828,7 +1990,7 @@ export async function runDaemon(
   options: DaemonCliOptions,
 ): Promise<void> {
   migrateLegacyChannelFiles((message) => log(message));
-  await assertNoLiveDaemon();
+  await cleanupDaemonBeforeStart();
   await cleanupSingleBridgeBeforeDaemon();
   const reapedPeerPids = await reapPeerBridgeProcesses({
     logger: (message) => appendDaemonLog(message),

@@ -80,7 +80,6 @@
     "test:watch": "bun test --watch test"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.80.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@opencode-ai/sdk": "^1.3.2",
     "node-pty": "^1.1.0",
@@ -89,6 +88,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
+    "@types/node": "^24.12.4",
     "eslint": "^10.3.0",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.59.3"

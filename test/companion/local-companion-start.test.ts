@@ -249,6 +249,7 @@ describe("local-companion-start helpers", () => {
         cliArgs: ["--mode", "build"],
         openVisible: true,
         sessionStartMode: "new",
+        reuseExistingVisible: true,
       },
     ]);
   });

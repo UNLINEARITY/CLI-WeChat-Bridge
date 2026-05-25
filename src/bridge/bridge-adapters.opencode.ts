@@ -30,7 +30,6 @@ import type {
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
-  containsWechatOutboundAttachmentPath,
   buildOneTimeCode,
   isWechatOutboundAttachmentMutationTool,
   isWechatOutboundAttachmentWriteCommand,
@@ -64,23 +63,6 @@ type SdkSession = {
   version: string;
   time: { created: number; updated: number; compacting?: number };
   share?: { url: string };
-};
-
-type SdkSessionStatus =
-  | { type: "idle" }
-  | { type: "busy" }
-  | { type: "retry"; attempt: number; message: string; next: number };
-
-type SdkPermission = {
-  id: string;
-  type: string;
-  pattern?: string | Array<string>;
-  sessionID: string;
-  messageID: string;
-  callID?: string;
-  title: string;
-  metadata: Record<string, unknown>;
-  time: { created: number };
 };
 
 type SdkPart = {

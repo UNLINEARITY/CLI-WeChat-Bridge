@@ -4,6 +4,7 @@ import {
   isOpencodeAttachCommandLine,
   isOpencodeServeCommandLine,
   isWechatBridgeCommandLine,
+  isWechatDaemonCommandLine,
   parsePosixBridgeProcessProbeOutput,
   parseWindowsBridgeProcessProbeOutput,
 } from "../../src/bridge/bridge-process-reaper.ts";
@@ -17,7 +18,30 @@ describe("bridge peer process reaper", () => {
     ).toBe(true);
     expect(
       isWechatBridgeCommandLine(
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\dist\\bridge\\wechat-bridge.js" "--adapter" "codex"',
+      ),
+    ).toBe(true);
+    expect(
+      isWechatBridgeCommandLine(
         '"C:\\Program Files\\nodejs\\node.exe" --no-warnings --experimental-strip-types C:\\repo\\src\\companion\\local-companion-start.ts --adapter opencode',
+      ),
+    ).toBe(false);
+  });
+
+  test("detects wechat-daemon command lines", () => {
+    expect(
+      isWechatDaemonCommandLine(
+        '"C:\\Program Files\\nodejs\\node.exe" --no-warnings --experimental-strip-types C:\\repo\\src\\daemon\\wechat-daemon.ts --cwd C:\\repo',
+      ),
+    ).toBe(true);
+    expect(
+      isWechatDaemonCommandLine(
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\dist\\daemon\\wechat-daemon.js"',
+      ),
+    ).toBe(true);
+    expect(
+      isWechatDaemonCommandLine(
+        '"C:\\Program Files\\nodejs\\node.exe" C:\\repo\\src\\bridge\\wechat-bridge.ts --adapter codex',
       ),
     ).toBe(false);
   });
@@ -64,6 +88,13 @@ describe("bridge peer process reaper", () => {
           '"C:\\Program Files\\nodejs\\node.exe" --no-warnings --experimental-strip-types C:\\repo\\src\\companion\\local-companion-start.ts --adapter opencode',
       },
       {
+        ProcessId: 204,
+        ParentProcessId: 1,
+        Name: "node.exe",
+        CommandLine:
+          '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\dist\\bridge\\wechat-bridge.js" "--adapter" "codex"',
+      },
+      {
         ProcessId: 303,
         ParentProcessId: 1,
         Name: "node.exe",
@@ -79,6 +110,13 @@ describe("bridge peer process reaper", () => {
         name: "node.exe",
         commandLine:
           '"C:\\Program Files\\nodejs\\node.exe" --no-warnings --experimental-strip-types C:\\repo\\src\\bridge\\wechat-bridge.ts --adapter opencode --cwd C:\\Users\\unlin',
+      },
+      {
+        pid: 204,
+        parentPid: 1,
+        name: "node.exe",
+        commandLine:
+          '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\dist\\bridge\\wechat-bridge.js" "--adapter" "codex"',
       },
     ]);
   });

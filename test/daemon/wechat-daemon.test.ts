@@ -6,6 +6,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildVisibleClientLaunchArgs,
   buildWindowsVisibleClientLaunchCommand,
+  cleanupDaemonBeforeStart,
   cleanupSingleBridgeBeforeDaemon,
   defaultDaemonSessionStartMode,
   formatDaemonSwitchResultDetail,
@@ -16,6 +17,10 @@ import {
   waitForVisibleClientConnection,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
+import type {
+  DaemonEndpoint,
+  DaemonRequest,
+} from "../../src/daemon/daemon-link.ts";
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
@@ -31,6 +36,18 @@ function buildBridgeLock(overrides: Partial<BridgeLockPayload> = {}): BridgeLock
     cwd: "C:\\Users\\unlin",
     startedAt: "2026-05-22T00:00:00.000Z",
     lifecycle: "persistent",
+    ...overrides,
+  };
+}
+
+function buildDaemonEndpoint(overrides: Partial<DaemonEndpoint> = {}): DaemonEndpoint {
+  return {
+    protocolVersion: 1,
+    pid: 28600,
+    port: 55901,
+    token: "daemon-token",
+    cwd: "C:\\Users\\unlin",
+    startedAt: "2026-05-25T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -150,6 +167,17 @@ describe("wechat-daemon helpers", () => {
         sharedSessionId: "session_current",
       }),
     ).toBe("new");
+
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "opencode",
+        explicitSessionStartMode: "new",
+        slotCreated: false,
+        visibleConnected: true,
+        sharedSessionId: "session_current",
+        reuseExistingVisible: true,
+      }),
+    ).toBe("restore");
 
     expect(
       resolveDaemonSessionStartMode({
@@ -274,6 +302,122 @@ describe("wechat-daemon helpers", () => {
 
     expect(connected).toBe(false);
     expect(now).toBe(500);
+  });
+
+  test("cleanupDaemonBeforeStart returns none when no daemon endpoint exists", async () => {
+    await expect(
+      cleanupDaemonBeforeStart({
+        readEndpoint: () => null,
+      }),
+    ).resolves.toEqual({ action: "none" });
+  });
+
+  test("cleanupDaemonBeforeStart clears stale daemon endpoint and workspace endpoints", async () => {
+    const endpoint = buildDaemonEndpoint();
+    const cleared: string[] = [];
+
+    const result = await cleanupDaemonBeforeStart({
+      readEndpoint: () => endpoint,
+      isAlive: () => false,
+      clearEndpoint: (pid) => {
+        cleared.push(`endpoint:${pid ?? 0}`);
+      },
+      clearWorkspaceEndpoints: (payload) => {
+        cleared.push(`workspace:${payload.cwd}`);
+      },
+      log: () => undefined,
+    });
+
+    expect(result).toEqual({ action: "cleared_stale_endpoint", endpoint });
+    expect(cleared).toEqual(["workspace:C:\\Users\\unlin", "endpoint:28600"]);
+  });
+
+  test("cleanupDaemonBeforeStart gracefully stops a live daemon before startup", async () => {
+    const endpoint = buildDaemonEndpoint();
+    let alive = true;
+    const requests: DaemonRequest[] = [];
+    const cleared: string[] = [];
+
+    const result = await cleanupDaemonBeforeStart({
+      readEndpoint: () => endpoint,
+      isAlive: () => alive,
+      sendRequest: async (_endpoint, request) => {
+        requests.push(request);
+        alive = false;
+        return { ok: true };
+      },
+      clearEndpoint: (pid) => {
+        cleared.push(`endpoint:${pid ?? 0}`);
+      },
+      clearWorkspaceEndpoints: (payload) => {
+        cleared.push(`workspace:${payload.cwd}`);
+      },
+      sleep: async () => undefined,
+      log: () => undefined,
+    });
+
+    expect(result).toEqual({ action: "stopped", endpoint, forced: false });
+    expect(requests).toEqual([{ command: "shutdown" }]);
+    expect(cleared).toEqual(["workspace:C:\\Users\\unlin", "endpoint:28600"]);
+  });
+
+  test("cleanupDaemonBeforeStart force-stops daemon endpoints that do not answer IPC", async () => {
+    const endpoint = buildDaemonEndpoint();
+    let alive = true;
+    const killed: number[] = [];
+
+    const result = await cleanupDaemonBeforeStart({
+      readEndpoint: () => endpoint,
+      isAlive: () => alive,
+      sendRequest: async () => ({ ok: false, error: "Timed out waiting for daemon response." }),
+      isDaemonProcess: () => true,
+      killProcess: (pid) => {
+        killed.push(pid);
+        alive = false;
+      },
+      clearEndpoint: () => undefined,
+      clearWorkspaceEndpoints: () => undefined,
+      sleep: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      },
+      log: () => undefined,
+      stopTimeoutMs: 1,
+      forceStopTimeoutMs: 1,
+      pollMs: 1,
+    });
+
+    expect(result).toEqual({ action: "stopped", endpoint, forced: true });
+    expect(killed).toEqual([28600]);
+  });
+
+  test("cleanupDaemonBeforeStart does not force-stop unverified reused pids", async () => {
+    const endpoint = buildDaemonEndpoint();
+    const killed: number[] = [];
+    const cleared: string[] = [];
+
+    const result = await cleanupDaemonBeforeStart({
+      readEndpoint: () => endpoint,
+      isAlive: () => true,
+      sendRequest: async () => ({ ok: false, error: "Daemon endpoint is not reachable." }),
+      isDaemonProcess: () => false,
+      killProcess: (pid) => {
+        killed.push(pid);
+      },
+      clearEndpoint: (pid) => {
+        cleared.push(`endpoint:${pid ?? 0}`);
+      },
+      clearWorkspaceEndpoints: (payload) => {
+        cleared.push(`workspace:${payload.cwd}`);
+      },
+      sleep: async () => undefined,
+      log: () => undefined,
+      stopTimeoutMs: 1,
+      pollMs: 1,
+    });
+
+    expect(result).toEqual({ action: "cleared_stale_endpoint", endpoint });
+    expect(killed).toEqual([]);
+    expect(cleared).toEqual(["workspace:C:\\Users\\unlin", "endpoint:28600"]);
   });
 
   test("cleanupSingleBridgeBeforeDaemon returns none when no lock exists", async () => {

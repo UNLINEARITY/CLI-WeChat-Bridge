@@ -373,7 +373,6 @@ npm install -g cli-wechat-bridge@latest
 - [@opencode-ai/sdk](https://www.npmjs.com/package/@opencode-ai/sdk)：OpenCode session 和事件流客户端
 - [@modelcontextprotocol/sdk](https://github.com/modelcontextprotocol/typescript-sdk)：MCP server 入口使用的 TypeScript SDK
 - [node-pty](https://github.com/microsoft/node-pty)：本地 PTY / ConPTY 进程桥接
-- [@anthropic-ai/sdk](https://github.com/anthropics/anthropic-sdk-typescript)：standalone Claude bot 入口使用的 Anthropic TypeScript SDK
 - [qrcode-terminal](https://github.com/gtanner/qrcode-terminal)：终端二维码输出
 
 运行与开发基础：

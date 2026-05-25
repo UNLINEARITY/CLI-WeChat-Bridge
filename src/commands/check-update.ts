@@ -3,8 +3,6 @@
 import {
   checkForUpdate,
   getCurrentVersion,
-  fetchLatestVersion,
-  compareVersions,
 } from "../utils/version-checker.ts";
 
 async function main(): Promise<void> {

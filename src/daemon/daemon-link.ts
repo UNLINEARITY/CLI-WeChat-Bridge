@@ -45,6 +45,7 @@ export type DaemonRequest =
       cliArgs?: string[];
       openVisible?: boolean;
       sessionStartMode?: BridgeSessionStartMode;
+      reuseExistingVisible?: boolean;
     }
   | {
       command: "switch_adapter";
@@ -53,6 +54,7 @@ export type DaemonRequest =
       cliArgs?: string[];
       openVisible?: boolean;
       sessionStartMode?: BridgeSessionStartMode;
+      reuseExistingVisible?: boolean;
     }
   | { command: "status" }
   | { command: "shutdown" };

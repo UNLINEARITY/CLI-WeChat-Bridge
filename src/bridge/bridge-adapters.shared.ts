@@ -2,47 +2,18 @@
 import path from "node:path";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { spawn as spawnChild, spawnSync } from "node:child_process";
-import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { spawn as spawnPty } from "node-pty";
-import type { IPty } from "node-pty";
 
-import {
-  attachLocalCompanionMessageListener,
-  buildLocalCompanionToken,
-  clearLocalCompanionEndpoint,
-  sendLocalCompanionMessage,
-  writeLocalCompanionEndpoint,
-  type LocalCompanionCommand,
-  type LocalCompanionEndpoint,
-  type LocalCompanionMessage,
-} from "../companion/local-companion-link.ts";
-import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
-import {
-  buildClaudeFailureMessage,
-  buildClaudeHookSettings,
-  buildClaudePermissionDecisionHookOutput,
-  buildClaudePermissionApprovalRequest,
-  extractClaudeResumeConversationId,
-  findInjectedClaudePromptIndex,
-  normalizeClaudeAssistantMessage,
-  parseClaudeHookPayload,
-  type ClaudeHookPayload,
-  type PendingInjectedClaudePrompt,
-} from "./claude-hooks.ts";
 import type {
   ApprovalRequest,
-  BridgeAdapter,
   BridgeAdapterKind,
   BridgeLifecycleMode,
   BridgeSessionStartMode,
-  BridgeNoticeLevel,
   BridgeResumeSessionCandidate,
   BridgeResumeThreadCandidate,
   BridgeAdapterState,
   BridgeEvent,
-  BridgeThreadSwitchReason,
-  BridgeThreadSwitchSource,
   BridgeTurnOrigin,
   UserInputRequest,
   UserInputRequestOption,
@@ -51,26 +22,14 @@ import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
   containsWechatOutboundAttachmentPathDeep,
-  detectCliApproval,
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
   normalizeOutput,
-  nowIso,
   truncatePreview,
 } from "./bridge-utils.ts";
 import {
-  coerceWebSocketMessageData,
-  describeUnknownError,
-  getCodexRpcRequestId,
-  getLocalCompanionCommandName,
   getNotificationThreadId,
-  getNotificationTurnId,
-  getSharedSessionIdFromAdapterState,
-  isRecentIsoTimestamp,
   isRecord,
-  normalizeCodexRpcError,
-  quotePosixCommandArg,
-  quoteWindowsCommandArg,
   type CodexRpcRequestId,
 } from "./bridge-adapter-common.ts";
 
