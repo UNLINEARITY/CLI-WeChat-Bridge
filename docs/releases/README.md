@@ -4,6 +4,18 @@
 
 ## 版本列表
 
+### [v1.0.8](./1.0.8.md) / [中文说明](./1.0.8_CN.md)
+**微信表情绑定 + 运行时 bug 修复 + macOS/Linux 可见终端** - 新增表情到命令映射系统，支持默认绑定和微信内动态管理；修复 Stop 后无法恢复、图片无法读取、daemon 接管丢失会话等运行时 bug；为 macOS 和 Linux 添加可见终端窗口支持
+- **表情绑定**：发送微信表情即可触发 daemon 命令，默认映射 `[OK]→/confirm`、`[闭嘴]→/stop`、`[拥抱]→/claude`、`[强]→/codex`、`[胜利]→/opencode`、`[再见]→/daemon-stop`
+- **绑定管理**：微信内 `/bindings`、`/bind [表情] /命令`、`/unbind [表情]` 动态管理，持久化到 JSON 文件
+- **表情+文本**：表情后跟文本时先切换 adapter 再转发剩余文本（如 `[拥抱]帮我写个脚本` → 切到 Claude 并发送"帮我写个脚本"）
+- **Stop 恢复**：Claude interrupt 添加 1.5s 回退超时，防止 adapter 永久卡在 busy
+- **图片读取**：附件提示改为 ACTION REQUIRED 语言，强制 Claude Read 图片
+- **会话保留**：daemon 接管同 adapter 时使用 restore 模式保留对话
+- **进程安全**：POSIX 进程组终止、PTY 退出等待、信号防重入、RPC 超时、IPC 限流、增量日志读取
+- **可见终端**：macOS 用 osascript + Terminal.app，Linux 检测终端模拟器，Windows 不变
+- **统计**：6 个文件，新增约 300 行
+
 ### [v1.0.7](./1.0.7.md) / [中文说明](./1.0.7_CN.md)
 **daemon 切换可靠性 + fresh session 启动 + 文档拆分** - 修复可见 CLI 连接失败后污染 active adapter 的问题，Codex endpoint 丢失后可重新发布并恢复连接，daemon 启动会清理同工作区残留 peer，同时 Claude Code / OpenCode 启动器默认进入 fresh session
 - **daemon 切换保护**：`/codex`、`/claude`、`/opencode` 只有在可见 CLI 成功连接后才会激活目标 adapter；失败时保留原 active adapter 并记录 `activated`、`previous_active` 和 `session_start_mode`
@@ -131,6 +143,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.8 | 2026-05-26 | 微信表情绑定、Stop 恢复、图片读取、daemon 会话保留、进程安全、macOS/Linux 可见终端 | 6 个文件，+300 |
 | 1.0.7 | 2026-05-26 | daemon 切换失败不再污染 active adapter，Codex endpoint 丢失可恢复，旧 daemon peer 自动清理，Claude/OpenCode 默认 fresh session，文档拆分与旧代码清理 | 34 个文件，+2,175/-1,371 |
 | 1.0.6 | 2026-05-23 | Codex / Claude 低风险审批自动通过、微信附件发送 staging 保护、Codex `/answer` 用户输入回传 | 15 个文件，+2,739/-132 |
 | 1.0.5 | 2026-05-22 | 常驻 daemon、多 CLI 微信切换、短 npm 包名、`.cli-bridge` 自动迁移、入站附件落盘与 stale context token 诊断 | 32 个文件，+4,703/-178 |
