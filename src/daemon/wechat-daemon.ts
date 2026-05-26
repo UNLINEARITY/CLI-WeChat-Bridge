@@ -617,6 +617,7 @@ class WechatDaemon {
   private readonly startedAt = new Date().toISOString();
   private readonly bridgeStartedAtMs = Date.now();
   private activeAdapter: DaemonAdapterKind | null = null;
+  takenOverAdapter?: DaemonAdapterKind;
   private textSendChain = Promise.resolve();
   private attachmentSendChain = Promise.resolve();
   private readonly pendingWechatForwardTasks = new Set<Promise<void>>();
@@ -894,7 +895,11 @@ class WechatDaemon {
     let created = false;
     if (!slot) {
       const createSessionStartMode =
-        options.sessionStartMode ?? defaultDaemonSessionStartMode(adapter);
+        options.sessionStartMode ??
+        (adapter === this.takenOverAdapter ? "restore" : defaultDaemonSessionStartMode(adapter));
+      if (adapter === this.takenOverAdapter) {
+        this.takenOverAdapter = undefined;
+      }
       slot = await this.createSlot(adapter, {
         profile: options.profile ?? this.profile,
         sessionStartMode: createSessionStartMode,
@@ -2135,7 +2140,7 @@ export async function runDaemon(
 ): Promise<void> {
   migrateLegacyChannelFiles((message) => log(message));
   await cleanupDaemonBeforeStart({ cwd: options.cwd });
-  await cleanupSingleBridgeBeforeDaemon();
+  const cleanupResult = await cleanupSingleBridgeBeforeDaemon();
   const reapedPeerPids = await reapPeerBridgeProcesses({
     logger: (message) => appendDaemonLog(message),
   });
@@ -2163,6 +2168,9 @@ export async function runDaemon(
     authorizedUserId: credentials.userId,
     transport: new WeChatTransport({ log, logError }),
   });
+  if (cleanupResult.action === "stopped" && isDaemonAdapterKind(cleanupResult.lock.adapter)) {
+    daemon.takenOverAdapter = cleanupResult.lock.adapter;
+  }
   await daemon.startIpcServer();
   await daemon.runInitialAdapter(options);
 

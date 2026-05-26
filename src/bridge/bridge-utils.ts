@@ -398,8 +398,8 @@ function formatWechatInboundAttachmentPrompt(
   attachments: WechatInboundPromptAttachment[],
 ): string {
   const lines = [
-    "[WeChat inbound attachments]",
-    "The user sent attachment files through WeChat. They have been saved locally. Read the local paths directly if the user's request requires inspecting them.",
+    "[WeChat inbound attachments — ACTION REQUIRED]",
+    "The user sent the following files through WeChat. You MUST use the Read tool to read each file path below BEFORE responding. Do NOT skip reading these files — the user expects you to see their content (including images).",
   ];
 
   attachments.forEach((attachment, index) => {
@@ -411,6 +411,9 @@ function formatWechatInboundAttachmentPrompt(
     ].filter(Boolean);
     lines.push(`${index + 1}. ${metadata.join(" ")} path=${attachment.path}`);
   });
+
+  lines.push("");
+  lines.push("Remember: Read each path above with the Read tool NOW. Images are viewable via Read.");
 
   return lines.join("\n");
 }

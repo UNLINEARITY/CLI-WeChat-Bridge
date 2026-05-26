@@ -276,7 +276,7 @@ describe("wechat inbound prompt injection", () => {
     ]);
 
     expect(prompt).toContain("Please summarize this file.");
-    expect(prompt).toContain("[WeChat inbound attachments]");
+    expect(prompt).toContain("[WeChat inbound attachments");
     expect(prompt).toContain("kind=file name=report.pdf size=1.5 KB path=C:\\Users\\unlin");
   });
 

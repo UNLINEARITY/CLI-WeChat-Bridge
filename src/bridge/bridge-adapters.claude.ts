@@ -277,6 +277,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.writeToPty("\u0003");
+    this.scheduleTaskComplete(shared.INTERRUPT_SETTLE_DELAY_MS);
     return true;
   }
 
