@@ -313,7 +313,9 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 
 ### 表情绑定
 
-Daemon 模式支持将微信表情映射为命令，在微信中发送表情即可快速触发操作。
+Daemon 模式支持将微信表情映射为命令，在微信中发送表情即可快速触发操作。（不过注意，第一次启动相关cli的时候，最好不要带消息，等启动完成再“表情+文本”快速给指定 cli 发送消息。
+
+![表情触发](docs/images/image-10.png)
 
 **默认绑定：**
 
