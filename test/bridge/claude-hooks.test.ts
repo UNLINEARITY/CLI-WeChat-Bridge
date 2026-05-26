@@ -313,7 +313,7 @@ describe("getClaudePermissionAutoResponse", () => {
           file_path: "C:\\tmp\\note.md",
         },
       }),
-    ).toBeNull();
+    ).toMatchObject({ action: "confirm" });
   });
 });
 

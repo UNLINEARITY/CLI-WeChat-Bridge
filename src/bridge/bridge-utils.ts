@@ -544,7 +544,7 @@ const HIGH_RISK_PATTERNS = [
   /\brmdir\b/i,
   /\bdel\b/i,
   /\berase\b/i,
-  /\bformat\b/i,
+  /\bformat\b(?!-)/i,
   /\bshutdown\b/i,
   /\bstop-computer\b/i,
   /\brestart-computer\b/i,

@@ -60,14 +60,6 @@ const FILE_MUTATION_TOOL_NAMES = new Set([
   "MultiEdit",
   "NotebookEdit",
 ]);
-const LOW_RISK_READ_TOOL_NAMES = new Set([
-  "Glob",
-  "Grep",
-  "LS",
-  "NotebookRead",
-  "Read",
-  "TodoRead",
-]);
 
 type ClaudeTranscriptAssistantEntry = {
   type?: string;
@@ -337,15 +329,11 @@ export function getClaudePermissionAutoResponse(
     return null;
   }
 
-  if (LOW_RISK_READ_TOOL_NAMES.has(toolName)) {
+  if (toolName !== "Bash") {
     return {
       action: "confirm",
       reason: `low-risk ${toolName} permission`,
     };
-  }
-
-  if (toolName !== "Bash") {
-    return null;
   }
 
   const command = getClaudeToolInputString(payload, "command").trim();

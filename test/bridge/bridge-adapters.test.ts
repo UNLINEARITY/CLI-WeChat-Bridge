@@ -1666,9 +1666,9 @@ describe("Claude CLI compatibility", () => {
     adapter.handleClaudePermissionRequest(
       "request-lost",
       {
-        tool_name: "WebFetch",
+        tool_name: "Bash",
         tool_input: {
-          url: "https://example.com",
+          command: "rm -rf /important",
         },
       },
       {
