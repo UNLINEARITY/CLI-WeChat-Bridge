@@ -389,6 +389,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
   }
 
   private detachPanelSocket(): void {
+    this.rejectPendingRequests("Companion socket disconnected unexpectedly.");
     this.detachMessageListener?.();
     this.detachMessageListener = null;
     if (this.socket) {
@@ -502,7 +503,14 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
 
     const id = `${++this.requestCounter}`;
     const response = new Promise<unknown>((resolve, reject) => {
-      this.pendingRequests.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pendingRequests.delete(id);
+        reject(new Error(`${this.options.kind} companion request timed out after 30s (command: ${payload.command})`));
+      }, 30_000);
+      this.pendingRequests.set(id, {
+        resolve: (value: unknown) => { clearTimeout(timer); resolve(value); },
+        reject: (err: unknown) => { clearTimeout(timer); reject(err); },
+      });
     });
 
     sendLocalCompanionMessage(socket, {
@@ -782,14 +790,21 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     }
 
     this.shuttingDown = true;
-    try {
-      this.pty.kill();
-    } catch {
-      // Best effort shutdown.
-    }
+    const pty = this.pty;
     this.pty = null;
     this.state.status = "stopped";
     this.state.pid = undefined;
+
+    try {
+      const exitPromise = new Promise<void>((resolve) => {
+        const timeout = setTimeout(resolve, 3_000);
+        pty.onExit(() => { clearTimeout(timeout); resolve(); });
+      });
+      pty.kill();
+      await exitPromise;
+    } catch {
+      // Best effort shutdown.
+    }
   }
 
   getState(): BridgeAdapterState {

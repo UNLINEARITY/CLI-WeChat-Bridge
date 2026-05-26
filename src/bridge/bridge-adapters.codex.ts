@@ -657,9 +657,26 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.seedSessionReplayCutoff(startedAtMs);
     }
 
-    let content: string;
+    let chunk: string;
     try {
-      content = fs.readFileSync(this.sessionFilePath, "utf8");
+      const stat = fs.statSync(this.sessionFilePath);
+      if (stat.size < this.sessionReadOffset) {
+        this.sessionReadOffset = 0;
+        this.sessionPartialLine = "";
+      }
+      if (stat.size === this.sessionReadOffset) {
+        return;
+      }
+      const fd = fs.openSync(this.sessionFilePath, "r");
+      try {
+        const bytesToRead = stat.size - this.sessionReadOffset;
+        const buf = Buffer.alloc(bytesToRead);
+        fs.readSync(fd, buf, 0, bytesToRead, this.sessionReadOffset);
+        chunk = buf.toString("utf8");
+        this.sessionReadOffset = stat.size;
+      } finally {
+        fs.closeSync(fd);
+      }
     } catch {
       this.sessionFilePath = null;
       this.sessionReadOffset = 0;
@@ -667,16 +684,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    if (content.length < this.sessionReadOffset) {
-      this.sessionReadOffset = 0;
-      this.sessionPartialLine = "";
-    }
-    if (content.length === this.sessionReadOffset) {
-      return;
-    }
-
-    const chunk = content.slice(this.sessionReadOffset);
-    this.sessionReadOffset = content.length;
     const lines = `${this.sessionPartialLine}${chunk}`.split(/\r?\n/);
     this.sessionPartialLine = lines.pop() ?? "";
 
@@ -2015,10 +2022,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const requestId = ++this.rpcRequestCounter;
     const requestKey = this.rpcRequestKey(requestId);
     const responsePromise = new Promise<unknown>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingRpcRequests.delete(requestKey);
+        reject(new Error(`Codex RPC request timed out after 30s (method: ${method})`));
+      }, 30_000);
       this.pendingRpcRequests.set(requestKey, {
         method,
-        resolve,
-        reject,
+        resolve: (value: unknown) => { clearTimeout(timer); resolve(value); },
+        reject: (err: unknown) => { clearTimeout(timer); reject(err); },
       });
     });
 

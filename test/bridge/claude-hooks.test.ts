@@ -50,6 +50,11 @@ describe("buildClaudeHookSettings", () => {
       "Notification",
       "Stop",
       "StopFailure",
+      "PreToolUse",
+      "PostToolUse",
+      "PreCompact",
+      "PostCompact",
+      "SubagentStop",
     ]);
   });
 });

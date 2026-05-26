@@ -367,6 +367,8 @@ export function sendLocalCompanionMessage(
   }
 }
 
+const MAX_IPC_BUFFER_SIZE = 1_048_576; // 1MB
+
 export function attachLocalCompanionMessageListener(
   socket: net.Socket,
   onMessage: (message: LocalCompanionMessage) => void,
@@ -374,6 +376,11 @@ export function attachLocalCompanionMessageListener(
   let buffer = "";
   const onData = (chunk: string | Buffer) => {
     buffer += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    if (buffer.length > MAX_IPC_BUFFER_SIZE) {
+      socket.destroy(new Error("IPC buffer overflow: exceeded 1MB without complete frame"));
+      buffer = "";
+      return;
+    }
 
     while (true) {
       const newlineIndex = buffer.indexOf("\n");

@@ -2025,7 +2025,7 @@ export async function cleanupSingleBridgeBeforeDaemon(
   const readLock = deps.readLock ?? readBridgeLockFile;
   const isAlive = deps.isAlive ?? isPidAlive;
   const killProcess = deps.killProcess ?? ((pid, signal) => {
-    if (signal === "SIGKILL") {
+    if (signal === "SIGKILL" || process.platform === "win32") {
       killProcessTreeSync(pid);
       return;
     }
@@ -2166,15 +2166,21 @@ export async function runDaemon(
   await daemon.startIpcServer();
   await daemon.runInitialAdapter(options);
 
-  const requestShutdown = (signal: string) => {
+  let shutdownInProgress = false;
+  const handleSignal = (signal: string) => {
+    if (shutdownInProgress) {
+      log(`Received ${signal} during shutdown, forcing exit.`);
+      process.exit(1);
+    }
+    shutdownInProgress = true;
     log(`Received ${signal}. Stopping daemon.`);
     void daemon.shutdown().finally(() => process.exit(0));
   };
-  process.once("SIGINT", () => requestShutdown("SIGINT"));
-  process.once("SIGTERM", () => requestShutdown("SIGTERM"));
-  process.once("SIGHUP", () => requestShutdown("SIGHUP"));
+  process.on("SIGINT", () => handleSignal("SIGINT"));
+  process.on("SIGTERM", () => handleSignal("SIGTERM"));
+  process.on("SIGHUP", () => handleSignal("SIGHUP"));
   if (process.platform === "win32") {
-    process.once("SIGBREAK", () => requestShutdown("SIGBREAK"));
+    process.on("SIGBREAK", () => handleSignal("SIGBREAK"));
   }
   process.on("exit", () => {
     clearDaemonEndpoint();

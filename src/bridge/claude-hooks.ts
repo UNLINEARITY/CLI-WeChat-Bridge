@@ -14,7 +14,12 @@ export type ClaudeHookEventName =
   | "PermissionRequest"
   | "Notification"
   | "Stop"
-  | "StopFailure";
+  | "StopFailure"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PreCompact"
+  | "PostCompact"
+  | "SubagentStop";
 
 export type ClaudeHookPayload = {
   session_id?: string;
@@ -148,6 +153,11 @@ export function buildClaudeHookSettings(command: string): Record<string, unknown
       ],
       Stop: [hook],
       StopFailure: [hook],
+      PreToolUse: [hook],
+      PostToolUse: [hook],
+      PreCompact: [hook],
+      PostCompact: [hook],
+      SubagentStop: [hook],
     },
   };
 }

@@ -716,6 +716,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     return `${CLAUDE_BRACKETED_PASTE_START}${normalizedText}${CLAUDE_BRACKETED_PASTE_END}`;
   }
 
+  // Fallback heuristic for older Claude Code versions that lack PostCompact hooks.
+  // The structured PostCompact hook event (handled in handleClaudeHookEnvelope) is
+  // the reliable signal; this regex match serves as a best-effort fallback.
   private shouldTreatClaudeOutputAsCompactCompletion(text: string): boolean {
     if (
       this.state.status !== "busy" &&
@@ -874,6 +877,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         return;
       case "StopFailure":
         this.handleClaudeStopFailure(payload);
+        this.respondToClaudeHook(params.socket, params.requestId);
+        return;
+      case "PostCompact":
+        this.completeClaudeCompact();
         this.respondToClaudeHook(params.socket, params.requestId);
         return;
       default:

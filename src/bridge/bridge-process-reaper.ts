@@ -413,7 +413,9 @@ export function killProcessTreeSync(pid: number): void {
       try { process.kill(pid); } catch { /* best effort */ }
     }
   } else {
-    try { process.kill(pid); } catch { /* best effort */ }
+    try { process.kill(-pid); } catch {
+      try { process.kill(pid); } catch { /* best effort */ }
+    }
   }
 }
 

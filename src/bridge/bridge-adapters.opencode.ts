@@ -521,20 +521,24 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (this.nativeProcess) {
       const proc = this.nativeProcess;
       this.nativeProcess = null;
-      try {
-        killProcessTreeSync(proc.pid!);
-      } catch {
-        // Best effort.
+      if (proc.pid != null) {
+        try {
+          killProcessTreeSync(proc.pid);
+        } catch {
+          // Best effort.
+        }
       }
     }
 
     if (this.serverProcess) {
       const proc = this.serverProcess;
       this.serverProcess = null;
-      try {
-        killProcessTreeSync(proc.pid!);
-      } catch {
-        // Best effort.
+      if (proc.pid != null) {
+        try {
+          killProcessTreeSync(proc.pid);
+        } catch {
+          // Best effort.
+        }
       }
     }
 
