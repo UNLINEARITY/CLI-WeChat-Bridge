@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -393,6 +393,38 @@ export function buildWindowsVisibleClientLaunchCommand(params: {
   ].join(" ");
 }
 
+type LinuxTerminalEntry = { cmd: string; buildArgs: (title: string) => string[] };
+
+const LINUX_TERMINALS: LinuxTerminalEntry[] = [
+  { cmd: "gnome-terminal", buildArgs: (title) => ["--title", title, "--"] },
+  { cmd: "konsole", buildArgs: (title) => ["-p", `tabtitle=${title}`, "-e"] },
+  { cmd: "xfce4-terminal", buildArgs: (title) => ["--title", title, "-e"] },
+  { cmd: "xterm", buildArgs: (title) => ["-title", title, "-e"] },
+];
+
+let cachedLinuxTerminal: LinuxTerminalEntry | null | undefined;
+
+function detectLinuxTerminal(): LinuxTerminalEntry | null {
+  if (cachedLinuxTerminal !== undefined) {
+    return cachedLinuxTerminal;
+  }
+  for (const entry of LINUX_TERMINALS) {
+    try {
+      execFileSync("which", [entry.cmd], { stdio: "ignore" });
+      cachedLinuxTerminal = entry;
+      return entry;
+    } catch {
+      // not found, try next
+    }
+  }
+  cachedLinuxTerminal = null;
+  return null;
+}
+
+function shellQuotePosix(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 type VisibleClientLaunch = {
   command: string;
   args: string[];
@@ -445,12 +477,56 @@ function openVisibleClient(params: {
     };
   }
 
+  const title = `wechat-${params.adapter}`;
+  const fullArgs = [process.execPath, ...args];
+
+  if (process.platform === "darwin") {
+    const cmdLine = fullArgs.map(shellQuotePosix).join(" ");
+    const script = `tell application "Terminal"
+activate
+do script "cd ${shellQuotePosix(params.cwd)} && exec ${cmdLine}"
+end tell`;
+    const child = spawn("osascript", ["-e", script], {
+      cwd: params.cwd,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("error", (error) => {
+      params.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.unref();
+    return {
+      command: "osascript",
+      args: ["-e", script],
+      pid: child.pid,
+    };
+  }
+
+  const terminal = detectLinuxTerminal();
+  if (terminal) {
+    const termArgs = [...terminal.buildArgs(title), ...fullArgs];
+    const child = spawn(terminal.cmd, termArgs, {
+      cwd: params.cwd,
+      env: process.env,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("error", (error) => {
+      params.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.unref();
+    return {
+      command: terminal.cmd,
+      args: termArgs,
+      pid: child.pid,
+    };
+  }
+
   const child = spawn(process.execPath, args, {
     cwd: params.cwd,
     env: process.env,
     detached: true,
     stdio: "ignore",
-    windowsHide: false,
   });
   child.once("error", (error) => {
     params.onError?.(error instanceof Error ? error : new Error(String(error)));
