@@ -44,6 +44,7 @@ export const INBOUND_ATTACHMENTS_DIR = path.join(
   CHANNEL_DATA_DIR,
   "inbound-attachments",
 );
+export const EMOJI_BINDINGS_FILE = path.join(CHANNEL_DATA_DIR, "emoji-bindings.json");
 
 export type WorkspaceChannelPaths = {
   workspaceDir: string;

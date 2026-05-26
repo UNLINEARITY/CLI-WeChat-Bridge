@@ -71,6 +71,13 @@ import {
 } from "../wechat/channel-config.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import {
+  listBindings,
+  loadEmojiBindings,
+  removeBinding,
+  resolveEmojiCommand,
+  setBinding,
+} from "./emoji-bindings.ts";
+import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
   describeWechatTransportError,
@@ -280,6 +287,28 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
     default:
       return null;
   }
+}
+
+export type EmojiBindingsCommand =
+  | { type: "bind"; emoji: string; command: string }
+  | { type: "unbind"; emoji: string }
+  | { type: "list" };
+
+export function parseEmojiBindingsCommand(text: string): EmojiBindingsCommand | null {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "/bindings") {
+    return { type: "list" };
+  }
+  const bindMatch = trimmed.match(/^\/bind\s+(\[[^\]]+\])\s+(.+)$/i);
+  if (bindMatch) {
+    return { type: "bind", emoji: bindMatch[1]!, command: bindMatch[2]!.trim() };
+  }
+  const unbindMatch = trimmed.match(/^\/unbind\s+(\[[^\]]+\])$/i);
+  if (unbindMatch) {
+    return { type: "unbind", emoji: unbindMatch[1]! };
+  }
+  return null;
 }
 
 export function defaultDaemonSessionStartMode(
@@ -1357,6 +1386,32 @@ class WechatDaemon {
       return;
     }
 
+    const emojiMatch = resolveEmojiCommand(message.text);
+    if (emojiMatch) {
+      const switchTarget = parseDaemonSwitchCommand(emojiMatch.command);
+      if (switchTarget && emojiMatch.remainder) {
+        const result = await this.ensureSlot(switchTarget, {
+          openVisible: true,
+          reuseExistingVisible: true,
+        });
+        if (result.activated) {
+          message = { ...message, text: emojiMatch.remainder };
+        } else {
+          const detail = formatDaemonSwitchResultDetail(result);
+          await this.queueWechatMessage(
+            message.senderId,
+            `Could not activate terminal: ${switchTarget}.\n${detail}`,
+          );
+          return;
+        }
+      } else {
+        const rewritten = emojiMatch.remainder
+          ? `${emojiMatch.command} ${emojiMatch.remainder}`
+          : emojiMatch.command;
+        message = { ...message, text: rewritten };
+      }
+    }
+
     const switchAdapter = parseDaemonSwitchCommand(message.text);
     if (switchAdapter) {
       const result = await this.ensureSlot(switchAdapter, {
@@ -1379,6 +1434,12 @@ class WechatDaemon {
       setTimeout(() => {
         void this.shutdown().finally(() => process.exit(0));
       }, 0);
+      return;
+    }
+
+    const bindingsCmd = parseEmojiBindingsCommand(message.text);
+    if (bindingsCmd) {
+      await this.handleEmojiBindingsCommand(message.senderId, bindingsCmd);
       return;
     }
 
@@ -1437,6 +1498,47 @@ class WechatDaemon {
     }
 
     await this.dispatchInboundWechatText(message, slot);
+  }
+
+  private async handleEmojiBindingsCommand(
+    senderId: string,
+    cmd: EmojiBindingsCommand,
+  ): Promise<void> {
+    switch (cmd.type) {
+      case "list": {
+        const map = listBindings();
+        if (map.size === 0) {
+          await this.queueWechatMessage(senderId, "No emoji bindings configured.");
+          return;
+        }
+        const lines = Array.from(map.entries()).map(
+          ([emoji, command]) => `${emoji} → ${command}`,
+        );
+        await this.queueWechatMessage(
+          senderId,
+          `Emoji bindings:\n${lines.join("\n")}`,
+        );
+        return;
+      }
+      case "bind": {
+        setBinding(cmd.emoji, cmd.command);
+        await this.queueWechatMessage(
+          senderId,
+          `Bound ${cmd.emoji} → ${cmd.command}`,
+        );
+        return;
+      }
+      case "unbind": {
+        const removed = removeBinding(cmd.emoji);
+        await this.queueWechatMessage(
+          senderId,
+          removed
+            ? `Unbound ${cmd.emoji}`
+            : `No binding found for ${cmd.emoji}`,
+        );
+        return;
+      }
+    }
   }
 
   private async handleSystemCommand(
@@ -2215,6 +2317,7 @@ export async function runDaemon(
   options: DaemonCliOptions,
 ): Promise<void> {
   migrateLegacyChannelFiles((message) => log(message));
+  loadEmojiBindings();
   await cleanupDaemonBeforeStart({ cwd: options.cwd });
   const cleanupResult = await cleanupSingleBridgeBeforeDaemon();
   const reapedPeerPids = await reapPeerBridgeProcesses({

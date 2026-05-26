@@ -305,8 +305,41 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | `/new` 或 `/new-session` | OpenCode 模式下新建 session |
 | `/confirm` / `/deny` | 处理 CLI 权限请求；需要一次性 code 的请求会在消息中提示具体确认格式 |
 | `/daemon-stop` | daemon 模式下停止常驻进程 |
+| `/bindings` | 查看当前所有表情绑定 |
+| `/bind [表情] /命令` | 绑定表情到指定命令 |
+| `/unbind [表情]` | 解除指定表情的绑定 |
 
 说明：微信侧 `/resume` 目前暂时保持禁用；需要切换 Codex / Claude / OpenCode 会话时，优先在本地 companion 中使用原生 `/resume`、`/new` 或对应 CLI 命令，微信会跟随本地活动会话。
+
+### 表情绑定
+
+Daemon 模式支持将微信表情映射为命令，在微信中发送表情即可快速触发操作。
+
+**默认绑定：**
+
+| 表情 | 命令 | 说明 |
+| --- | --- | --- |
+| `[OK]` | `/confirm` | 批准权限请求 |
+| `[闭嘴]` | `/stop` | 中断当前任务 |
+| `[拥抱]` | `/claude` | 切换到 Claude Code |
+| `[强]` | `/codex` | 切换到 Codex |
+| `[胜利]` | `/opencode` | 切换到 OpenCode |
+| `[再见]` | `/daemon-stop` | 停止 daemon |
+
+**管理命令：**
+
+```
+/bindings              查看当前所有绑定
+/bind [表情] /命令     绑定表情到命令，如 /bind [微笑] /status
+/unbind [表情]         解除绑定，如 /unbind [微笑]
+```
+
+**触发规则：**
+
+- 表情必须出现在消息开头才会触发（如 `[OK]` 触发，`你好[OK]` 不触发）；
+- 如果表情后面还有文本（如 `[拥抱]帮我写个脚本`），会先执行命令再将剩余文本作为消息转发；
+- 大小写不敏感（`[OK]` 和 `[ok]` 等价）；
+- 修改后立即生效并持久化到 `~/.cli-bridge/emoji-bindings.json`，重启 daemon 后保留。
 
 ## 工作区模型
 
