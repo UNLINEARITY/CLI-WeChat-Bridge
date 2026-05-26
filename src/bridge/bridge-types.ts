@@ -214,6 +214,7 @@ export interface BridgeAdapter {
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny"): Promise<boolean>;
+  resolveAllApprovals(action: "confirm" | "deny"): Promise<number>;
   submitUserInput(answers: Record<string, string[]>): Promise<boolean>;
   dispose(): Promise<void>;
   getState(): BridgeAdapterState;

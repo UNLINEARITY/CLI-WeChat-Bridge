@@ -312,7 +312,7 @@ describe("wechat-bridge cli helpers", () => {
     ).toBe(true);
     expect(
       isRetryableDeferredCodexDrainError(
-        "A Codex approval request is pending. Reply with /confirm <code> or /deny.",
+        "A Codex approval request is pending. Reply with /confirm or /deny.",
       ),
     ).toBe(true);
     expect(isRetryableDeferredCodexDrainError("codex panel is not running.")).toBe(false);

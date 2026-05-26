@@ -91,7 +91,7 @@ export class ShellAdapter extends AbstractPtyAdapter {
       throw new Error("shell is still working. Wait for the current reply or use /stop.");
     }
     if (this.pendingApproval || this.state.status === "awaiting_approval") {
-      throw new Error("A shell approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("A shell approval request is pending. Reply with /confirm or /deny.");
     }
 
     const rejectionMessage = getInteractiveShellCommandRejectionMessage(text);

@@ -321,7 +321,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
     }
 
     const normalized = normalizeOutput(text).trim();
@@ -384,7 +384,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
     }
 
     this.outputBatcher.clear();
@@ -485,6 +485,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.clearPendingPermissionState();
     this.setStatus("busy");
     return true;
+  }
+
+  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
+    const ok = await this.resolveApproval(action);
+    return ok ? 1 : 0;
   }
 
   async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {

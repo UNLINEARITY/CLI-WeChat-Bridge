@@ -2437,7 +2437,7 @@ describe("Codex panel completion recovery", () => {
     adapter.state.activeTurnOrigin = undefined;
     adapter.pendingTurnStart = false;
     adapter.pendingApproval = null;
-    adapter.pendingApprovalRequest = null;
+    adapter.pendingApprovalRequests = [];
     adapter.ensureThreadStarted = async () => "thread_1";
     adapter.sendRpcRequest = async (method: string) => {
       expect(method).toBe("turn/start");
@@ -2475,7 +2475,7 @@ describe("Codex panel completion recovery", () => {
     adapter.state.status = "idle";
     adapter.pendingTurnStart = false;
     adapter.pendingApproval = null;
-    adapter.pendingApprovalRequest = null;
+    adapter.pendingApprovalRequests = [];
     adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
       requests.push({ method, params });
       if (method === "thread/resume") {
@@ -2538,7 +2538,7 @@ describe("Codex panel completion recovery", () => {
     adapter.state.status = "idle";
     adapter.pendingTurnStart = false;
     adapter.pendingApproval = null;
-    adapter.pendingApprovalRequest = null;
+    adapter.pendingApprovalRequests = [];
     adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
       requests.push({ method, params });
       if (method === "thread/resume") {
@@ -2698,10 +2698,10 @@ describe("Codex panel completion recovery", () => {
     );
 
     expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
-    expect(adapter.pendingApprovalRequest).toMatchObject({
+    expect(adapter.pendingApprovalRequests).toMatchObject([{
       requestId: 12,
       method: "item/commandExecution/requestApproval",
-    });
+    }]);
     expect(adapter.pendingApproval).toMatchObject({
       commandPreview: "Remove-Item -Recurse C:\\temp (C:\\repo)",
     });
@@ -2716,7 +2716,7 @@ describe("Codex panel completion recovery", () => {
         result: { decision: "accept" },
       },
     ]);
-    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApprovalRequests).toEqual([]);
     expect(adapter.pendingApproval).toBeNull();
     expect(adapter.state.status).toBe("busy");
   });
@@ -2840,7 +2840,7 @@ describe("Codex panel completion recovery", () => {
       },
     ]);
     expect(events.filter((event) => event.type === "approval_required")).toEqual([]);
-    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApprovalRequests).toEqual([]);
     expect(adapter.pendingApproval).toBeNull();
     expect(adapter.state.pendingApproval).toBeUndefined();
     expect(adapter.state.status).toBe("busy");
@@ -2894,13 +2894,13 @@ describe("Codex panel completion recovery", () => {
     );
 
     expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
-    expect(adapter.pendingApprovalRequest).toMatchObject({
+    expect(adapter.pendingApprovalRequests).toMatchObject([{
       requestId: 9,
       method: "item/permissions/requestApproval",
       threadId: "thread_1",
       turnId: "turn_1",
       origin: "wechat",
-    });
+    }]);
     expect(adapter.pendingApproval).toMatchObject({
       summary:
         "Codex needs approval before granting extra permissions: Need system access.",
@@ -2927,7 +2927,7 @@ describe("Codex panel completion recovery", () => {
         },
       },
     ]);
-    expect(adapter.pendingApprovalRequest).toBeNull();
+    expect(adapter.pendingApprovalRequests).toEqual([]);
     expect(adapter.pendingApproval).toBeNull();
     expect(adapter.state.pendingApproval).toBeNull();
     expect(adapter.state.status).toBe("busy");

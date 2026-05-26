@@ -231,7 +231,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       throw new Error("claude is still working. Wait for the current reply or use /stop.");
     }
     if (this.pendingApproval) {
-      throw new Error("A Claude approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
     }
 
     const normalizedText = normalizeOutput(text).trim();
@@ -332,6 +332,33 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.setStatus("busy");
     this.writeToPty(input);
     return true;
+  }
+
+  override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
+    let count = 0;
+    for (const requestId of Array.from(this.pendingHookApprovals.keys())) {
+      const pending = this.pendingHookApprovals.get(requestId);
+      if (pending) {
+        this.pendingHookApprovals.delete(requestId);
+        this.respondToClaudeHook(
+          pending.socket,
+          requestId,
+          buildClaudePermissionDecisionHookOutput(action),
+        );
+        count++;
+      }
+    }
+    if (count > 0) {
+      this.clearWechatWorkingNotice();
+      this.pendingCliApprovalHints = null;
+      this.pendingApproval = null;
+      this.state.pendingApproval = null;
+      this.state.pendingApprovalOrigin = undefined;
+      this.setStatus("busy");
+      return count;
+    }
+    const ok = await this.resolveApproval(action);
+    return ok ? 1 : 0;
   }
 
   override async dispose(): Promise<void> {

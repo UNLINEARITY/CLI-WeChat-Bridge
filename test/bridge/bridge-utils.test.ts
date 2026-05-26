@@ -45,7 +45,6 @@ describe("parseSystemCommand", () => {
     expect(parseSystemCommand("/stop")).toEqual({ type: "stop" });
     expect(parseSystemCommand("/confirm 123456")).toEqual({
       type: "confirm",
-      code: "123456",
     });
     expect(parseSystemCommand("/deny")).toEqual({ type: "deny" });
   });
@@ -93,10 +92,10 @@ describe("parseWechatControlCommand", () => {
         adapter: "claude",
         hasPendingConfirmation: true,
       }),
-    ).toEqual({ type: "confirm", code: "LEGACY" });
+    ).toEqual({ type: "confirm" });
   });
 
-  test("does not reinterpret bare approval words outside Claude pending approvals", () => {
+  test("does not reinterpret bare approval words without pending approvals", () => {
     expect(
       parseWechatControlCommand("yes", {
         adapter: "claude",
@@ -106,9 +105,24 @@ describe("parseWechatControlCommand", () => {
     expect(
       parseWechatControlCommand("confirm", {
         adapter: "codex",
-        hasPendingConfirmation: true,
+        hasPendingConfirmation: false,
       }),
     ).toBeNull();
+  });
+
+  test("bare approval words work for all adapters when pending", () => {
+    expect(
+      parseWechatControlCommand("confirm", {
+        adapter: "codex",
+        hasPendingConfirmation: true,
+      }),
+    ).toEqual({ type: "confirm" });
+    expect(
+      parseWechatControlCommand("yes", {
+        adapter: "codex",
+        hasPendingConfirmation: true,
+      }),
+    ).toEqual({ type: "confirm" });
   });
 });
 
@@ -791,9 +805,11 @@ describe("adapter-aware message formatting", () => {
     expect(formatPendingApprovalReminder(pending, claudeAdapterState)).toContain(
       "Bash (npm test)",
     );
-    expect(formatApprovalMessage(pending, codexAdapterState)).toContain("code: ABC123");
+    expect(formatApprovalMessage(pending, codexAdapterState)).toContain(
+      "/confirm or /yes",
+    );
     expect(formatPendingApprovalReminder(pending, codexAdapterState)).toContain(
-      "/confirm ABC123",
+      "/confirm or /deny",
     );
   });
 });

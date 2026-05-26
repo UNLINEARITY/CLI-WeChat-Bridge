@@ -48,6 +48,10 @@ export class LegacyAdapterRuntime implements RuntimeHost {
     return await this.adapter.resolveApproval(action);
   }
 
+  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
+    return await this.adapter.resolveAllApprovals(action);
+  }
+
   async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
     return await this.adapter.submitUserInput(answers);
   }

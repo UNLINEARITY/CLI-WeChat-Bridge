@@ -27,7 +27,7 @@ export type SystemCommand =
   | { type: "new_session" }
   | { type: "stop" }
   | { type: "reset" }
-  | { type: "confirm"; code?: string }
+  | { type: "confirm" }
   | { type: "deny" }
   | { type: "answer"; raw: string };
 
@@ -247,8 +247,10 @@ export function parseSystemCommand(text: string): SystemCommand | null {
     case "/reset":
       return { type: "reset" };
     case "/confirm":
-      return argument ? { type: "confirm", code: argument } : null;
+    case "/yes":
+      return { type: "confirm" };
     case "/deny":
+    case "/no":
       return { type: "deny" };
     case "/answer":
       return argument ? { type: "answer", raw: argument } : null;
@@ -270,20 +272,12 @@ export function parseWechatControlCommand(
     return systemCommand;
   }
 
-  if (options.adapter !== "claude") {
+  if (!options.hasPendingConfirmation) {
     return null;
   }
 
   const normalized = text.trim().toLowerCase();
   if (!normalized) {
-    return null;
-  }
-
-  if (normalized === "/confirm") {
-    return { type: "confirm" };
-  }
-
-  if (!options.hasPendingConfirmation) {
     return null;
   }
 
@@ -1344,10 +1338,9 @@ export function formatApprovalMessage(
   return [
     `${pending.source === "shell" ? "Shell" : "CLI"} approval is required.`,
     `adapter: ${adapterState.kind}`,
-    `code: ${pending.code}`,
     `summary: ${pending.summary}`,
     `target: ${pending.commandPreview}`,
-    "Reply with /confirm <code> to continue or /deny to reject.",
+    "Reply with /confirm or /yes to continue, /deny or /no to reject.",
   ].join("\n");
 }
 
@@ -1362,7 +1355,7 @@ export function formatPendingApprovalReminder(
     return `Approval is pending for ${truncatePreview(target, 140)}. Reply with /confirm, confirm, or yes to continue, or /deny, deny, or no to reject.`;
   }
 
-  return `Approval is pending for ${pending.commandPreview}. Reply with /confirm ${pending.code} or /deny.`;
+  return `Approval is pending for ${pending.commandPreview}. Reply with /confirm or /deny.`;
 }
 
 function formatUserInputQuestionLabel(

@@ -121,7 +121,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private pendingTurnThreadId: string | null = null;
   private interruptPendingTurnStart = false;
   private pendingThreadFollowId: string | null = null;
-  private pendingApprovalRequest: CodexPendingApprovalRequest | null = null;
+  private pendingApprovalRequests: CodexPendingApprovalRequest[] = [];
   private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
   private queuedTurnNotifications: CodexQueuedNotification[] = [];
   private queuedTurnServerRequests: Array<{
@@ -238,7 +238,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       throw new Error("codex is still working. Wait for the current reply or use /stop.");
     }
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
     }
     if (this.startupBlocker) {
       throw new Error("Codex is waiting for local terminal input before the session can continue.");
@@ -297,19 +297,39 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
-    if (!this.pendingApproval) {
+    if (!this.pendingApproval && this.pendingApprovalRequests.length === 0) {
       return false;
     }
 
-    if (this.pendingApprovalRequest && this.rpcSocket) {
-      const request = this.pendingApprovalRequest;
-      await this.respondToApprovalRequest(request, action);
+    if (this.pendingApprovalRequests.length > 0 && this.rpcSocket) {
+      for (const request of this.pendingApprovalRequests) {
+        await this.respondToApprovalRequest(request, action);
+      }
       this.clearPendingApprovalState();
       this.setStatus("busy");
       return true;
     }
 
     return await super.resolveApproval(action);
+  }
+
+  override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
+    if (this.pendingApprovalRequests.length === 0 && !this.pendingApproval) {
+      return 0;
+    }
+
+    if (this.pendingApprovalRequests.length > 0 && this.rpcSocket) {
+      const count = this.pendingApprovalRequests.length;
+      for (const request of this.pendingApprovalRequests) {
+        await this.respondToApprovalRequest(request, action);
+      }
+      this.clearPendingApprovalState();
+      this.setStatus("busy");
+      return count;
+    }
+
+    const ok = await super.resolveApproval(action);
+    return ok ? 1 : 0;
   }
 
   override async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
@@ -998,7 +1018,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.recoverStaleBusyStateIfNeeded();
     this.recoverStaleActiveTurnStateIfNeeded();
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
     }
     if (this.pendingUserInputRequest || this.state.pendingUserInput) {
       throw new Error("Codex is waiting for user input. Reply with /answer and your response, or use /stop.");
@@ -1558,7 +1578,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm <code> or /deny.");
+      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
     }
 
     if (
@@ -1679,7 +1699,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         status: this.state.status,
         pendingTurnStart: this.pendingTurnStart,
         hasActiveTurn: Boolean(this.activeTurn),
-        hasPendingApproval: Boolean(this.pendingApproval || this.pendingApprovalRequest),
+        hasPendingApproval: Boolean(this.pendingApproval || this.pendingApprovalRequests.length),
         hasPendingUserInput: Boolean(this.pendingUserInputRequest || this.state.pendingUserInput),
         activeTurnId: this.state.activeTurnId,
       })
@@ -1701,7 +1721,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       !this.activeTurn ||
       this.pendingTurnStart ||
       this.pendingApproval ||
-      this.pendingApprovalRequest ||
+      this.pendingApprovalRequests.length ||
       this.state.status === "busy" ||
       this.state.status === "awaiting_approval" ||
       this.state.activeTurnId
@@ -1963,7 +1983,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private clearPendingApprovalState(): void {
-    this.pendingApprovalRequest = null;
+    this.pendingApprovalRequests = [];
     this.pendingApproval = null;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
@@ -2288,11 +2308,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         const requestId = getCodexRpcRequestId(params.requestId);
         if (
           requestId !== null &&
-          this.pendingApprovalRequest &&
-          requestId === this.pendingApprovalRequest.requestId &&
-          trackedTurn.turnId === this.pendingApprovalRequest.turnId
+          this.pendingApprovalRequests.some(
+            (r) => r.requestId === requestId && r.turnId === trackedTurn.turnId,
+          )
         ) {
-          this.clearPendingApprovalState();
+          this.pendingApprovalRequests = this.pendingApprovalRequests.filter(
+            (r) => r.requestId !== requestId,
+          );
+          if (this.pendingApprovalRequests.length === 0) {
+            this.clearPendingApprovalState();
+          }
           if (this.state.status === "awaiting_approval") {
             this.setStatus("busy", "Codex approval resolved.");
           }
@@ -2448,14 +2473,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    this.pendingApprovalRequest = {
+    this.pendingApprovalRequests.push({
       requestId,
       method,
       threadId: trackedTurn.threadId,
       turnId: trackedTurn.turnId,
       origin: trackedTurn.origin,
       params,
-    };
+    });
     this.pendingApproval = request;
     this.state.pendingApproval = request;
     this.state.pendingApprovalOrigin = trackedTurn.origin;
@@ -2662,8 +2687,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           : this.currentPreview;
 
     if (
-      this.pendingApprovalRequest &&
-      this.pendingApprovalRequest.turnId === trackedTurn.turnId
+      this.pendingApprovalRequests.length > 0 &&
+      this.pendingApprovalRequests.some((r) => r.turnId === trackedTurn.turnId)
     ) {
       this.clearPendingApprovalState();
     }
@@ -2778,7 +2803,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.activeTurn.origin !== "wechat" ||
       this.pendingTurnStart ||
       this.pendingApproval ||
-      this.pendingApprovalRequest ||
+      this.pendingApprovalRequests.length ||
       this.pendingUserInputRequest ||
       this.state.pendingUserInput ||
       !this.collectTurnOutput(turnId)
@@ -2800,7 +2825,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const activeTurn = this.activeTurn;
     const finalText = this.collectTurnOutput(turnId);
     const lastActivityAtMs = this.turnLastActivityAtMs.get(turnId) ?? null;
-    const pendingApproval = Boolean(this.pendingApproval || this.pendingApprovalRequest);
+    const pendingApproval = Boolean(this.pendingApproval || this.pendingApprovalRequests.length);
     const pendingUserInput = Boolean(this.pendingUserInputRequest || this.state.pendingUserInput);
     const nowMs = Date.now();
     if (

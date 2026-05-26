@@ -1415,10 +1415,6 @@ async function handleInboundMessage(params: {
         await queueWechatMessage(message.senderId, "No pending approval request.");
         return null;
       }
-      if (options.adapter !== "claude" && pending.code !== systemCommand.code) {
-        await queueWechatMessage(message.senderId, "Confirmation code did not match.");
-        return null;
-      }
       const confirmed = await adapter.resolveApproval("confirm");
       if (!confirmed) {
         await queueWechatMessage(

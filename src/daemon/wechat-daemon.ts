@@ -141,7 +141,7 @@ type DaemonSlot = {
   runtime: BridgeAdapter;
   controller: BridgeController;
   outputBatcher: OutputBatcher;
-  pendingConfirmation: PendingApproval | null;
+  pendingConfirmations: PendingApproval[];
   pendingUserInput: PendingUserInputRequest | null;
   activeTask: ActiveTask | null;
   lastOutputAt: number;
@@ -813,7 +813,7 @@ class WechatDaemon {
           status: slot.runtime.getState().status,
           cwd: this.cwd,
           companionPid: endpoint?.companionPid,
-          pendingApproval: Boolean(slot.pendingConfirmation),
+          pendingApproval: slot.pendingConfirmations.length > 0,
           pendingUserInput: Boolean(slot.pendingUserInput),
         };
       }),
@@ -1111,7 +1111,7 @@ class WechatDaemon {
           prefixDaemonAdapterMessage(adapter, text),
         );
       }),
-      pendingConfirmation: null,
+      pendingConfirmations: [],
       pendingUserInput: null,
       activeTask: null,
       lastOutputAt: 0,
@@ -1131,7 +1131,7 @@ class WechatDaemon {
   private async startFreshSlotSession(slot: DaemonSlot): Promise<void> {
     await slot.outputBatcher.flushNow();
     slot.outputBatcher.clear();
-    slot.pendingConfirmation = null;
+    slot.pendingConfirmations = [];
     slot.pendingUserInput = null;
     slot.activeTask = null;
 
@@ -1150,8 +1150,8 @@ class WechatDaemon {
   private handleSlotEvent(slot: DaemonSlot, event: BridgeEvent): void {
     slot.controller.syncLocalClientEndpoint();
     const adapterState = slot.runtime.getState();
-    if (slot.pendingConfirmation && !adapterState.pendingApproval) {
-      slot.pendingConfirmation = null;
+    if (slot.pendingConfirmations.length > 0 && !adapterState.pendingApproval) {
+      slot.pendingConfirmations = [];
     }
     if (slot.pendingUserInput && !adapterState.pendingUserInput) {
       slot.pendingUserInput = null;
@@ -1238,7 +1238,7 @@ class WechatDaemon {
       case "approval_required":
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
           const pending = toPendingApproval(event);
-          slot.pendingConfirmation = pending;
+          slot.pendingConfirmations.push(pending);
           appendDaemonLog(
             `approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`,
           );
@@ -1332,14 +1332,14 @@ class WechatDaemon {
         break;
       case "task_complete":
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(() => {
-          slot.pendingConfirmation = null;
+          slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
           slot.activeTask = null;
         }));
         break;
       case "task_failed":
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          slot.pendingConfirmation = null;
+          slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
           slot.activeTask = null;
           await this.queueWechatMessage(
@@ -1355,7 +1355,7 @@ class WechatDaemon {
       case "fatal_error":
         logError(`${slot.adapter}: ${event.message}`);
         appendDaemonLog(`fatal_error: adapter=${slot.adapter} message=${event.message}`);
-        slot.pendingConfirmation = null;
+        slot.pendingConfirmations = [];
         slot.pendingUserInput = null;
         slot.activeTask = null;
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
@@ -1451,7 +1451,7 @@ class WechatDaemon {
 
     const command = parseWechatControlCommand(message.text, {
       adapter: slot.adapter,
-      hasPendingConfirmation: Boolean(slot.pendingConfirmation),
+      hasPendingConfirmation: slot.pendingConfirmations.length > 0,
       hasPendingUserInput: Boolean(slot.pendingUserInput),
     });
 
@@ -1460,13 +1460,13 @@ class WechatDaemon {
       return;
     }
 
-    if (slot.pendingConfirmation) {
+    if (slot.pendingConfirmations.length > 0) {
       await this.queueWechatMessage(
         message.senderId,
         prefixDaemonAdapterMessage(
           slot.adapter,
           formatPendingApprovalReminder(
-            slot.pendingConfirmation,
+            slot.pendingConfirmations[0]!,
             slot.runtime.getState(),
           ),
         ),
@@ -1569,7 +1569,7 @@ class WechatDaemon {
         }
         await activeSlot.outputBatcher.flushNow();
         activeSlot.outputBatcher.clear();
-        activeSlot.pendingConfirmation = null;
+        activeSlot.pendingConfirmations = [];
         activeSlot.pendingUserInput = null;
         await activeSlot.runtime.createSession();
         appendDaemonLog(`new_session: adapter=${activeSlot.adapter}`);
@@ -1590,7 +1590,7 @@ class WechatDaemon {
       case "reset":
         await activeSlot.outputBatcher.flushNow();
         activeSlot.outputBatcher.clear();
-        activeSlot.pendingConfirmation = null;
+        activeSlot.pendingConfirmations = [];
         activeSlot.pendingUserInput = null;
         await activeSlot.runtime.reset();
         appendDaemonLog(`reset: adapter=${activeSlot.adapter}`);
@@ -1600,7 +1600,7 @@ class WechatDaemon {
         );
         return;
       case "confirm":
-        await this.confirmPendingApproval(message, activeSlot, command.code);
+        await this.confirmPendingApproval(message, activeSlot);
         return;
       case "deny":
         await this.denyPendingApproval(message, activeSlot);
@@ -1614,25 +1614,15 @@ class WechatDaemon {
   private async confirmPendingApproval(
     message: InboundWechatMessage,
     activeSlot: DaemonSlot,
-    code?: string,
   ): Promise<void> {
-    const slot = this.resolvePendingApprovalSlot(activeSlot, code);
-    if (!slot) {
-      await this.queueWechatMessage(message.senderId, "No matching pending approval request.");
-      return;
-    }
-    const pending = slot.pendingConfirmation;
-    if (!pending) {
+    const slot = this.resolvePendingApprovalSlot(activeSlot);
+    if (!slot || slot.pendingConfirmations.length === 0) {
       await this.queueWechatMessage(message.senderId, "No pending approval request.");
       return;
     }
-    if (pending.code !== code && this.countPendingApprovals() > 1) {
-      await this.queueWechatMessage(message.senderId, "Confirmation code did not match.");
-      return;
-    }
 
-    const confirmed = await slot.runtime.resolveApproval("confirm");
-    if (!confirmed) {
+    const count = await slot.runtime.resolveAllApprovals("confirm");
+    if (!count) {
       await this.queueWechatMessage(
         message.senderId,
         prefixDaemonAdapterMessage(
@@ -1642,17 +1632,23 @@ class WechatDaemon {
       );
       return;
     }
-    slot.pendingConfirmation = null;
+    const preview = slot.pendingConfirmations[0]?.commandPreview ?? "";
+    slot.pendingConfirmations = [];
     slot.activeTask = {
       startedAt: Date.now(),
-      inputPreview: pending.commandPreview,
+      inputPreview: preview,
     };
     appendDaemonLog(
-      `approval_confirmed: adapter=${slot.adapter} command=${truncatePreview(pending.commandPreview)}`,
+      `approval_confirmed: adapter=${slot.adapter} count=${count} command=${truncatePreview(preview)}`,
     );
     await this.queueWechatMessage(
       message.senderId,
-      prefixDaemonAdapterMessage(slot.adapter, "Approval confirmed. Continuing..."),
+      prefixDaemonAdapterMessage(
+        slot.adapter,
+        count > 1
+          ? `${count} approvals confirmed. Continuing...`
+          : "Approval confirmed. Continuing...",
+      ),
     );
   }
 
@@ -1660,18 +1656,14 @@ class WechatDaemon {
     message: InboundWechatMessage,
     activeSlot: DaemonSlot,
   ): Promise<void> {
-    const slot =
-      activeSlot.pendingConfirmation || this.countPendingApprovals() !== 1
-        ? activeSlot
-        : Array.from(this.slots.values()).find((entry) => entry.pendingConfirmation) ?? activeSlot;
-    const pending = slot.pendingConfirmation;
-    if (!pending) {
+    const slot = this.resolvePendingApprovalSlot(activeSlot);
+    if (!slot || slot.pendingConfirmations.length === 0) {
       await this.queueWechatMessage(message.senderId, "No pending approval request.");
       return;
     }
 
-    const denied = await slot.runtime.resolveApproval("deny");
-    if (!denied) {
+    const count = await slot.runtime.resolveAllApprovals("deny");
+    if (!count) {
       await this.queueWechatMessage(
         message.senderId,
         prefixDaemonAdapterMessage(
@@ -1681,13 +1673,16 @@ class WechatDaemon {
       );
       return;
     }
-    slot.pendingConfirmation = null;
+    slot.pendingConfirmations = [];
     appendDaemonLog(
-      `approval_denied: adapter=${slot.adapter} command=${truncatePreview(pending.commandPreview)}`,
+      `approval_denied: adapter=${slot.adapter} count=${count}`,
     );
     await this.queueWechatMessage(
       message.senderId,
-      prefixDaemonAdapterMessage(slot.adapter, "Approval denied."),
+      prefixDaemonAdapterMessage(
+        slot.adapter,
+        count > 1 ? `${count} approvals denied.` : "Approval denied.",
+      ),
     );
   }
 
@@ -1742,26 +1737,24 @@ class WechatDaemon {
 
   private resolvePendingApprovalSlot(
     activeSlot: DaemonSlot,
-    code?: string,
   ): DaemonSlot | null {
-    if (code) {
-      return (
-        Array.from(this.slots.values()).find(
-          (slot) => slot.pendingConfirmation?.code === code,
-        ) ?? null
-      );
-    }
-
-    if (activeSlot.pendingConfirmation && this.countPendingApprovals() <= 1) {
+    if (activeSlot.pendingConfirmations.length > 0) {
       return activeSlot;
     }
 
-    return null;
+    return (
+      Array.from(this.slots.values()).find(
+        (slot) => slot.pendingConfirmations.length > 0,
+      ) ?? null
+    );
   }
 
   private countPendingApprovals(): number {
-    return Array.from(this.slots.values()).filter((slot) => slot.pendingConfirmation)
-      .length;
+    let count = 0;
+    for (const slot of this.slots.values()) {
+      count += slot.pendingConfirmations.length;
+    }
+    return count;
   }
 
   private getActiveSlot(): DaemonSlot | null {
