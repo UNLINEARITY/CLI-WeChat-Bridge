@@ -10,7 +10,7 @@
   <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dm/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="scoped npm downloads" src="https://img.shields.io/npm/dm/@unlinearity/cli-wechat-bridge?label=Scoped%20downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=15803d&amp;labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/cli-wechat-bridge">
-  <img alt="License" src="https://img.shields.io/npm/l/cli-wechat-bridge?label=License&style=for-the-badge&color=7c3aed&labelColor=1c1917">
+  <img alt="License" src="https://img.shields.io/badge/License-AGPL--3.0-7c3aed?style=for-the-badge&labelColor=1c1917">
 </a>
 </p>
 
@@ -425,7 +425,19 @@ npm install -g cli-wechat-bridge@latest
 
 ## License
 
-[MIT](LICENSE.txt)
+本项目采用**双协议**授权：
+
+**开源协议：[AGPL-3.0](LICENSE.txt)**
+
+- 个人使用、学习、研究：完全免费
+- 修改和衍生作品必须以相同协议（AGPL-3.0）开源
+- 通过网络提供基于本项目的服务，也必须公开完整源代码
+
+**商业授权**
+
+如果你希望在闭源商业产品中使用本项目（不公开你的源代码），需要获得商业许可。请联系作者获取商业授权方案：
+
+- GitHub: [@UNLINEARITY](https://github.com/UNLINEARITY)
 
 <p align="center">
   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=UNLINEARITY/CLI-WeChat-Bridge&type=timeline&legend=top-left">
