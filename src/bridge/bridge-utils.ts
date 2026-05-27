@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -206,6 +207,23 @@ export function truncatePreview(text: string, maxLength = 140): string {
     return normalized;
   }
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+export function isThinkingForwardEnabled(): boolean {
+  if (process.env.CLI_BRIDGE_THINKING_FORWARD === "1") {
+    return true;
+  }
+  try {
+    const accountPath = process.env.CLI_BRIDGE_DATA_DIR
+      ? path.join(process.env.CLI_BRIDGE_DATA_DIR, "account.json")
+      : path.join(os.homedir(), ".cli-bridge", "account.json");
+    if (!fs.existsSync(accountPath)) return false;
+    const raw = fs.readFileSync(accountPath, "utf8");
+    const data = JSON.parse(raw) as { enableThinkingForward?: boolean };
+    return data.enableThinkingForward === true;
+  } catch {
+    return false;
+  }
 }
 
 export function formatThinkingForWechat(text: string, maxLength = 500): string {

@@ -30,6 +30,7 @@ import type {
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
+  isThinkingForwardEnabled,
   normalizeOutput,
   nowIso,
   truncatePreview,
@@ -1203,6 +1204,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private startTranscriptThinkingWatch(): void {
     this.stopTranscriptThinkingWatch();
     if (!this.transcriptPath) {
+      return;
+    }
+    if (!isThinkingForwardEnabled()) {
       return;
     }
 
