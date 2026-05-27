@@ -15,6 +15,7 @@ import {
   truncatePreview,
 } from "./bridge-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
+import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
@@ -623,7 +624,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       };
       child.once("exit", () => finish());
       try {
-        child.kill();
+        if (child.pid) {
+          killProcessTreeSync(child.pid);
+        } else {
+          child.kill();
+        }
       } catch {
         finish();
       }
@@ -2914,7 +2919,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       };
       child.once("exit", () => finish());
       try {
-        child.kill();
+        if (child.pid) {
+          killProcessTreeSync(child.pid);
+        } else {
+          child.kill();
+        }
       } catch {
         finish();
       }
@@ -2948,7 +2957,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     if (this.nativeProcess) {
       try {
-        this.nativeProcess.kill();
+        if (this.nativeProcess.pid) {
+          killProcessTreeSync(this.nativeProcess.pid);
+        } else {
+          this.nativeProcess.kill();
+        }
       } catch {
         // Best effort cleanup after panel client failure.
       }
