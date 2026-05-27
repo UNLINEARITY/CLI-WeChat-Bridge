@@ -164,6 +164,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private lastCompactCompletionAtMs = 0;
   private startupOutputBuffer = "";
   private hasAutoConfirmedWorkspaceTrustPrompt = false;
+  private lastAutoApprovedPayload: ClaudeHookPayload | null = null;
   private transcriptPollTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptTailOffset = 0;
   private polledTranscriptSessionId: string | null = null;
@@ -941,8 +942,31 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         this.handleClaudePermissionRequest(params.requestId, payload, params.socket);
         return;
       case "Notification":
-        if (payload.notification_type === "permission_prompt" && this.pendingApproval) {
-          this.setStatus("awaiting_approval", "Claude approval is required.");
+        if (payload.notification_type === "permission_prompt") {
+          if (this.pendingApproval) {
+            this.setStatus("awaiting_approval", "Claude approval is required.");
+          } else if (this.lastAutoApprovedPayload) {
+            // Auto-approval response failed to reach Claude Code (socket closed before delivery).
+            // Fall back to forwarding the approval request to WeChat.
+            const fallbackPayload = this.lastAutoApprovedPayload;
+            this.lastAutoApprovedPayload = null;
+            const request = buildClaudePermissionApprovalRequest(fallbackPayload);
+            this.pendingApproval = {
+              ...request,
+              requestId: undefined,
+              confirmInput: this.pendingCliApprovalHints?.confirmInput,
+              denyInput: this.pendingCliApprovalHints?.denyInput,
+            };
+            this.pendingCliApprovalHints = null;
+            this.state.pendingApproval = this.pendingApproval;
+            this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
+            this.setStatus("awaiting_approval", "Claude auto-approval failed, forwarding to WeChat.");
+            this.emit({
+              type: "approval_required",
+              request: this.pendingApproval,
+              timestamp: nowIso(),
+            });
+          }
         }
         this.respondToClaudeHook(params.socket, params.requestId);
         return;
@@ -1106,6 +1130,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     socket: net.Socket,
   ): void {
     this.clearWechatWorkingNotice();
+    this.lastAutoApprovedPayload = null;
     const denyMessage = getClaudeWechatOutboundAttachmentDenyMessage(payload);
     if (denyMessage) {
       this.pendingApproval = null;
@@ -1130,6 +1155,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
           `Claude approval auto-approved: ${truncatePreview(autoResponse.reason, 180)}`,
         );
       }
+      this.lastAutoApprovedPayload = payload;
       this.respondToClaudeHook(
         socket,
         requestId,
@@ -1212,6 +1238,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private handleClaudeStop(payload: { last_assistant_message?: string }): void {
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
+    this.lastAutoApprovedPayload = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -1238,6 +1265,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     error_details?: string;
     last_assistant_message?: string;
   }): void {
+    this.lastAutoApprovedPayload = null;
     this.stopTranscriptThinkingWatch();
     this.failClaudeTurn(buildClaudeFailureMessage(payload));
   }
