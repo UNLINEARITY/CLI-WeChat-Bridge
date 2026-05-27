@@ -151,6 +151,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private localTerminalInputListener: ((chunk: string | Buffer) => void) | null = null;
   private resizeListener: (() => void) | null = null;
   private settingsFilePath: string | null = null;
+  private hookErrorLogPath: string | null = null;
+  private hookReceivedCount = 0;
+  private hookHealthCheckTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pendingHookApprovals = new Map<string, ClaudePendingHookApproval>();
   private recoveringInvalidResume = false;
   private workingNoticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -387,6 +390,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   protected override afterStart(): void {
     this.attachLocalTerminal();
     this.resizePtyToTerminal();
+    this.startHookHealthCheck();
   }
 
   protected override handleData(rawText: string): void {
@@ -596,6 +600,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       ? sourceHookEntryPath
       : path.join(MODULE_DIR, "claude-hook.js");
 
+    const hookErrorLogPath = path.join(runtimeDir, "hook-error.log");
+    this.hookErrorLogPath = hookErrorLogPath;
+
     fs.writeFileSync(
       hookScriptPath,
       buildClaudeHookScript({
@@ -604,6 +611,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         hookEntryPath,
         hookPort: this.hookPort,
         hookToken: this.hookToken,
+        hookErrorLogPath,
       }),
       "utf8",
     );
@@ -666,7 +674,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     try {
-      this.pty.resize(process.stdout.columns || DEFAULT_COLS, process.stdout.rows || DEFAULT_ROWS);
+      this.pty.resize?.(process.stdout.columns || DEFAULT_COLS, process.stdout.rows || DEFAULT_ROWS);
     } catch {
       // Best effort resize sync.
     }
@@ -717,6 +725,40 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
     if (resetSent) {
       this.workingNoticeSent = false;
+    }
+  }
+
+  private startHookHealthCheck(): void {
+    this.hookReceivedCount = 0;
+    this.clearHookHealthCheck();
+    this.hookHealthCheckTimer = setTimeout(() => {
+      this.hookHealthCheckTimer = null;
+      if (this.hookReceivedCount === 0 && !this.shuttingDown) {
+        const logHint = this.hookErrorLogPath
+          ? `\nCheck: ${this.hookErrorLogPath}`
+          : "";
+        this.emit({
+          type: "stdout",
+          text: [
+            "[Warning] No hook events received from Claude after 15s.",
+            "The hook system may not be working — Claude output will not reach WeChat.",
+            logHint,
+            "\nCommon fixes:",
+            "- Ensure Node.js >= 22.6.0: node --version",
+            "- Reinstall: npm install -g cli-wechat-bridge@latest",
+            "- Check firewall: allow localhost TCP connections",
+          ].filter(Boolean).join("\n"),
+          timestamp: nowIso(),
+        });
+      }
+    }, 15_000);
+    this.hookHealthCheckTimer.unref?.();
+  }
+
+  private clearHookHealthCheck(): void {
+    if (this.hookHealthCheckTimer) {
+      clearTimeout(this.hookHealthCheckTimer);
+      this.hookHealthCheckTimer = null;
     }
   }
 
@@ -875,6 +917,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     rawPayload: string;
     socket: net.Socket;
   }): void {
+    this.hookReceivedCount++;
+    this.clearHookHealthCheck();
     const payload = parseClaudeHookPayload(params.rawPayload);
     if (!payload?.hook_event_name) {
       this.respondToClaudeHook(params.socket, params.requestId);

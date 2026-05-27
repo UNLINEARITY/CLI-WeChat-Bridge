@@ -76,6 +76,7 @@ type ClaudeHookScriptParams = {
   hookEntryPath: string;
   hookPort: number;
   hookToken: string;
+  hookErrorLogPath?: string;
 };
 
 function quoteWindowsCommandArg(value: string): string {
@@ -166,13 +167,15 @@ export function buildClaudeHookScript(params: ClaudeHookScriptParams): string {
       params.runtimeExecPath,
       ...runtimeArgs,
     ].map(quoteWindowsCommandArg).join(" ");
+    const stderrRedirect = params.hookErrorLogPath
+      ? `2>>${quoteWindowsCommandArg(params.hookErrorLogPath)}`
+      : "2>nul";
     return [
       "@echo off",
       "setlocal",
       `set "CLAUDE_WECHAT_HOOK_PORT=${params.hookPort}"`,
       `set "CLAUDE_WECHAT_HOOK_TOKEN=${params.hookToken}"`,
-      // Claude reads hook decisions from stdout, so only stderr can be discarded here.
-      `${command} 2>nul`,
+      `${command} ${stderrRedirect}`,
       "exit /b 0",
     ].join("\r\n");
   }
@@ -181,12 +184,14 @@ export function buildClaudeHookScript(params: ClaudeHookScriptParams): string {
     params.runtimeExecPath,
     ...runtimeArgs,
   ].map(quotePosixCommandArg).join(" ");
+  const stderrRedirect = params.hookErrorLogPath
+    ? `2>>${quotePosixCommandArg(params.hookErrorLogPath)}`
+    : "2>/dev/null";
   return [
     "#!/bin/sh",
     `export CLAUDE_WECHAT_HOOK_PORT=${quotePosixCommandArg(String(params.hookPort))}`,
     `export CLAUDE_WECHAT_HOOK_TOKEN=${quotePosixCommandArg(params.hookToken)}`,
-    // Claude reads hook decisions from stdout, so only stderr can be discarded here.
-    `${command} 2>/dev/null || true`,
+    `${command} ${stderrRedirect} || true`,
     "exit 0",
   ].join("\n");
 }

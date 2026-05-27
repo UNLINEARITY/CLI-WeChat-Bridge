@@ -1799,3 +1799,139 @@ export function resolveSpawnTarget(
 
   return { file: resolved, args: [...forwardArgs] };
 }
+
+export type PtyLike = {
+  pid: number;
+  write(data: string): void;
+  kill(signal?: string): void;
+  resize?(cols: number, rows: number): void;
+  onData(callback: (data: string) => void): { dispose(): void };
+  onExit(callback: (event: { exitCode: number; signal?: number }) => void): { dispose(): void };
+};
+
+export function spawnFallbackProcess(
+  file: string,
+  args: string[],
+  options: { cwd: string; env: Record<string, string> },
+): PtyLike {
+  const { spawn } = require("node:child_process") as typeof import("node:child_process");
+  const child = spawn(file, args, {
+    cwd: options.cwd,
+    env: { ...options.env, TERM: "dumb" },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: false,
+    shell: false,
+  });
+
+  if (!child.pid) {
+    throw new Error(`Failed to spawn fallback process: ${file}`);
+  }
+
+  const dataListeners: Array<(data: string) => void> = [];
+  const exitListeners: Array<(event: { exitCode: number; signal?: number }) => void> = [];
+
+  child.stdout?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    for (const listener of dataListeners) {
+      listener(text);
+    }
+  });
+
+  child.stderr?.on("data", (chunk: Buffer) => {
+    const text = chunk.toString("utf8");
+    for (const listener of dataListeners) {
+      listener(text);
+    }
+  });
+
+  child.on("exit", (code, signal) => {
+    const exitCode = code ?? (signal ? 128 : 1);
+    for (const listener of exitListeners) {
+      listener({ exitCode });
+    }
+  });
+
+  return {
+    pid: child.pid,
+    write(data: string) {
+      child.stdin?.write(data);
+    },
+    kill(signal?: string) {
+      try {
+        if (process.platform === "win32") {
+          spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+        } else {
+          child.kill(signal as NodeJS.Signals | undefined);
+        }
+      } catch {
+        // Best effort.
+      }
+    },
+    onData(callback: (data: string) => void) {
+      dataListeners.push(callback);
+      return {
+        dispose() {
+          const index = dataListeners.indexOf(callback);
+          if (index >= 0) dataListeners.splice(index, 1);
+        },
+      };
+    },
+    onExit(callback: (event: { exitCode: number; signal?: number }) => void) {
+      exitListeners.push(callback);
+      return {
+        dispose() {
+          const index = exitListeners.indexOf(callback);
+          if (index >= 0) exitListeners.splice(index, 1);
+        },
+      };
+    },
+  };
+}
+
+export function buildSpawnDiagnostic(
+  error: unknown,
+  spawnTarget: SpawnTarget | null,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  const target = spawnTarget ? spawnTarget.file : "(unknown)";
+
+  const lines: string[] = [
+    `Failed to start CLI process: ${target}`,
+    `Error: ${errorMessage}`,
+    "",
+    "Possible fixes:",
+  ];
+
+  if (errorMessage.includes("posix_spawnp") || errorMessage.includes("node-pty")) {
+    lines.push(
+      "- The node-pty native module is incompatible with your Node.js version.",
+      "- Run: npm rebuild node-pty",
+      "- Or reinstall: npm install -g cli-wechat-bridge@latest",
+    );
+    if (platform === "darwin") {
+      lines.push("- Ensure Xcode CLI tools are installed: xcode-select --install");
+    }
+  } else if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
+    lines.push(
+      `- The command "${target}" was not found on PATH.`,
+      "- Verify it is installed and accessible from your terminal.",
+    );
+  } else {
+    lines.push("- Reinstall: npm install -g cli-wechat-bridge@latest");
+  }
+
+  if (platform === "win32") {
+    lines.push("- Ensure Node.js >= 22.6.0: node --version");
+    lines.push("- If using ConPTY, try running as Administrator.");
+  } else if (platform === "darwin") {
+    lines.push("- Ensure Node.js >= 22.6.0: node --version");
+  } else {
+    lines.push("- Ensure Node.js >= 22.6.0: node --version");
+  }
+
+  return lines.join("\n");
+}

@@ -41,10 +41,12 @@ const {
   INTERRUPT_SETTLE_DELAY_MS,
   buildCliEnvironment,
   buildPtySpawnOptions,
+  buildSpawnDiagnostic,
   getLocalCompanionCommandName,
   getSharedSessionIdFromAdapterState,
   LOCAL_COMPANION_RECONNECT_GRACE_MS,
   resolveSpawnTarget,
+  spawnFallbackProcess,
 } = shared;
 
 export class LocalCompanionProxyAdapter implements BridgeAdapter {
@@ -399,6 +401,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.detachMessageListener = null;
     if (this.socket) {
       this.socket.removeAllListeners();
+      this.socket.on("error", () => {});
       this.socket.destroy();
       this.socket = null;
     }
@@ -653,7 +656,7 @@ export function getCompanionDisconnectDisposition(params: {
 
 export abstract class AbstractPtyAdapter implements BridgeAdapter {
   protected readonly options: AdapterOptions;
-  protected pty: IPty | null = null;
+  protected pty: IPty | shared.PtyLike | null = null;
   protected eventSink: EventSink = () => undefined;
   protected completionTimer: ReturnType<typeof setTimeout> | null = null;
   protected state: BridgeAdapterState;
@@ -688,14 +691,30 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     try {
       spawnTarget = resolveSpawnTarget(this.options.command, this.options.kind);
       const env = this.buildEnv();
-      const ptyProcess = spawnPty(
-        spawnTarget.file,
-        [...spawnTarget.args, ...this.buildSpawnArgs()],
-        buildPtySpawnOptions({
-          cwd: this.options.cwd,
-          env,
-        }),
-      );
+      const spawnArgs = [...spawnTarget.args, ...this.buildSpawnArgs()];
+
+      let ptyProcess: IPty | shared.PtyLike;
+      let usedFallback = false;
+      try {
+        ptyProcess = spawnPty(
+          spawnTarget.file,
+          spawnArgs,
+          buildPtySpawnOptions({
+            cwd: this.options.cwd,
+            env,
+          }),
+        );
+      } catch (ptyErr) {
+        usedFallback = true;
+        try {
+          ptyProcess = spawnFallbackProcess(spawnTarget.file, spawnArgs, {
+            cwd: this.options.cwd,
+            env,
+          });
+        } catch (fallbackErr) {
+          throw new Error(buildSpawnDiagnostic(ptyErr, spawnTarget));
+        }
+      }
 
       this.pty = ptyProcess;
       this.shuttingDown = false;
@@ -709,6 +728,15 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
       ptyProcess.onExit(({ exitCode }) => this.handleExit(exitCode));
 
       this.afterStart();
+
+      if (usedFallback) {
+        this.emit({
+          type: "stdout",
+          text: "[Warning] PTY unavailable, using fallback mode. Terminal rendering may be degraded.\n",
+          timestamp: nowIso(),
+        });
+      }
+
       this.setStatus("idle", `${this.options.kind} adapter is ready.`);
     } catch (err) {
       this.state.status = "error";

@@ -179,6 +179,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
 
     socket.removeAllListeners("close");
     socket.removeAllListeners("error");
+    socket.on("error", () => {});
     if (destroy) {
       try {
         socket.destroy();
