@@ -61,6 +61,17 @@ import {
   isDaemonEndpointAlive,
   readDaemonEndpoint,
 } from "../daemon/daemon-link.ts";
+import {
+  formatBindCommandUsage,
+  formatBindingsListMessage,
+  isBindCommandPrefix,
+  listBindings,
+  loadEmojiBindings,
+  parseEmojiBindingsCommand,
+  removeBinding,
+  resolveEmojiCommand,
+  setBinding,
+} from "../daemon/emoji-bindings.ts";
 
 type BridgeCliOptions = {
   adapter: BridgeAdapterKind;
@@ -850,6 +861,18 @@ async function main(): Promise<void> {
       );
     }
 
+    loadEmojiBindings();
+    const welcomeLines = [
+      `WeChat Bridge ready (${options.adapter}).`,
+      `CWD: ${options.cwd}`,
+      "",
+      "Commands: /stop, /confirm, /deny, /status, /new",
+      formatBindingsListMessage(listBindings()),
+      "",
+      "Manage: /bind [emoji] cmd, /unbind [emoji], /bindings",
+    ];
+    await queueWechatMessage(credentials.userId, welcomeLines.join("\n"));
+
     while (true) {
       if (!ensureRuntimeOwnership()) {
         break;
@@ -1312,7 +1335,7 @@ async function handleInboundMessage(params: {
   outputBatcher: OutputBatcher;
   deferInboundMessage: (message: InboundWechatMessage) => Promise<void>;
 }): Promise<ActiveTask | null> {
-  const {
+  let {
     message,
     options,
     stateStore,
@@ -1322,11 +1345,6 @@ async function handleInboundMessage(params: {
     deferInboundMessage,
   } = params;
   const state = stateStore.getState();
-  const systemCommand = parseWechatControlCommand(message.text, {
-    adapter: options.adapter,
-    hasPendingConfirmation: Boolean(state.pendingConfirmation),
-    hasPendingUserInput: Boolean(state.pendingUserInput),
-  });
 
   if (message.senderId !== state.authorizedUserId) {
     await queueWechatMessage(
@@ -1335,6 +1353,49 @@ async function handleInboundMessage(params: {
     );
     return null;
   }
+
+  // Emoji resolution: rewrite message text if it starts with a bound emoji
+  const emojiMatch = resolveEmojiCommand(message.text);
+  if (emojiMatch) {
+    const rewritten = emojiMatch.remainder
+      ? `${emojiMatch.command} ${emojiMatch.remainder}`
+      : emojiMatch.command;
+    message = { ...message, text: rewritten };
+  }
+
+  // Emoji binding management commands
+  const bindingsCmd = parseEmojiBindingsCommand(message.text);
+  if (bindingsCmd) {
+    switch (bindingsCmd.type) {
+      case "list":
+        await queueWechatMessage(message.senderId, formatBindingsListMessage(listBindings()));
+        break;
+      case "bind":
+        setBinding(bindingsCmd.emoji, bindingsCmd.command);
+        await queueWechatMessage(message.senderId, `Bound ${bindingsCmd.emoji} → ${bindingsCmd.command}`);
+        break;
+      case "unbind": {
+        const removed = removeBinding(bindingsCmd.emoji);
+        await queueWechatMessage(
+          message.senderId,
+          removed ? `Unbound ${bindingsCmd.emoji}` : `No binding found for ${bindingsCmd.emoji}`,
+        );
+        break;
+      }
+    }
+    return null;
+  }
+
+  if (isBindCommandPrefix(message.text)) {
+    await queueWechatMessage(message.senderId, formatBindCommandUsage());
+    return null;
+  }
+
+  const systemCommand = parseWechatControlCommand(message.text, {
+    adapter: options.adapter,
+    hasPendingConfirmation: Boolean(state.pendingConfirmation),
+    hasPendingUserInput: Boolean(state.pendingUserInput),
+  });
 
   switch (systemCommand?.type) {
     case "status":

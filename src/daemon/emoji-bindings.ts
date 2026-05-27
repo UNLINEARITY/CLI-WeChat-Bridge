@@ -95,3 +95,51 @@ export function resolveEmojiCommand(text: string): EmojiCommandMatch | null {
   }
   return null;
 }
+
+// --- Emoji bindings command parsing (shared by daemon and single bridge) ---
+
+export type EmojiBindingsCommand =
+  | { type: "bind"; emoji: string; command: string }
+  | { type: "unbind"; emoji: string }
+  | { type: "list" };
+
+export function parseEmojiBindingsCommand(text: string): EmojiBindingsCommand | null {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "/bindings") {
+    return { type: "list" };
+  }
+  const bindMatch = trimmed.match(/^\/bind\s+(\[[^\]]+\])\s+(.+)$/i);
+  if (bindMatch) {
+    return { type: "bind", emoji: bindMatch[1]!, command: bindMatch[2]!.trim() };
+  }
+  const unbindMatch = trimmed.match(/^\/unbind\s+(\[[^\]]+\])$/i);
+  if (unbindMatch) {
+    return { type: "unbind", emoji: unbindMatch[1]! };
+  }
+  return null;
+}
+
+export function isBindCommandPrefix(text: string): boolean {
+  const lower = text.trim().toLowerCase();
+  return lower.startsWith("/bind") || lower.startsWith("/unbind");
+}
+
+export function formatBindCommandUsage(): string {
+  return [
+    "Invalid format. Usage:",
+    "/bind [emoji] command — e.g. /bind [OK] /confirm",
+    "/unbind [emoji] — e.g. /unbind [OK]",
+    "/bindings — list all bindings",
+  ].join("\n");
+}
+
+export function formatBindingsListMessage(map: Map<string, string>): string {
+  if (map.size === 0) {
+    return "No emoji bindings configured.";
+  }
+  const lines = Array.from(map.entries()).map(
+    ([emoji, command]) => `${emoji} → ${command}`,
+  );
+  return `Emoji bindings:\n${lines.join("\n")}`;
+}

@@ -71,11 +71,16 @@ import {
 } from "../wechat/channel-config.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import {
+  formatBindCommandUsage,
+  formatBindingsListMessage,
+  isBindCommandPrefix,
   listBindings,
   loadEmojiBindings,
+  parseEmojiBindingsCommand,
   removeBinding,
   resolveEmojiCommand,
   setBinding,
+  type EmojiBindingsCommand,
 } from "./emoji-bindings.ts";
 import {
   classifyWechatTransportError,
@@ -287,28 +292,6 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
     default:
       return null;
   }
-}
-
-export type EmojiBindingsCommand =
-  | { type: "bind"; emoji: string; command: string }
-  | { type: "unbind"; emoji: string }
-  | { type: "list" };
-
-export function parseEmojiBindingsCommand(text: string): EmojiBindingsCommand | null {
-  const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
-  if (lower === "/bindings") {
-    return { type: "list" };
-  }
-  const bindMatch = trimmed.match(/^\/bind\s+(\[[^\]]+\])\s+(.+)$/i);
-  if (bindMatch) {
-    return { type: "bind", emoji: bindMatch[1]!, command: bindMatch[2]!.trim() };
-  }
-  const unbindMatch = trimmed.match(/^\/unbind\s+(\[[^\]]+\])$/i);
-  if (unbindMatch) {
-    return { type: "unbind", emoji: unbindMatch[1]! };
-  }
-  return null;
 }
 
 export function defaultDaemonSessionStartMode(
@@ -837,6 +820,19 @@ class WechatDaemon {
     log(`Working directory: ${this.cwd}`);
     log("Switch from WeChat with /codex, /claude, or /opencode.");
     appendDaemonLog(`started: cwd=${this.cwd}`);
+
+    const activeSlot = this.getActiveSlot();
+    const welcomeLines = [
+      `WeChat Daemon ready.`,
+      `CWD: ${this.cwd}`,
+      `Active: ${activeSlot?.adapter ?? "none"}`,
+      "",
+      "Commands: /claude, /codex, /opencode, /stop, /confirm, /deny, /status",
+      formatBindingsListMessage(listBindings()),
+      "",
+      "Manage: /bind [emoji] cmd, /unbind [emoji], /bindings",
+    ];
+    await this.queueWechatMessage(this.authorizedUserId, welcomeLines.join("\n"));
 
     while (!this.shutdownPromise) {
       let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
@@ -1443,6 +1439,11 @@ class WechatDaemon {
       return;
     }
 
+    if (isBindCommandPrefix(message.text)) {
+      await this.queueWechatMessage(message.senderId, formatBindCommandUsage());
+      return;
+    }
+
     const slot = this.getActiveSlot();
     if (!slot) {
       await this.queueWechatMessage(message.senderId, formatNoActiveAdapterMessage());
@@ -1506,18 +1507,7 @@ class WechatDaemon {
   ): Promise<void> {
     switch (cmd.type) {
       case "list": {
-        const map = listBindings();
-        if (map.size === 0) {
-          await this.queueWechatMessage(senderId, "No emoji bindings configured.");
-          return;
-        }
-        const lines = Array.from(map.entries()).map(
-          ([emoji, command]) => `${emoji} → ${command}`,
-        );
-        await this.queueWechatMessage(
-          senderId,
-          `Emoji bindings:\n${lines.join("\n")}`,
-        );
+        await this.queueWechatMessage(senderId, formatBindingsListMessage(listBindings()));
         return;
       }
       case "bind": {
