@@ -350,19 +350,19 @@ describe("buildCliEnvironment", () => {
 describe("buildPtySpawnOptions", () => {
   test("enables ConPTY only on Windows", () => {
     expect(
-      buildPtySpawnOptions({
+      (buildPtySpawnOptions({
         cwd: "C:\\repo",
         env: { TERM: "xterm-256color" },
         platform: "win32",
-      }).useConpty,
+      }) as any).useConpty,
     ).toBe(true);
 
     expect(
-      buildPtySpawnOptions({
+      (buildPtySpawnOptions({
         cwd: "/repo",
         env: { TERM: "xterm-256color" },
         platform: "linux",
-      }).useConpty,
+      }) as any).useConpty,
     ).toBeUndefined();
   });
 });
@@ -1577,7 +1577,7 @@ describe("Claude CLI compatibility", () => {
 
     expect(resolved).toBe(true);
     expect(socketPayloads).toHaveLength(1);
-    const response = JSON.parse(socketPayloads[0].trim()) as {
+    const response = JSON.parse(socketPayloads[0]!.trim()) as {
       requestId: string;
       stdout: string;
     };
@@ -2501,14 +2501,14 @@ describe("Codex panel completion recovery", () => {
       "thread/resume",
       "turn/start",
     ]);
-    expect(requests[0].params).toMatchObject({
+    expect(requests[0]!.params).toMatchObject({
       threadId: "thread_local",
       approvalPolicy: "on-request",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
       excludeTurns: true,
     });
-    expect(requests[1].params).toMatchObject({
+    expect(requests[1]!.params).toMatchObject({
       threadId: "thread_local",
       approvalPolicy: "on-request",
       approvalsReviewer: "user",

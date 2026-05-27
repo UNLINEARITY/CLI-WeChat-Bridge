@@ -37,6 +37,7 @@ import {
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
+  formatThinkingForWechat,
   formatUserInputRequestMessage,
   MESSAGE_START_GRACE_MS,
   nowIso,
@@ -103,7 +104,8 @@ type WechatSendContext =
   | "thread_switched"
   | "task_failed"
   | "fatal_error"
-  | "inbound_error";
+  | "inbound_error"
+  | "thinking";
 
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
@@ -1151,6 +1153,18 @@ function wireAdapterEvents(params: {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(authorizedUserId, event.text, "notice");
           }));
+        }
+        break;
+      case "thinking":
+        updateLastOutputAt();
+        if (event.text) {
+          const thinkingPreview = formatThinkingForWechat(event.text, 500);
+          if (thinkingPreview) {
+            stateStore.appendLog(`thinking: ${thinkingPreview}`);
+            trackWechatForwardTask((async () => {
+              await queueWechatMessage(authorizedUserId, `思考: ${thinkingPreview}`, "thinking");
+            })());
+          }
         }
         break;
       case "approval_required":

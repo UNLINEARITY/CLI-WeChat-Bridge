@@ -64,6 +64,9 @@ function buildAdapter(
     async resolveApproval(_action: "confirm" | "deny"): Promise<boolean> {
       return false;
     },
+    async resolveAllApprovals(_action: "confirm" | "deny"): Promise<number> {
+      return 0;
+    },
     async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
       return false;
     },

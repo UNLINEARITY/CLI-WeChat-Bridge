@@ -31,6 +31,7 @@ import type {
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
+  isThinkingForwardEnabled,
   normalizeOutput,
   nowIso,
   truncatePreview,
@@ -163,6 +164,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private lastCompactCompletionAtMs = 0;
   private startupOutputBuffer = "";
   private hasAutoConfirmedWorkspaceTrustPrompt = false;
+  private transcriptPollTimer: ReturnType<typeof setInterval> | null = null;
+  private transcriptTailOffset = 0;
+  private polledTranscriptSessionId: string | null = null;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -251,6 +255,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
+    this.startTranscriptThinkingWatch();
     this.writeToPty(this.buildRemoteInputPayload(text));
     await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
     this.writeToPty("\r");
@@ -370,6 +375,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
+    this.stopTranscriptThinkingWatch();
     await super.dispose();
     await this.stopHookServer();
   }
@@ -1004,6 +1010,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.resumeConversationId = nextResumeConversationId ?? undefined;
     this.transcriptPath = nextTranscriptPath;
     this.state.transcriptPath = nextTranscriptPath ?? undefined;
+    this.startTranscriptThinkingWatch();
 
     if (previousRuntimeSessionId === payload.session_id) {
       return;
@@ -1049,6 +1056,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.pendingCliApprovalHints = null;
     this.clearWechatWorkingNotice(true);
     this.setStatus("busy");
+    this.startTranscriptThinkingWatch();
     this.emit({
       type: "mirrored_user_input",
       text: prompt,
@@ -1221,6 +1229,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       summary: this.currentPreview,
       timestamp: nowIso(),
     });
+    this.stopTranscriptThinkingWatch();
     this.currentPreview = "(idle)";
   }
 
@@ -1229,7 +1238,102 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     error_details?: string;
     last_assistant_message?: string;
   }): void {
+    this.stopTranscriptThinkingWatch();
     this.failClaudeTurn(buildClaudeFailureMessage(payload));
+  }
+
+  private startTranscriptThinkingWatch(): void {
+    this.stopTranscriptThinkingWatch();
+    if (!this.transcriptPath) {
+      return;
+    }
+    if (!isThinkingForwardEnabled()) {
+      return;
+    }
+
+    this.transcriptTailOffset = 0;
+    try {
+      const stat = fs.statSync(this.transcriptPath);
+      this.transcriptTailOffset = stat.size;
+    } catch {
+      return;
+    }
+
+    const watchPath = this.transcriptPath;
+    const sessionId = this.runtimeSessionId;
+    this.polledTranscriptSessionId = sessionId;
+
+    this.transcriptPollTimer = setInterval(() => {
+      if (this.shuttingDown) {
+        this.stopTranscriptThinkingWatch();
+        return;
+      }
+      if (this.polledTranscriptSessionId !== this.runtimeSessionId) {
+        this.stopTranscriptThinkingWatch();
+        return;
+      }
+
+      try {
+        const stat = fs.statSync(watchPath);
+        if (stat.size <= this.transcriptTailOffset) {
+          return;
+        }
+
+        const fd = fs.openSync(watchPath, "r");
+        const buf = Buffer.alloc(stat.size - this.transcriptTailOffset);
+        fs.readSync(fd, buf, 0, buf.length, this.transcriptTailOffset);
+        fs.closeSync(fd);
+        this.transcriptTailOffset = stat.size;
+
+        const newText = buf.toString("utf8");
+        const lines = newText.split(/\r?\n/).filter(Boolean);
+        for (const line of lines) {
+          let parsed: any;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
+
+          if (
+            !parsed ||
+            parsed.type !== "assistant" ||
+            !Array.isArray(parsed.message?.content)
+          ) {
+            continue;
+          }
+
+          for (const block of parsed.message.content) {
+            if (
+              block.type === "thinking" &&
+              typeof block.thinking === "string" &&
+              block.thinking.trim()
+            ) {
+              const thinking = normalizeOutput(block.thinking).trim();
+              if (thinking) {
+                this.emit({
+                  type: "thinking",
+                  text: thinking,
+                  timestamp: nowIso(),
+                });
+              }
+            }
+          }
+        }
+      } catch {
+        // File may be temporarily locked or deleted; silently retry next poll.
+      }
+    }, 800);
+    this.transcriptPollTimer.unref?.();
+  }
+
+  private stopTranscriptThinkingWatch(): void {
+    if (this.transcriptPollTimer) {
+      clearInterval(this.transcriptPollTimer);
+      this.transcriptPollTimer = null;
+    }
+    this.transcriptTailOffset = 0;
+    this.polledTranscriptSessionId = null;
   }
 
   private respondToClaudeHook(

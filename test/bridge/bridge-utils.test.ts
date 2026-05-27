@@ -61,36 +61,42 @@ describe("parseWechatControlCommand", () => {
       parseWechatControlCommand("confirm", {
         adapter: "claude",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
       parseWechatControlCommand("yes", {
         adapter: "claude",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
       parseWechatControlCommand("deny", {
         adapter: "claude",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "deny" });
     expect(
       parseWechatControlCommand("no", {
         adapter: "claude",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "deny" });
     expect(
       parseWechatControlCommand("/confirm", {
         adapter: "claude",
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
       parseWechatControlCommand("/confirm LEGACY", {
         adapter: "claude",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
   });
@@ -100,12 +106,14 @@ describe("parseWechatControlCommand", () => {
       parseWechatControlCommand("yes", {
         adapter: "claude",
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
       }),
     ).toBeNull();
     expect(
       parseWechatControlCommand("confirm", {
         adapter: "codex",
         hasPendingConfirmation: false,
+        hasPendingUserInput: false,
       }),
     ).toBeNull();
   });
@@ -115,12 +123,14 @@ describe("parseWechatControlCommand", () => {
       parseWechatControlCommand("confirm", {
         adapter: "codex",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
       parseWechatControlCommand("yes", {
         adapter: "codex",
         hasPendingConfirmation: true,
+        hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
   });
@@ -714,11 +724,13 @@ describe("formatResumeThreadList", () => {
     const output = formatResumeThreadList(
       [
         {
+          sessionId: "thread_1",
           threadId: "thread_1",
           title: "Fix the bridge resume flow",
           lastUpdatedAt: "2026-03-23T12:00:00.000Z",
         },
         {
+          sessionId: "thread_2",
           threadId: "thread_2",
           title: "Review README updates",
           lastUpdatedAt: "2026-03-23T10:00:00.000Z",

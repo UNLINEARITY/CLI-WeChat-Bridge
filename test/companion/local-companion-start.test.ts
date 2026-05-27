@@ -64,6 +64,7 @@ describe("local-companion-start helpers", () => {
       profile: "work",
       timeoutMs: 15000,
       sessionStartMode: "restore",
+      cliArgs: [],
     });
 
     expect(args).toEqual([
@@ -87,6 +88,7 @@ describe("local-companion-start helpers", () => {
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
       sessionStartMode: "new",
+      cliArgs: [],
     });
 
     expect(args).toEqual([
@@ -110,6 +112,7 @@ describe("local-companion-start helpers", () => {
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
       sessionStartMode: "new",
+      cliArgs: [],
     });
 
     expect(args).toEqual([
@@ -133,6 +136,7 @@ describe("local-companion-start helpers", () => {
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
       sessionStartMode: "restore",
+      cliArgs: [],
     });
 
     expect(args).toEqual([
@@ -186,9 +190,9 @@ describe("local-companion-start helpers", () => {
 
     await ensureCompanionStartWechatCredentials("codex", async (options) => {
       calls.push({
-        requireUserId: options.requireUserId,
-        validateExisting: options.validateExisting,
-        logType: typeof options.log,
+        requireUserId: options!.requireUserId,
+        validateExisting: options!.validateExisting,
+        logType: typeof options!.log,
       });
       return {
         token: "token-1",
@@ -383,6 +387,7 @@ describe("local-companion-start helpers", () => {
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
       sessionStartMode: "restore",
+      cliArgs: [],
     });
 
     expect(args).toEqual([

@@ -194,7 +194,7 @@ describe("OpenCodeServerAdapter initial state", () => {
       "--session",
       "ses_fresh",
     ]);
-    expect(JSON.parse(internal.buildNativeClientEnv().OPENCODE_ROUTE)).toEqual({
+    expect(JSON.parse(internal.buildNativeClientEnv().OPENCODE_ROUTE!)).toEqual({
       type: "session",
       sessionID: "ses_fresh",
     });
