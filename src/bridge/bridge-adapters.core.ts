@@ -1,6 +1,7 @@
 ﻿import net from "node:net";
 import { spawn as spawnPty } from "node-pty";
 import type { IPty } from "node-pty";
+import { t } from "../i18n/index.ts";
 import {
   attachLocalCompanionMessageListener,
   buildLocalCompanionToken,
@@ -732,7 +733,7 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
       if (usedFallback) {
         this.emit({
           type: "stdout",
-          text: "[Warning] PTY unavailable, using fallback mode. Terminal rendering may be degraded.\n",
+          text: t("pty.fallback.warning"),
           timestamp: nowIso(),
         });
       }

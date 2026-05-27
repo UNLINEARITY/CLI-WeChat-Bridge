@@ -3,6 +3,7 @@ import path from "node:path";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
+import { t } from "../i18n/index.ts";
 import { spawn as spawnPty } from "node-pty";
 
 import type {
@@ -1900,37 +1901,24 @@ export function buildSpawnDiagnostic(
   const target = spawnTarget ? spawnTarget.file : "(unknown)";
 
   const lines: string[] = [
-    `Failed to start CLI process: ${target}`,
-    `Error: ${errorMessage}`,
-    "",
-    "Possible fixes:",
+    t("spawn.diagnostic.title", { target, error: errorMessage }),
+    t("spawn.diagnostic.fixesHeader"),
   ];
 
   if (errorMessage.includes("posix_spawnp") || errorMessage.includes("node-pty")) {
-    lines.push(
-      "- The node-pty native module is incompatible with your Node.js version.",
-      "- Run: npm rebuild node-pty",
-      "- Or reinstall: npm install -g cli-wechat-bridge@latest",
-    );
+    lines.push(t("spawn.diagnostic.nodePty"));
     if (platform === "darwin") {
-      lines.push("- Ensure Xcode CLI tools are installed: xcode-select --install");
+      lines.push(t("spawn.diagnostic.xcode"));
     }
   } else if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
-    lines.push(
-      `- The command "${target}" was not found on PATH.`,
-      "- Verify it is installed and accessible from your terminal.",
-    );
+    lines.push(t("spawn.diagnostic.notFound", { target }));
   } else {
-    lines.push("- Reinstall: npm install -g cli-wechat-bridge@latest");
+    lines.push(t("spawn.diagnostic.generic"));
   }
 
+  lines.push(t("spawn.diagnostic.nodeVersion"));
   if (platform === "win32") {
-    lines.push("- Ensure Node.js >= 22.6.0: node --version");
-    lines.push("- If using ConPTY, try running as Administrator.");
-  } else if (platform === "darwin") {
-    lines.push("- Ensure Node.js >= 22.6.0: node --version");
-  } else {
-    lines.push("- Ensure Node.js >= 22.6.0: node --version");
+    lines.push(t("spawn.diagnostic.winAdmin"));
   }
 
   return lines.join("\n");

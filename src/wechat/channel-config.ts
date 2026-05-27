@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { initLocaleFromEnv } from "../i18n/index.ts";
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(MODULE_DIR, "..", "..");
@@ -45,6 +46,8 @@ export const INBOUND_ATTACHMENTS_DIR = path.join(
   "inbound-attachments",
 );
 export const EMOJI_BINDINGS_FILE = path.join(CHANNEL_DATA_DIR, "emoji-bindings.json");
+
+initLocaleFromEnv();
 
 export type WorkspaceChannelPaths = {
   workspaceDir: string;

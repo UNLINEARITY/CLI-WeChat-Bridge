@@ -3,6 +3,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { buildLocalCompanionToken } from "../companion/local-companion-link.ts";
+import { t } from "../i18n/index.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   buildClaudeFailureMessage,
@@ -735,18 +736,14 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       this.hookHealthCheckTimer = null;
       if (this.hookReceivedCount === 0 && !this.shuttingDown) {
         const logHint = this.hookErrorLogPath
-          ? `\nCheck: ${this.hookErrorLogPath}`
+          ? t("hook.healthCheck.logHint", { logPath: this.hookErrorLogPath })
           : "";
         this.emit({
           type: "stdout",
           text: [
-            "[Warning] No hook events received from Claude after 15s.",
-            "The hook system may not be working — Claude output will not reach WeChat.",
+            t("hook.healthCheck.warning"),
             logHint,
-            "\nCommon fixes:",
-            "- Ensure Node.js >= 22.6.0: node --version",
-            "- Reinstall: npm install -g cli-wechat-bridge@latest",
-            "- Check firewall: allow localhost TCP connections",
+            t("hook.healthCheck.fixes"),
           ].filter(Boolean).join("\n"),
           timestamp: nowIso(),
         });

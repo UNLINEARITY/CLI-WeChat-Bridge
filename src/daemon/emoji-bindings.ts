@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { EMOJI_BINDINGS_FILE } from "../wechat/channel-config.ts";
+import { t } from "../i18n/index.ts";
 
 export const DEFAULT_EMOJI_BINDINGS: Record<string, string> = {
   "[OK]": "/confirm",
@@ -126,20 +127,15 @@ export function isBindCommandPrefix(text: string): boolean {
 }
 
 export function formatBindCommandUsage(): string {
-  return [
-    "Invalid format. Usage:",
-    "/bind [emoji] command — e.g. /bind [OK] /confirm",
-    "/unbind [emoji] — e.g. /unbind [OK]",
-    "/bindings — list all bindings",
-  ].join("\n");
+  return t("binding.usage");
 }
 
 export function formatBindingsListMessage(map: Map<string, string>): string {
   if (map.size === 0) {
-    return "No emoji bindings configured.";
+    return t("binding.listEmpty");
   }
   const lines = Array.from(map.entries()).map(
     ([emoji, command]) => `${emoji} → ${command}`,
   );
-  return `Emoji bindings:\n${lines.join("\n")}`;
+  return `${t("binding.listHeader")}\n${lines.join("\n")}`;
 }

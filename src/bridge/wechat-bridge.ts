@@ -6,6 +6,7 @@ import {
   resolveDefaultAdapterCommand,
 } from "./bridge-adapters.ts";
 import { delay } from "./bridge-adapters.shared.ts";
+import { t } from "../i18n/index.ts";
 import { BridgeController } from "./bridge-controller.ts";
 import { forwardWechatFinalReply } from "./bridge-final-reply.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
@@ -862,16 +863,12 @@ async function main(): Promise<void> {
     }
 
     loadEmojiBindings();
-    const welcomeLines = [
-      `WeChat Bridge ready (${options.adapter}).`,
-      `CWD: ${options.cwd}`,
-      "",
-      "Commands: /stop, /confirm, /deny, /status, /new",
-      formatBindingsListMessage(listBindings()),
-      "",
-      "Manage: /bind [emoji] cmd, /unbind [emoji], /bindings",
-    ];
-    await queueWechatMessage(credentials.userId, welcomeLines.join("\n"));
+    const welcomeText = t("bridge.welcome", {
+      adapter: options.adapter,
+      cwd: options.cwd,
+      bindings: formatBindingsListMessage(listBindings()),
+    });
+    await queueWechatMessage(credentials.userId, welcomeText);
 
     while (true) {
       if (!ensureRuntimeOwnership()) {

@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   resolveDefaultAdapterCommand,
 } from "../bridge/bridge-adapters.ts";
+import { t } from "../i18n/index.ts";
 import {
   delay,
   getSharedSessionIdFromAdapterState,
@@ -822,17 +823,12 @@ class WechatDaemon {
     appendDaemonLog(`started: cwd=${this.cwd}`);
 
     const activeSlot = this.getActiveSlot();
-    const welcomeLines = [
-      `WeChat Daemon ready.`,
-      `CWD: ${this.cwd}`,
-      `Active: ${activeSlot?.adapter ?? "none"}`,
-      "",
-      "Commands: /claude, /codex, /opencode, /stop, /confirm, /deny, /status",
-      formatBindingsListMessage(listBindings()),
-      "",
-      "Manage: /bind [emoji] cmd, /unbind [emoji], /bindings",
-    ];
-    await this.queueWechatMessage(this.authorizedUserId, welcomeLines.join("\n"));
+    const welcomeText = t("daemon.welcome", {
+      cwd: this.cwd,
+      adapter: activeSlot?.adapter ?? "none",
+      bindings: formatBindingsListMessage(listBindings()),
+    });
+    await this.queueWechatMessage(this.authorizedUserId, welcomeText);
 
     while (!this.shutdownPromise) {
       let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
