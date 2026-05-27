@@ -4,6 +4,17 @@
 
 ## 版本列表
 
+### [v1.1.0](./1.1.0.md) / [中文说明](./1.1.0_CN.md)
+**i18n 中文默认 + Claude 思考转发 + 自动批准修复 + 批量审批 + 单桥 emoji 绑定** - 引入轻量级国际化系统（默认中文，`CLI_BRIDGE_LANG=en` 切英文）；新增 Claude 思考过程实时转发到微信；修复自动批准 TCP 响应丢失导致 Claude 卡死的严重 bug；队列化批量审批替代单值存储；单桥模式支持 emoji 绑定命令
+- **i18n**：`t(key, params?)` 查找函数 + 中英文消息目录，覆盖欢迎消息、hook 警告、PTY fallback、spawn 诊断、emoji binding 管理
+- **Claude 思考转发**：800ms 轮询 transcript JSONL，提取 thinking 块以"思考:"前缀转发微信，默认关闭
+- **自动批准修复**：TCP 响应丢失时回退到微信手动审批，防止 Claude 卡在终端权限提示
+- **批量审批**：`/confirm`、`/yes` 一次确认所有待审批，bare text 命令对所有 adapter 生效
+- **单桥 emoji 绑定**：`/bind`、`/unbind`、`/bindings` 在单桥模式可用，启动欢迎消息
+- **进程树清理**：Windows 上 `killProcessTreeSync` 递归杀 Codex 子进程
+- **跨平台诊断**：hook stderr 日志化、15s 健康检查、PTY fallback
+- **统计**：26 个文件，新增 922 行，删除 206 行
+
 ### [v1.0.9](./1.0.9.md) / [中文说明](./1.0.9_CN.md)
 **微信表情绑定 + 运行时 bug 修复 + macOS/Linux 可见终端 + 协议变更** - 新增表情到命令映射系统，支持默认绑定和微信内动态管理；修复 Stop 后无法恢复、图片无法读取、daemon 接管丢失会话等运行时 bug；为 macOS 和 Linux 添加可见终端窗口支持；协议从 MIT 变更为 AGPL-3.0 + 商业双协议
 - **表情绑定**：发送微信表情即可触发 daemon 命令，默认映射 `[OK]→/confirm`、`[闭嘴]→/stop`、`[拥抱]→/claude`、`[强]→/codex`、`[胜利]→/opencode`、`[再见]→/daemon-stop`
@@ -143,6 +154,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.1.0 | 2026-05-27 | i18n 中文默认、Claude 思考转发、自动批准修复、批量审批、单桥 emoji 绑定、进程树清理、跨平台诊断 | 26 个文件，+922/-206 |
 | 1.0.9 | 2026-05-26 | 微信表情绑定、Stop 恢复、图片读取、daemon 会话保留、进程安全、macOS/Linux 可见终端、协议变更为 AGPL-3.0 双协议 | 6 个文件，+300 |
 | 1.0.7 | 2026-05-26 | daemon 切换失败不再污染 active adapter，Codex endpoint 丢失可恢复，旧 daemon peer 自动清理，Claude/OpenCode 默认 fresh session，文档拆分与旧代码清理 | 34 个文件，+2,175/-1,371 |
 | 1.0.6 | 2026-05-23 | Codex / Claude 低风险审批自动通过、微信附件发送 staging 保护、Codex `/answer` 用户输入回传 | 15 个文件，+2,739/-132 |

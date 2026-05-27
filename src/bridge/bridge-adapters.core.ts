@@ -713,7 +713,7 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
             env,
           });
         } catch (fallbackErr) {
-          throw new Error(buildSpawnDiagnostic(ptyErr, spawnTarget));
+          throw new Error(buildSpawnDiagnostic(ptyErr, spawnTarget), { cause: fallbackErr });
         }
       }
 

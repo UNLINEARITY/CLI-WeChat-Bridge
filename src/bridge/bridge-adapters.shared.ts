@@ -2,7 +2,7 @@
 import path from "node:path";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { t } from "../i18n/index.ts";
 import { spawn as spawnPty } from "node-pty";
 
@@ -1815,7 +1815,6 @@ export function spawnFallbackProcess(
   args: string[],
   options: { cwd: string; env: Record<string, string> },
 ): PtyLike {
-  const { spawn } = require("node:child_process") as typeof import("node:child_process");
   const child = spawn(file, args, {
     cwd: options.cwd,
     env: { ...options.env, TERM: "dumb" },

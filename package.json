@@ -1,6 +1,6 @@
 {
   "name": "cli-wechat-bridge",
-  "version": "1.0.9",
+  "version": "1.1.0",
   "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and PowerShell over WeChat",
   "type": "module",
   "files": [

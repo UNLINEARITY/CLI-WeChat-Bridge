@@ -1348,6 +1348,8 @@ async function handleInboundMessage(params: {
 }): Promise<ActiveTask | null> {
   let {
     message,
+  } = params;
+  const {
     options,
     stateStore,
     adapter,
