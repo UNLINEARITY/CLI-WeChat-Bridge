@@ -1909,6 +1909,9 @@ export function buildSpawnDiagnostic(
     if (platform === "darwin") {
       lines.push(t("spawn.diagnostic.xcode"));
     }
+    if (platform === "linux") {
+      lines.push(t("spawn.diagnostic.linuxBuildTools"));
+    }
   } else if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
     lines.push(t("spawn.diagnostic.notFound", { target }));
   } else {
@@ -1917,7 +1920,7 @@ export function buildSpawnDiagnostic(
 
   lines.push(t("spawn.diagnostic.nodeVersion"));
   if (platform === "win32") {
-    lines.push(t("spawn.diagnostic.winAdmin"));
+    lines.push(t("spawn.diagnostic.winFull"));
   }
 
   return lines.join("\n");

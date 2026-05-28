@@ -424,6 +424,11 @@ function printUsageAndExit(): never {
 }
 
 async function main(): Promise<void> {
+  if (process.argv.includes("--doctor")) {
+    const { runDoctorCheck } = await import("../utils/doctor.ts");
+    await runDoctorCheck();
+    process.exit(0);
+  }
   const options = parseCliArgs(process.argv.slice(2));
   const daemonEndpoint = readDaemonEndpoint();
   if (daemonEndpoint && await isDaemonEndpointAlive(daemonEndpoint, { timeoutMs: 500 })) {

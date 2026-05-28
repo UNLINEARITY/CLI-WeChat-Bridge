@@ -59,6 +59,79 @@ npm install -g cli-wechat-bridge@latest
 
 如果命令仍不存在，请检查 npm 全局 bin 目录是否已加入 `PATH`。使用源码仓库提供全局命令的方式见 [开发说明](development.md#全局命令开发验证)。
 
+## PTY 不可用 / 回退模式
+
+启动 bridge 后如果看到以下警告：
+
+```text
+[警告] PTY 不可用 — 已切换到回退模式（TERM=dumb）。
+```
+
+说明 `node-pty` 原生模块未能加载，bridge 已自动切换到 `child_process` 回退模式。
+
+**注意**：Claude Code 适配器当前通过 PTY 交互模式工作，在回退模式下可能无法正常桥接。Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响。OpenCode 适配器完全不依赖 node-pty。
+
+### 修复方法
+
+**Linux（最常见）：**
+
+Linux 没有 node-pty 预编译包，需要本地编译：
+
+```bash
+# Debian / Ubuntu
+sudo apt install build-essential python3
+
+# RHEL / Fedora / CentOS
+sudo dnf groupinstall "Development Tools" && sudo dnf install python3
+
+# Alpine
+apk add build-base python3
+```
+
+安装编译工具后，重新安装 bridge：
+
+```bash
+npm install -g cli-wechat-bridge@latest
+```
+
+**Windows：**
+
+Windows 包含预编译模块，但以下情况可能导致加载失败：
+
+- **Windows 版本过低**：ConPTY 需要 Windows 10 build 18309+，运行 `winver` 查看当前版本
+- **Node ABI 不匹配**：Node.js 大版本升级后预编译包可能不兼容，运行 `npm rebuild node-pty` 或重新安装
+- **缺少 Visual C++ Redistributable**：下载安装 [vc_redist.x64.exe](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+- **权限不足**：尝试以管理员身份运行终端
+
+```bash
+npm rebuild node-pty
+# 或重新安装
+npm install -g cli-wechat-bridge@latest
+```
+
+**macOS：**
+
+```bash
+xcode-select --install
+npm rebuild node-pty
+```
+
+### 验证修复
+
+运行以下命令确认 node-pty 可正常加载：
+
+```bash
+node -e "require('node-pty'); console.log('node-pty OK')"
+```
+
+或使用内置环境检查：
+
+```bash
+wechat-daemon --doctor
+```
+
+如果输出 `node-pty: ✓ loaded`，重启 bridge 即可使用完整 PTY 模式。
+
 ## 微信上提示没有 context token
 
 通常表示当前联系人还没有建立可用的 iLink 上下文。启动 bridge 后，先由 owner 账号向 Bot 发送一条普通微信消息，一般即可建立上下文。

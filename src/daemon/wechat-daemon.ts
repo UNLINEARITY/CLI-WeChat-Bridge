@@ -2356,6 +2356,11 @@ export async function runDaemon(
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  if (argv.includes("--doctor")) {
+    const { runDoctorCheck } = await import("../utils/doctor.ts");
+    await runDoctorCheck();
+    process.exit(0);
+  }
   try {
     await runDaemon(parseDaemonCliArgs(argv));
   } catch (error) {

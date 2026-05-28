@@ -63,6 +63,35 @@ npm install -g cli-wechat-bridge@latest
 
 兼容性说明：旧包名 `@unlinearity/cli-wechat-bridge` 会继续同步发布，已经安装旧包名的用户可以正常升级；新用户优先使用更短的 `cli-wechat-bridge`。
 
+<details>
+<summary><b>安装遇到问题？（node-pty 原生模块）</b></summary>
+
+本项目使用 `node-pty` 为 CLI 适配器提供完整终端模拟。**Claude Code 适配器当前通过 PTY 交互模式工作**，node-pty 不可用时会回退到兼容模式，但 Claude Code 在此模式下可能无法正常桥接；Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响；OpenCode 适配器完全不依赖 node-pty。
+
+**Linux 用户**（最常见）：需要原生模块编译工具：
+
+```bash
+# Debian / Ubuntu
+sudo apt install build-essential python3
+# RHEL / Fedora
+sudo dnf groupinstall "Development Tools" && sudo dnf install python3
+# Alpine
+apk add build-base python3
+```
+
+安装编译工具后重新安装：`npm install -g cli-wechat-bridge@latest`
+
+**macOS 用户**：如遇编译问题，安装 Xcode 命令行工具：`xcode-select --install`
+
+**Windows 用户**：
+- 需要 Windows 10 1809（build 18309）或更高版本
+- 如果 node-pty 加载失败，运行 `npm rebuild node-pty` 或重新安装
+- 确保已安装 [Visual C++ Redistributable](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+
+运行 `wechat-daemon --doctor` 可快速检查环境状态。详见 [问题排查](docs/troubleshooting.md#pty-不可用--回退模式)。
+
+</details>
+
 ### 3. 完成微信登录
 
 全局安装后运行：

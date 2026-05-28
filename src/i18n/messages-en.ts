@@ -30,17 +30,18 @@ export const messages: Record<string, string> = {
   "hook.healthCheck.fixes": "\nCommon fixes:\n- Ensure Node.js >= 22.6.0: node --version\n- Reinstall: npm install -g cli-wechat-bridge@latest\n- Check firewall: allow localhost TCP connections",
 
   // === PTY fallback ===
-  "pty.fallback.warning": "[Warning] PTY unavailable, using fallback mode. Terminal rendering may be degraded.\n",
+  "pty.fallback.warning": "[Warning] PTY unavailable — using fallback mode (TERM=dumb).\nCore features (messaging, approvals, session management) work normally; terminal rendering (colors, progress bars) may be degraded.\nFix: Linux install build-essential python3 | Windows run npm rebuild node-pty | macOS run xcode-select --install\nRun --doctor for detailed environment info.\n",
 
   // === Spawn diagnostic ===
   "spawn.diagnostic.title": "Failed to start CLI process: {target}\nError: {error}",
   "spawn.diagnostic.fixesHeader": "\nPossible fixes:",
   "spawn.diagnostic.nodePty": "- The node-pty native module is incompatible with your Node.js version.\n- Run: npm rebuild node-pty\n- Or reinstall: npm install -g cli-wechat-bridge@latest",
   "spawn.diagnostic.xcode": "- Ensure Xcode CLI tools are installed: xcode-select --install",
+  "spawn.diagnostic.linuxBuildTools": "- Linux requires build tools for node-pty: sudo apt install build-essential python3\n- Then reinstall: npm install -g cli-wechat-bridge@latest",
   "spawn.diagnostic.notFound": "- The command \"{target}\" was not found on PATH.\n- Verify it is installed and accessible from your terminal.",
   "spawn.diagnostic.generic": "- Reinstall: npm install -g cli-wechat-bridge@latest",
   "spawn.diagnostic.nodeVersion": "- Ensure Node.js >= 22.6.0: node --version",
-  "spawn.diagnostic.winAdmin": "- If using ConPTY, try running as Administrator.",
+  "spawn.diagnostic.winFull": "- Ensure Windows 10 build 18309+ (run 'winver' to check)\n- Install Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe\n- Run: npm rebuild node-pty\n- Try running as Administrator",
 
   // === Emoji bindings ===
   "binding.usage": "Invalid format.\nUsage: /bind [emoji] command\nExample: /bind 🚀 deploy --prod",
