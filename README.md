@@ -26,6 +26,7 @@
 - [运行配置](docs/configuration.md)：数据目录、上传大小限制、调试开关等环境变量。
 - [开发说明](docs/development.md)：源码运行、测试、构建、打包和全局 smoke 验证。
 - [发布说明](docs/releases/README.md)：各版本变更与升级说明。
+- [通信架构](docs/architecture.md)：三种 CLI 适配器的通信机制、PTY 依赖分析和技术决策。
 
 ## 这个项目解决什么问题？
 
