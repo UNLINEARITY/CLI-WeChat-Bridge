@@ -1,23 +1,116 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+
+import {
+  normalizeBridgeLockPayload,
+  shouldAutoReclaimBridgeLock,
+  type BridgeLockPayload,
+} from "../bridge/bridge-state.ts";
+import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
+import {
+  readLocalCompanionEndpoint as readWorkspaceEndpoint,
+  type LocalCompanionEndpoint,
+} from "../companion/local-companion-link.ts";
+import {
+  isDaemonEndpointAlive,
+  type DaemonEndpoint,
+} from "../daemon/daemon-link.ts";
+import { t } from "../i18n/index.ts";
 import { resolveChannelDataDir } from "../wechat/channel-config.ts";
 
-const OK = "✓";
-const FAIL = "✗";
+const STATE_OK = "[ok]";
+const STATE_WARN = "[warn]";
+const STATE_FAIL = "[fail]";
+
+const RUNTIME_ENDPOINT_TIMEOUT_MS = 500;
+const DAEMON_ENDPOINT_TIMEOUT_MS = 500;
+
+type DoctorMode = "bridge" | "daemon" | "generic";
+type DoctorStatus = "ok" | "warn" | "fail";
+
+export type DoctorCliOptions = {
+  mode: DoctorMode;
+  cwd: string;
+  adapter?: BridgeAdapterKind;
+};
+
+type FileReadResult<T> =
+  | { kind: "missing"; filePath: string }
+  | { kind: "invalid"; filePath: string; error: string }
+  | { kind: "ok"; filePath: string; value: T };
+
+export type DoctorDeps = {
+  platform?: NodeJS.Platform;
+  arch?: string;
+  nodeVersion?: string;
+  osRelease?: () => string;
+  findExecutable?: (name: string) => string | null;
+  loadNodePty?: () => Promise<void>;
+  resolveDataDir?: () => string;
+  exists?: (filePath: string) => boolean;
+  readTextFile?: (filePath: string) => string;
+  isProcessAlive?: (pid: number) => boolean;
+  isTcpPortReachable?: (port: number, timeoutMs: number) => Promise<boolean>;
+  isDaemonAlive?: (endpoint: DaemonEndpoint) => Promise<boolean>;
+  readLocalCompanionEndpoint?: (
+    cwd: string,
+    adapter?: BridgeAdapterKind,
+  ) => LocalCompanionEndpoint | null;
+};
+
+type ResolvedDoctorDeps = Required<DoctorDeps>;
+
+type BuildDoctorReportOptions = {
+  argv?: string[];
+  mode?: DoctorMode;
+  cwd?: string;
+  adapter?: BridgeAdapterKind;
+};
+
+function msg(key: string, params?: Record<string, string | number>): string {
+  return t(`doctor.${key}`, params);
+}
+
+function section(lines: string[], title: string): void {
+  if (lines.length > 0 && lines.at(-1) !== "") {
+    lines.push("");
+  }
+  lines.push(title);
+}
+
+function row(status: string, label: string, value: string): string {
+  return `  ${status} ${label} ${value}`;
+}
+
+function fieldRow(label: string, value: string): string {
+  return `  ${label} ${value}`;
+}
+
+function detail(value: string): string {
+  return `    ${value}`;
+}
+
+function detailField(label: string, value: string): string {
+  return detail(`${label} ${value}`);
+}
 
 function findExecutable(name: string): string | null {
   const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    return execFileSync(cmd, [name], { stdio: ["ignore", "pipe", "ignore"], encoding: "utf8" }).trim().split(/\r?\n/)[0] ?? null;
+    return execFileSync(cmd, [name], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+    }).trim().split(/\r?\n/)[0] ?? null;
   } catch {
     return null;
   }
 }
 
-function getPlatformPtyFix(): string {
-  switch (process.platform) {
+function getPlatformPtyFix(platform: NodeJS.Platform): string {
+  switch (platform) {
     case "linux":
       return "sudo apt install build-essential python3 && npm install -g cli-wechat-bridge@latest";
     case "darwin":
@@ -29,67 +122,667 @@ function getPlatformPtyFix(): string {
   }
 }
 
-export async function runDoctorCheck(): Promise<void> {
-  const lines: string[] = [];
-  lines.push("CLI WeChat Bridge — Environment Check");
-  lines.push("=".repeat(38));
-  lines.push("");
-
-  // Node.js
-  lines.push(`Node.js:     ${process.version}  ${OK}`);
-  lines.push(`Platform:    ${process.platform}-${process.arch}`);
-
-  // Windows build number
-  if (process.platform === "win32") {
-    const release = os.release();
-    const build = parseInt(release.split(".").pop() ?? "0", 10);
-    const ok = build >= 18309;
-    lines.push(`Win Build:   ${build}  ${ok ? OK : FAIL + " (ConPTY requires build 18309+)"}`);
+function defaultIsProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
   }
 
-  lines.push("");
-
-  // node-pty
   try {
-    await import("node-pty");
-    lines.push(`node-pty:    ${OK} loaded`);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    const short = msg.length > 80 ? msg.slice(0, 80) + "..." : msg;
-    lines.push(`node-pty:    ${FAIL} ${short}`);
-    lines.push(`             Fix: ${getPlatformPtyFix()}`);
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function defaultIsTcpPortReachable(
+  port: number,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (!Number.isInteger(port) || port <= 0) {
+    return false;
   }
 
-  lines.push("");
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.connect({
+      host: "127.0.0.1",
+      port,
+    });
 
-  // CLI availability
-  const clis: Array<{ name: string; label: string; optional: boolean }> = [
+    let done = false;
+    const finish = (result: boolean) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      socket.destroy();
+      resolve(result);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+function resolveDeps(deps: DoctorDeps = {}): ResolvedDoctorDeps {
+  return {
+    platform: deps.platform ?? process.platform,
+    arch: deps.arch ?? process.arch,
+    nodeVersion: deps.nodeVersion ?? process.version,
+    osRelease: deps.osRelease ?? os.release,
+    findExecutable: deps.findExecutable ?? findExecutable,
+    loadNodePty:
+      deps.loadNodePty ??
+      (async () => {
+        await import("node-pty");
+      }),
+    resolveDataDir: deps.resolveDataDir ?? resolveChannelDataDir,
+    exists: deps.exists ?? fs.existsSync,
+    readTextFile:
+      deps.readTextFile ??
+      ((filePath) => fs.readFileSync(filePath, "utf8")),
+    isProcessAlive: deps.isProcessAlive ?? defaultIsProcessAlive,
+    isTcpPortReachable: deps.isTcpPortReachable ?? defaultIsTcpPortReachable,
+    isDaemonAlive:
+      deps.isDaemonAlive ??
+      ((endpoint) =>
+        isDaemonEndpointAlive(endpoint, { timeoutMs: DAEMON_ENDPOINT_TIMEOUT_MS })),
+    readLocalCompanionEndpoint:
+      deps.readLocalCompanionEndpoint ??
+      ((cwd, adapter) =>
+        readWorkspaceEndpoint(cwd, adapter ? { adapter } : {})),
+  };
+}
+
+function isBridgeAdapterKind(value: string | undefined): value is BridgeAdapterKind {
+  return (
+    value === "codex" ||
+    value === "claude" ||
+    value === "opencode" ||
+    value === "shell"
+  );
+}
+
+export function parseDoctorCliArgs(
+  argv: string[],
+  mode: DoctorMode = "generic",
+  fallbackCwd = process.cwd(),
+): DoctorCliOptions {
+  let cwd = fallbackCwd;
+  let adapter: BridgeAdapterKind | undefined;
+
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    if (!arg) {
+      continue;
+    }
+
+    if (arg === "--cwd" && next) {
+      cwd = path.resolve(next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--adapter" && isBridgeAdapterKind(next)) {
+      adapter = next;
+      i += 1;
+      continue;
+    }
+  }
+
+  return {
+    mode,
+    cwd: path.resolve(cwd),
+    adapter,
+  };
+}
+
+function statusTag(status: DoctorStatus): string {
+  if (status === "ok") {
+    return STATE_OK;
+  }
+  if (status === "warn") {
+    return STATE_WARN;
+  }
+  return STATE_FAIL;
+}
+
+function shortError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.length > 100 ? `${message.slice(0, 100)}...` : message;
+}
+
+function sameWorkspacePath(left: string, right: string): boolean {
+  const normalizedLeft = path.resolve(left);
+  const normalizedRight = path.resolve(right);
+  return process.platform === "win32"
+    ? normalizedLeft.toLowerCase() === normalizedRight.toLowerCase()
+    : normalizedLeft === normalizedRight;
+}
+
+function normalizeDaemonEndpoint(value: unknown): DaemonEndpoint | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (
+    typeof record.protocolVersion !== "number" ||
+    typeof record.pid !== "number" ||
+    typeof record.port !== "number" ||
+    typeof record.token !== "string" ||
+    typeof record.cwd !== "string" ||
+    typeof record.startedAt !== "string"
+  ) {
+    return null;
+  }
+
+  return {
+    protocolVersion: record.protocolVersion,
+    pid: record.pid,
+    port: record.port,
+    token: record.token,
+    cwd: record.cwd,
+    startedAt: record.startedAt,
+  };
+}
+
+function readNormalizedJsonFile<T>(
+  filePath: string,
+  deps: ResolvedDoctorDeps,
+  normalize: (value: unknown) => T | null,
+): FileReadResult<T> {
+  if (!deps.exists(filePath)) {
+    return { kind: "missing", filePath };
+  }
+
+  try {
+    const parsed = JSON.parse(deps.readTextFile(filePath)) as unknown;
+    const normalized = normalize(parsed);
+    if (!normalized) {
+      return {
+        kind: "invalid",
+        filePath,
+        error: msg("invalidShape"),
+      };
+    }
+    return {
+      kind: "ok",
+      filePath,
+      value: normalized,
+    };
+  } catch (error) {
+    return {
+      kind: "invalid",
+      filePath,
+      error: shortError(error),
+    };
+  }
+}
+
+function formatMode(mode: DoctorMode): string {
+  if (mode === "bridge") {
+    return msg("mode.bridge");
+  }
+  if (mode === "daemon") {
+    return "wechat-daemon";
+  }
+  return msg("mode.generic");
+}
+
+function formatAlive(value: boolean | undefined): string {
+  if (value === undefined) {
+    return msg("unknown");
+  }
+  return value ? msg("yes") : msg("no");
+}
+
+function appendLockDetailLines(lines: string[], lock: BridgeLockPayload): void {
+  lines.push(detailField(msg("lock.detail.pid"), String(lock.pid)));
+  lines.push(detailField(msg("lock.detail.adapter"), lock.adapter));
+  lines.push(detailField(msg("lock.detail.cwd"), lock.cwd));
+  lines.push(detailField(msg("lock.detail.lifecycle"), lock.lifecycle));
+  lines.push(detailField(msg("lock.detail.startedAt"), lock.startedAt));
+}
+
+async function appendDaemonLines(
+  lines: string[],
+  options: DoctorCliOptions,
+  dataDir: string,
+  deps: ResolvedDoctorDeps,
+): Promise<void> {
+  const endpointFile = path.join(dataDir, "daemon-endpoint.json");
+  const endpointResult = readNormalizedJsonFile(
+    endpointFile,
+    deps,
+    normalizeDaemonEndpoint,
+  );
+  const label = msg("label.daemon");
+
+  if (endpointResult.kind === "missing") {
+    lines.push(row(STATE_OK, label, msg("none")));
+    return;
+  }
+
+  if (endpointResult.kind === "invalid") {
+    lines.push(row(STATE_WARN, label, msg("daemon.invalid", {
+      error: endpointResult.error,
+    })));
+    lines.push(detail(msg("file", { file: endpointResult.filePath })));
+    return;
+  }
+
+  const endpoint = endpointResult.value;
+  const pidAlive = deps.isProcessAlive(endpoint.pid);
+  const daemonAlive = pidAlive ? await deps.isDaemonAlive(endpoint) : false;
+  if (!daemonAlive) {
+    lines.push(row(STATE_WARN, label, msg("daemon.stale", {
+      pid: endpoint.pid,
+      cwd: endpoint.cwd,
+      port: endpoint.port,
+    })));
+    lines.push(detail(msg("daemon.staleStartup")));
+    return;
+  }
+
+  const status: DoctorStatus = options.mode === "bridge" ? "fail" : "warn";
+  lines.push(row(statusTag(status), label, msg("daemon.live", {
+    pid: endpoint.pid,
+    cwd: endpoint.cwd,
+    port: endpoint.port,
+  })));
+  if (options.mode === "bridge") {
+    lines.push(detail(msg("daemon.liveBridgeStartup")));
+  } else if (options.mode === "daemon") {
+    lines.push(detail(msg("daemon.liveDaemonStartup")));
+  }
+}
+
+function appendBridgeLockLines(
+  lines: string[],
+  options: DoctorCliOptions,
+  dataDir: string,
+  deps: ResolvedDoctorDeps,
+): BridgeLockPayload | null {
+  const lockFile = path.join(dataDir, "bridge.lock.json");
+  const lockResult = readNormalizedJsonFile(
+    lockFile,
+    deps,
+    normalizeBridgeLockPayload,
+  );
+  const label = msg("label.bridgeLock");
+
+  if (lockResult.kind === "missing") {
+    lines.push(row(STATE_OK, label, msg("none")));
+    return null;
+  }
+
+  if (lockResult.kind === "invalid") {
+    lines.push(row(STATE_WARN, label, msg("lock.invalid", {
+      error: lockResult.error,
+    })));
+    lines.push(detail(msg("file", { file: lockResult.filePath })));
+    return null;
+  }
+
+  const lock = lockResult.value;
+  const lockAlive = deps.isProcessAlive(lock.pid);
+  const parentAlive =
+    lock.parentPid > 1 ? deps.isProcessAlive(lock.parentPid) : undefined;
+  const reclaimable = lockAlive
+    ? shouldAutoReclaimBridgeLock(lock, deps.isProcessAlive)
+    : false;
+
+  if (!lockAlive) {
+    lines.push(row(STATE_WARN, label, msg("lock.stale")));
+    appendLockDetailLines(lines, lock);
+    lines.push(
+      detailField(
+        msg("lock.detail.startup"),
+        options.mode === "daemon"
+          ? msg("lock.staleDaemonStartup")
+          : msg("lock.staleBridgeStartup"),
+      ),
+    );
+  } else if (reclaimable) {
+    lines.push(row(STATE_WARN, label, msg("lock.reclaimable")));
+    appendLockDetailLines(lines, lock);
+    lines.push(detailField(msg("lock.detail.parent"), msg("lock.parent", {
+      pid: lock.parentPid,
+      alive: formatAlive(parentAlive),
+    })));
+    lines.push(
+      detailField(
+        msg("lock.detail.startup"),
+        options.mode === "daemon"
+          ? msg("lock.reclaimableDaemonStartup")
+          : msg("lock.reclaimableBridgeStartup"),
+      ),
+    );
+  } else if (options.mode === "daemon") {
+    lines.push(row(STATE_WARN, label, msg("lock.live")));
+    appendLockDetailLines(lines, lock);
+    lines.push(detailField(
+      msg("lock.detail.startup"),
+      msg("lock.liveDaemonStartup"),
+    ));
+  } else {
+    lines.push(row(STATE_FAIL, label, msg("lock.live")));
+    appendLockDetailLines(lines, lock);
+    lines.push(detailField(
+      msg("lock.detail.startup"),
+      msg("lock.liveBridgeStartup"),
+    ));
+  }
+
+  if (!sameWorkspacePath(lock.cwd, options.cwd)) {
+    lines.push(detailField(
+      msg("lock.detail.note"),
+      msg("lock.cwdDifferent", { cwd: options.cwd }),
+    ));
+  }
+  if (options.adapter && lock.adapter !== options.adapter) {
+    lines.push(detailField(
+      msg("lock.detail.note"),
+      msg("lock.adapterDifferent", {
+        lockAdapter: lock.adapter,
+        requestedAdapter: options.adapter,
+      }),
+    ));
+  }
+
+  return lock;
+}
+
+function chooseEndpointAdapters(
+  options: DoctorCliOptions,
+  lock: BridgeLockPayload | null,
+): BridgeAdapterKind[] {
+  if (options.adapter) {
+    return [options.adapter];
+  }
+  if (lock) {
+    return [lock.adapter];
+  }
+  return options.mode === "daemon"
+    ? ["codex", "claude", "opencode"]
+    : ["codex"];
+}
+
+function chooseCliChecks(options: DoctorCliOptions): Array<{
+  name: string;
+  label: string;
+  optional: boolean;
+}> {
+  if (options.mode === "bridge") {
+    switch (options.adapter) {
+      case "codex":
+        return [{ name: "codex", label: "Codex CLI", optional: false }];
+      case "claude":
+        return [{ name: "claude", label: "Claude CLI", optional: false }];
+      case "opencode":
+        return [{ name: "opencode", label: "OpenCode", optional: false }];
+      case "shell":
+        return [];
+      default:
+        return [];
+    }
+  }
+
+  return [
     { name: "codex", label: "Codex CLI", optional: true },
     { name: "claude", label: "Claude CLI", optional: true },
     { name: "opencode", label: "OpenCode", optional: true },
   ];
+}
 
-  for (const cli of clis) {
-    const loc = findExecutable(cli.name);
-    if (loc) {
-      lines.push(`${cli.label.padEnd(12)} ${OK} ${loc}`);
-    } else {
-      lines.push(`${cli.label.padEnd(12)} ${FAIL} not found${cli.optional ? " (optional)" : ""}`);
-    }
+function appendCliLines(
+  lines: string[],
+  options: DoctorCliOptions,
+  deps: ResolvedDoctorDeps,
+): void {
+  const clis = chooseCliChecks(options);
+  if (options.mode === "bridge" && options.adapter === "shell") {
+    section(lines, msg("section.adapterCli"));
+    lines.push(row(STATE_OK, msg("label.shell"), msg("adapterCli.shellNative")));
+    return;
   }
 
-  lines.push("");
+  if (clis.length === 0) {
+    return;
+  }
 
-  // Data directory
-  const dataDir = resolveChannelDataDir();
-  const dataDirExists = fs.existsSync(dataDir);
-  lines.push(`Data dir:    ${dataDir}  ${dataDirExists ? OK : FAIL + " (will be created on first run)"}`);
+  section(lines, msg("section.adapterCli"));
+  for (const cli of clis) {
+    const loc = deps.findExecutable(cli.name);
+    if (loc) {
+      lines.push(row(STATE_OK, cli.label, loc));
+    } else {
+      lines.push(row(STATE_FAIL, cli.label, msg("adapterCli.notFound", {
+        optional: cli.optional ? ` ${msg("optional")}` : "",
+      })));
+    }
+  }
+}
 
-  // Credentials
+async function appendEndpointSummary(
+  lines: string[],
+  label: string,
+  endpoint: LocalCompanionEndpoint | null,
+  options: DoctorCliOptions,
+  lock: BridgeLockPayload | null,
+  deps: ResolvedDoctorDeps,
+): Promise<void> {
+  if (!endpoint) {
+    lines.push(row(STATE_OK, label, msg("none")));
+    return;
+  }
+
+  const port = endpoint.serverPort ?? endpoint.port;
+  const reachable = await deps.isTcpPortReachable(
+    port,
+    RUNTIME_ENDPOINT_TIMEOUT_MS,
+  );
+  const bridgeOwnerAlive = endpoint.bridgeOwnerPid
+    ? deps.isProcessAlive(endpoint.bridgeOwnerPid)
+    : undefined;
+  const companionAlive = endpoint.companionPid
+    ? deps.isProcessAlive(endpoint.companionPid)
+    : undefined;
+  const issues: string[] = [];
+
+  if (options.adapter && endpoint.kind !== options.adapter) {
+    issues.push(msg("endpoint.issue.kind", {
+      kind: endpoint.kind,
+      adapter: options.adapter,
+    }));
+  }
+  if (!sameWorkspacePath(endpoint.cwd, options.cwd)) {
+    issues.push(msg("endpoint.issue.cwd", { cwd: options.cwd }));
+  }
+  if (!reachable) {
+    issues.push(msg("endpoint.issue.port", { port }));
+  }
+  if (bridgeOwnerAlive === false) {
+    issues.push(msg("endpoint.issue.ownerDead", {
+      pid: endpoint.bridgeOwnerPid ?? msg("none"),
+    }));
+  }
+  if (companionAlive === false) {
+    issues.push(msg("endpoint.issue.companionDead", {
+      pid: endpoint.companionPid ?? msg("none"),
+    }));
+  }
+  if (
+    endpoint.companionStatus === "stopped" ||
+    endpoint.companionStatus === "error"
+  ) {
+    issues.push(msg("endpoint.issue.workerStatus", {
+      status: endpoint.companionStatus,
+    }));
+  }
+  if (
+    lock &&
+    endpoint.kind === lock.adapter &&
+    sameWorkspacePath(endpoint.cwd, lock.cwd) &&
+    endpoint.instanceId !== lock.instanceId
+  ) {
+    issues.push(msg("endpoint.issue.instanceMismatch"));
+  }
+
+  const status: DoctorStatus = issues.length > 0 ? "warn" : "ok";
+  lines.push(row(statusTag(status), label, msg("endpoint.summary", {
+    instanceId: endpoint.instanceId,
+    kind: endpoint.kind,
+    port,
+    reachable: reachable ? msg("yes") : msg("no"),
+  })));
+  lines.push(detail(msg("endpoint.owner", {
+    ownerPid: endpoint.bridgeOwnerPid ?? msg("none"),
+    ownerAlive: formatAlive(bridgeOwnerAlive),
+    companionPid: endpoint.companionPid ?? msg("none"),
+    companionAlive: formatAlive(companionAlive),
+    status: endpoint.companionStatus ?? msg("unknown"),
+  })));
+  for (const issue of issues) {
+    lines.push(detail(msg("issue", { issue })));
+  }
+}
+
+async function appendWorkspaceEndpointLines(
+  lines: string[],
+  options: DoctorCliOptions,
+  lock: BridgeLockPayload | null,
+  deps: ResolvedDoctorDeps,
+): Promise<void> {
+  const adapters = chooseEndpointAdapters(options, lock);
+  const seenEndpoints = new Set<string>();
+
+  for (const adapter of adapters) {
+    const endpoint = deps.readLocalCompanionEndpoint(options.cwd, adapter);
+    if (endpoint) {
+      seenEndpoints.add(`${endpoint.kind}:${endpoint.instanceId}:${endpoint.port}`);
+    }
+    await appendEndpointSummary(
+      lines,
+      msg("label.workspaceEndpoint", { adapter }),
+      endpoint,
+      { ...options, adapter },
+      lock,
+      deps,
+    );
+  }
+
+  const legacyEndpoint = deps.readLocalCompanionEndpoint(options.cwd);
+  const legacyLabel = msg("label.legacyEndpoint");
+  if (!legacyEndpoint) {
+    lines.push(row(STATE_OK, legacyLabel, msg("none")));
+    return;
+  }
+
+  const legacyKey = `${legacyEndpoint.kind}:${legacyEndpoint.instanceId}:${legacyEndpoint.port}`;
+  if (seenEndpoints.has(legacyKey)) {
+    lines.push(row(STATE_OK, legacyLabel, msg("endpoint.legacySame")));
+    return;
+  }
+
+  await appendEndpointSummary(
+    lines,
+    legacyLabel,
+    legacyEndpoint,
+    options,
+    lock,
+    deps,
+  );
+}
+
+export async function buildDoctorReport(
+  options: BuildDoctorReportOptions = {},
+  rawDeps: DoctorDeps = {},
+): Promise<string[]> {
+  const deps = resolveDeps(rawDeps);
+  const parsed = parseDoctorCliArgs(
+    options.argv ?? process.argv.slice(2),
+    options.mode ?? "generic",
+    options.cwd ?? process.cwd(),
+  );
+  const doctorOptions: DoctorCliOptions = {
+    ...parsed,
+    cwd: path.resolve(options.cwd ?? parsed.cwd),
+    adapter: options.adapter ?? parsed.adapter,
+  };
+  const lines: string[] = [];
+
+  lines.push(msg("title"));
+  section(lines, msg("section.environment"));
+  lines.push(row(STATE_OK, msg("label.node"), deps.nodeVersion));
+  lines.push(row(STATE_OK, msg("label.platform"), `${deps.platform}-${deps.arch}`));
+
+  if (deps.platform === "win32") {
+    const release = deps.osRelease();
+    const build = parseInt(release.split(".").pop() ?? "0", 10);
+    const ok = build >= 18309;
+    lines.push(row(
+      ok ? STATE_OK : STATE_FAIL,
+      msg("label.winBuild"),
+      ok ? String(build) : `${build} ${msg("winBuildConpty")}`,
+    ));
+  }
+
+  try {
+    await deps.loadNodePty();
+    lines.push(row(STATE_OK, msg("label.nodePty"), msg("nodePty.loaded")));
+  } catch (error) {
+    lines.push(row(STATE_FAIL, msg("label.nodePty"), shortError(error)));
+    lines.push(detail(msg("nodePty.fix", { fix: getPlatformPtyFix(deps.platform) })));
+  }
+
+  appendCliLines(lines, doctorOptions, deps);
+
+  section(lines, msg("section.data"));
+  const dataDir = deps.resolveDataDir();
+  const dataDirExists = deps.exists(dataDir);
+  lines.push(row(
+    dataDirExists ? STATE_OK : STATE_FAIL,
+    msg("label.dataDir"),
+    dataDirExists ? dataDir : `${dataDir} ${msg("dataDirMissing")}`,
+  ));
+
   const credFile = path.join(dataDir, "account.json");
-  const credExists = fs.existsSync(credFile);
-  lines.push(`Credentials: ${credExists ? OK + " found" : FAIL + " not found (run wechat-setup first)"}`);
+  const credExists = deps.exists(credFile);
+  lines.push(row(
+    credExists ? STATE_OK : STATE_FAIL,
+    msg("label.credentials"),
+    credExists ? msg("credentialsFound") : msg("credentialsMissing"),
+  ));
+
+  section(lines, msg("section.runtime"));
+  lines.push(fieldRow(msg("label.mode"), formatMode(doctorOptions.mode)));
+  lines.push(fieldRow(msg("label.cwd"), doctorOptions.cwd));
+  lines.push(fieldRow(
+    msg("label.adapter"),
+    doctorOptions.adapter ?? msg("notSpecified"),
+  ));
+  lines.push("");
+
+  await appendDaemonLines(lines, doctorOptions, dataDir, deps);
+  const lock = appendBridgeLockLines(lines, doctorOptions, dataDir, deps);
+  await appendWorkspaceEndpointLines(lines, doctorOptions, lock, deps);
 
   lines.push("");
+  return lines;
+}
+
+export async function runDoctorCheck(
+  argv: string[] = process.argv.slice(2),
+  options: { mode?: DoctorMode } = {},
+): Promise<void> {
+  const lines = await buildDoctorReport({
+    argv,
+    mode: options.mode ?? "generic",
+  });
   process.stdout.write(lines.join("\n") + "\n");
 }
