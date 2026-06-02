@@ -4,6 +4,13 @@
 
 ## 版本列表
 
+### [v1.1.1](./1.1.1.md) / [中文说明](./1.1.1_CN.md)
+**按适配器收敛的 doctor 诊断 + 紧凑 i18n 输出 + 架构/PTY 排障文档** - `wechat-daemon --doctor` 保持 daemon 全局检查，独立桥接 `--doctor` 只检查对应 adapter，shell 模式不再列出无关 CLI；doctor 输出默认中文，`CLI_BRIDGE_LANG=en` 切换为纯英文，并用更紧凑的字段格式展示 bridge lock、endpoint、数据目录和凭据状态
+- **doctor 诊断**：覆盖 Node.js、Windows build、`node-pty`、adapter 命令、daemon endpoint、bridge lock、workspace companion endpoint、旧 endpoint、数据目录和凭据
+- **输出格式**：运行时状态拆成可扫描字段，bridge lock 详情不再挤在单行里，也不再中英文混排
+- **文档补充**：新增通信架构说明，扩展 PTY 平台前置条件、fallback 行为和 `wechat-daemon --doctor` 验证路径
+- **统计**：12 个文件，新增 1,706 行，删除 8 行
+
 ### [v1.1.0](./1.1.0.md) / [中文说明](./1.1.0_CN.md)
 **i18n 中文默认 + Claude 思考转发 + 自动批准修复 + 批量审批 + 单桥 emoji 绑定** - 引入轻量级国际化系统（默认中文，`CLI_BRIDGE_LANG=en` 切英文）；新增 Claude 思考过程实时转发到微信；修复自动批准 TCP 响应丢失导致 Claude 卡死的严重 bug；队列化批量审批替代单值存储；单桥模式支持 emoji 绑定命令
 - **i18n**：`t(key, params?)` 查找函数 + 中英文消息目录，覆盖欢迎消息、hook 警告、PTY fallback、spawn 诊断、emoji binding 管理
@@ -154,6 +161,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.1.1 | 2026-06-02 | 按适配器收敛的 doctor 诊断、紧凑 i18n 输出、bridge lock 字段化展示、架构文档与 PTY 排障补充 | 12 个文件，+1,706/-8 |
 | 1.1.0 | 2026-05-27 | i18n 中文默认、Claude 思考转发、自动批准修复、批量审批、单桥 emoji 绑定、进程树清理、跨平台诊断 | 26 个文件，+922/-206 |
 | 1.0.9 | 2026-05-26 | 微信表情绑定、Stop 恢复、图片读取、daemon 会话保留、进程安全、macOS/Linux 可见终端、协议变更为 AGPL-3.0 双协议 | 6 个文件，+300 |
 | 1.0.7 | 2026-05-26 | daemon 切换失败不再污染 active adapter，Codex endpoint 丢失可恢复，旧 daemon peer 自动清理，Claude/OpenCode 默认 fresh session，文档拆分与旧代码清理 | 34 个文件，+2,175/-1,371 |
