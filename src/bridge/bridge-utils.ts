@@ -32,7 +32,11 @@ export type SystemCommand =
   | { type: "deny" }
   | { type: "answer"; raw: string };
 
-export const MESSAGE_START_GRACE_MS = 5_000;
+// Messages older than bridge start minus this grace window are treated as
+// pre-start backlog and skipped. The window must absorb realistic clock skew
+// between the local machine and WeChat server timestamps: with a small value,
+// a PC clock running slightly ahead silently dropped fresh messages.
+export const MESSAGE_START_GRACE_MS = 30_000;
 const WECHAT_ATTACHMENT_SEND_INTENT_RE =
   /\b(send|upload|attach|forward|share)\b/i;
 const WECHAT_ATTACHMENT_SEND_INTENT_ZH_RE =
@@ -1724,13 +1728,62 @@ export class OutputBatcher {
   }
 }
 
+// When CLI_BRIDGE_STRICT_APPROVAL is enabled, no permission request is
+// auto-approved: everything is forwarded to WeChat for an explicit
+// /confirm or /deny decision.
+export function isStrictApprovalModeEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const value = env.CLI_BRIDGE_STRICT_APPROVAL?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+// Outbound WeChat text size cap shared by the streaming OutputBatcher and the
+// final-reply forwarder. Long replies sent as a single sendmessage call can be
+// rejected by the server, which previously made long final replies vanish.
+export const WECHAT_TEXT_CHUNK_MAX_CHARS = 1_200;
+
+export function splitWechatTextIntoChunks(
+  text: string,
+  maxChars = WECHAT_TEXT_CHUNK_MAX_CHARS,
+): string[] {
+  const normalized = text.trim();
+  if (!normalized) {
+    return [];
+  }
+  if (normalized.length <= maxChars) {
+    return [normalized];
+  }
+
+  const chunks: string[] = [];
+  let remaining = normalized;
+  while (remaining.length > maxChars) {
+    // Prefer breaking at a newline reasonably close to the cap so paragraphs
+    // stay intact; fall back to a hard split.
+    const window = remaining.slice(0, maxChars + 1);
+    const newlineIndex = window.lastIndexOf("\n");
+    const splitIndex = newlineIndex > maxChars / 2 ? newlineIndex : maxChars;
+    const chunk = remaining.slice(0, splitIndex).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+    remaining = remaining.slice(splitIndex).trim();
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks;
+}
+
 export function shouldDropStartupBacklogMessage(
   createdAtMs: number | undefined,
   bridgeStartedAtMs: number,
   graceMs = MESSAGE_START_GRACE_MS,
 ): boolean {
-  if (!Number.isFinite(createdAtMs)) {
-    return true;
+  // A missing or unparsable timestamp must not drop the message: treat it as
+  // fresh and let normal processing continue.
+  if (!Number.isFinite(createdAtMs) || (createdAtMs as number) <= 0) {
+    return false;
   }
 
   return (createdAtMs as number) < bridgeStartedAtMs - graceMs;

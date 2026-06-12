@@ -297,19 +297,23 @@ describe("resolveDefaultAdapterCommand", () => {
 });
 
 describe("buildCliEnvironment", () => {
-  test("keeps the curated Windows CLI environment for codex and claude", () => {
+  test("passes through the full Windows CLI environment for codex and claude", () => {
     const env = buildCliEnvironment("codex", {
       platform: "win32",
       env: {
         PATH: "C:\\tools",
         USERPROFILE: "C:\\Users\\tester",
         FOO: "bar",
+        ANTHROPIC_BASE_URL: "https://relay.example.com",
+        ANTHROPIC_AUTH_TOKEN: "sk-test",
       },
     });
 
     expect(env.PATH).toBe("C:\\tools");
     expect(env.HOME).toBe("C:\\Users\\tester");
-    expect(env.FOO).toBeUndefined();
+    expect(env.FOO).toBe("bar");
+    expect(env.ANTHROPIC_BASE_URL).toBe("https://relay.example.com");
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("sk-test");
     expect(env.NO_PROXY).toBe("127.0.0.1,localhost,::1");
     expect(env.no_proxy).toBe("127.0.0.1,localhost,::1");
   });
@@ -348,14 +352,24 @@ describe("buildCliEnvironment", () => {
 });
 
 describe("buildPtySpawnOptions", () => {
-  test("enables ConPTY only on Windows", () => {
+  test("enables ConPTY only on Windows builds that support it", () => {
     expect(
       (buildPtySpawnOptions({
         cwd: "C:\\repo",
         env: { TERM: "xterm-256color" },
         platform: "win32",
+        osRelease: "10.0.26200",
       }) as any).useConpty,
     ).toBe(true);
+
+    expect(
+      (buildPtySpawnOptions({
+        cwd: "C:\\repo",
+        env: { TERM: "xterm-256color" },
+        platform: "win32",
+        osRelease: "10.0.17763",
+      }) as any).useConpty,
+    ).toBeUndefined();
 
     expect(
       (buildPtySpawnOptions({
@@ -872,6 +886,18 @@ describe("buildCodexApprovalRequest", () => {
   });
 
   test("auto-approves only low-risk Codex approval requests", () => {
+    expect(
+      getCodexApprovalAutoResponse(
+        "item/commandExecution/requestApproval",
+        {
+          command: "rg \"TODO\" src",
+          cwd: "C:\\repo",
+          availableDecisions: ["accept", "cancel"],
+        },
+        { CLI_BRIDGE_STRICT_APPROVAL: "true" },
+      ),
+    ).toBeNull();
+
     expect(
       getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
         command: "rg \"TODO\" src",

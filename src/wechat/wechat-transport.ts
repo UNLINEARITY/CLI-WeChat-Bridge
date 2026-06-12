@@ -1292,25 +1292,30 @@ export class WeChatTransport {
         continue;
       }
 
-      const messageKey = buildMessageKey(rawMessage);
-      if (!this.rememberMessage(messageKey)) {
-        continue;
-      }
-      if (!tryClaimInboundMessage(buildScopedMessageClaimKey(account.accountId, messageKey))) {
-        continue;
-      }
-
       const senderId = rawMessage.from_user_id ?? "unknown";
       if (rawMessage.context_token) {
         this.cacheContextToken(senderId, rawMessage.context_token);
       }
 
+      // Filter pre-start backlog BEFORE claiming/remembering the message so a
+      // skipped message is not permanently locked away from other processes.
+      // A missing create_time_ms is treated as fresh rather than dropped.
       const createdAtMs = rawMessage.create_time_ms ?? 0;
       if (
         typeof options.minCreatedAtMs === "number" &&
-        (!Number.isFinite(createdAtMs) || createdAtMs < options.minCreatedAtMs)
+        Number.isFinite(createdAtMs) &&
+        createdAtMs > 0 &&
+        createdAtMs < options.minCreatedAtMs
       ) {
         ignoredBacklogCount += 1;
+        continue;
+      }
+
+      const messageKey = buildMessageKey(rawMessage);
+      if (!this.rememberMessage(messageKey)) {
+        continue;
+      }
+      if (!tryClaimInboundMessage(buildScopedMessageClaimKey(account.accountId, messageKey))) {
         continue;
       }
 

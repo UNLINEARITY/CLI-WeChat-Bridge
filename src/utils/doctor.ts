@@ -19,7 +19,7 @@ import {
   type DaemonEndpoint,
 } from "../daemon/daemon-link.ts";
 import { t } from "../i18n/index.ts";
-import { resolveChannelDataDir } from "../wechat/channel-config.ts";
+import { DEFAULT_BASE_URL, resolveChannelDataDir } from "../wechat/channel-config.ts";
 
 const STATE_OK = "[ok]";
 const STATE_WARN = "[warn]";
@@ -27,6 +27,8 @@ const STATE_FAIL = "[fail]";
 
 const RUNTIME_ENDPOINT_TIMEOUT_MS = 500;
 const DAEMON_ENDPOINT_TIMEOUT_MS = 500;
+const SERVER_DATE_TIMEOUT_MS = 3_000;
+const CLOCK_SKEW_WARN_MS = 30_000;
 
 type DoctorMode = "bridge" | "daemon" | "generic";
 type DoctorStatus = "ok" | "warn" | "fail";
@@ -47,6 +49,10 @@ export type DoctorDeps = {
   arch?: string;
   nodeVersion?: string;
   osRelease?: () => string;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+  getWindowsCodePage?: () => number | null;
+  fetchServerDate?: () => Promise<Date | null>;
   findExecutable?: (name: string) => string | null;
   loadNodePty?: () => Promise<void>;
   resolveDataDir?: () => string;
@@ -122,6 +128,56 @@ function getPlatformPtyFix(platform: NodeJS.Platform): string {
   }
 }
 
+function defaultGetWindowsCodePage(): number | null {
+  try {
+    const output = execFileSync("cmd.exe", ["/d", "/c", "chcp"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    const match = /(\d+)\s*\.?\s*$/.exec(output.trim());
+    return match ? Number(match[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function defaultFetchServerDate(): Promise<Date | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SERVER_DATE_TIMEOUT_MS);
+  try {
+    const res = await fetch(DEFAULT_BASE_URL, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    const dateHeader = res.headers.get("date");
+    if (!dateHeader) {
+      return null;
+    }
+    const parsed = new Date(dateHeader);
+    return Number.isFinite(parsed.getTime()) ? parsed : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function containsNonAscii(value: string): boolean {
+  return Array.from(value).some((character) => character.charCodeAt(0) > 0x7f);
+}
+
+function pickProxyEnvValue(env: NodeJS.ProcessEnv): string | undefined {
+  return (
+    env.HTTPS_PROXY ??
+    env.https_proxy ??
+    env.HTTP_PROXY ??
+    env.http_proxy ??
+    env.ALL_PROXY ??
+    env.all_proxy
+  )?.trim() || undefined;
+}
+
 function defaultIsProcessAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) {
     return false;
@@ -172,6 +228,10 @@ function resolveDeps(deps: DoctorDeps = {}): ResolvedDoctorDeps {
     arch: deps.arch ?? process.arch,
     nodeVersion: deps.nodeVersion ?? process.version,
     osRelease: deps.osRelease ?? os.release,
+    env: deps.env ?? process.env,
+    now: deps.now ?? Date.now,
+    getWindowsCodePage: deps.getWindowsCodePage ?? defaultGetWindowsCodePage,
+    fetchServerDate: deps.fetchServerDate ?? defaultFetchServerDate,
     findExecutable: deps.findExecutable ?? findExecutable,
     loadNodePty:
       deps.loadNodePty ??
@@ -729,6 +789,46 @@ export async function buildDoctorReport(
       ok ? STATE_OK : STATE_FAIL,
       msg("label.winBuild"),
       ok ? String(build) : `${build} ${msg("winBuildConpty")}`,
+    ));
+
+    const codePage = deps.getWindowsCodePage();
+    if (codePage !== null) {
+      const dataDirHasNonAscii = containsNonAscii(deps.resolveDataDir());
+      const risky = codePage !== 65001 && dataDirHasNonAscii;
+      lines.push(row(
+        risky ? STATE_WARN : STATE_OK,
+        msg("label.codePage"),
+        risky
+          ? msg("codePage.nonAsciiWarning", { codePage })
+          : String(codePage),
+      ));
+    }
+  }
+
+  const proxyUrl = pickProxyEnvValue(deps.env);
+  const serverDate = await deps.fetchServerDate();
+  if (serverDate) {
+    lines.push(row(STATE_OK, msg("label.connectivity"), msg("connectivity.ok", {
+      baseUrl: DEFAULT_BASE_URL,
+    })));
+
+    const skewMs = deps.now() - serverDate.getTime();
+    const skewSeconds = Math.round(Math.abs(skewMs) / 1000);
+    const clockOk = Math.abs(skewMs) <= CLOCK_SKEW_WARN_MS;
+    lines.push(row(
+      clockOk ? STATE_OK : STATE_WARN,
+      msg("label.clock"),
+      clockOk
+        ? msg("clock.ok", { skewSeconds })
+        : msg("clock.skewWarning", { skewSeconds }),
+    ));
+  } else {
+    lines.push(row(
+      STATE_WARN,
+      msg("label.connectivity"),
+      proxyUrl && deps.env.NODE_USE_ENV_PROXY !== "1"
+        ? msg("connectivity.proxyHint", { baseUrl: DEFAULT_BASE_URL, proxy: proxyUrl })
+        : msg("connectivity.unreachable", { baseUrl: DEFAULT_BASE_URL }),
     ));
   }
 

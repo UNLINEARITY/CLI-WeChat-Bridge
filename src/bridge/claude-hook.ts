@@ -36,6 +36,7 @@ async function main(): Promise<void> {
     const socket = net.connect({ host: "127.0.0.1", port });
     let buffer = "";
     const finish = () => {
+      clearTimeout(connectTimer);
       try {
         socket.destroy();
       } catch {
@@ -44,7 +45,14 @@ async function main(): Promise<void> {
       resolve();
     };
 
+    // Bail out if the bridge hook server never accepts the connection, so a
+    // wedged bridge cannot leave Claude CLI blocked on this hook forever.
+    // Once connected, we wait indefinitely: approval responses legitimately
+    // take as long as the user needs to reply on WeChat.
+    const connectTimer = setTimeout(finish, 10_000);
+
     socket.once("connect", () => {
+      clearTimeout(connectTimer);
       try {
         socket.write(`${JSON.stringify({ token, requestId, payload })}\n`);
       } catch {

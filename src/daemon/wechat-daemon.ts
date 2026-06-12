@@ -705,6 +705,7 @@ class WechatDaemon {
   private readonly slots = new Map<DaemonAdapterKind, DaemonSlot>();
   private readonly startedAt = new Date().toISOString();
   private readonly bridgeStartedAtMs = Date.now();
+  private backlogNoticeSent = false;
   private activeAdapter: DaemonAdapterKind | null = null;
   takenOverAdapter?: DaemonAdapterKind;
   private textSendChain = Promise.resolve();
@@ -868,6 +869,17 @@ class WechatDaemon {
 
       if (pollResult.ignoredBacklogCount > 0) {
         appendDaemonLog(`ignored_startup_backlog: count=${pollResult.ignoredBacklogCount}`);
+        if (!this.backlogNoticeSent) {
+          this.backlogNoticeSent = true;
+          await this.queueWechatMessage(
+            this.authorizedUserId,
+            t("bridge.backlogIgnored", {
+              count: pollResult.ignoredBacklogCount,
+              graceSeconds: Math.round(MESSAGE_START_GRACE_MS / 1000),
+            }),
+            "notice",
+          );
+        }
       }
 
       for (const message of pollResult.messages) {

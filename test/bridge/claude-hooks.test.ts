@@ -75,6 +75,22 @@ describe("buildClaudeHookScript", () => {
     expect(script).not.toContain('>nul 2>nul');
   });
 
+  test("switches Windows batch parsing to UTF-8 before lines that embed paths", () => {
+    const script = buildClaudeHookScript({
+      platform: "win32",
+      runtimeExecPath: "C:\\Users\\张三\\node\\node.exe",
+      hookEntryPath: "C:\\Users\\张三\\repo\\dist\\bridge\\claude-hook.js",
+      hookPort: 43123,
+      hookToken: "token-123",
+    });
+
+    const lines = script.split("\r\n");
+    const chcpIndex = lines.findIndex((line) => line.startsWith("chcp 65001"));
+    const commandIndex = lines.findIndex((line) => line.includes("claude-hook.js"));
+    expect(chcpIndex).toBeGreaterThan(-1);
+    expect(commandIndex).toBeGreaterThan(chcpIndex);
+  });
+
   test("preserves stdout on POSIX so Claude can read remote approval decisions", () => {
     const script = buildClaudeHookScript({
       platform: "linux",
@@ -230,6 +246,27 @@ describe("getClaudeWechatOutboundAttachmentDenyMessage", () => {
 });
 
 describe("getClaudePermissionAutoResponse", () => {
+  test("forwards everything to WeChat when strict approval mode is enabled", () => {
+    expect(
+      getClaudePermissionAutoResponse(
+        {
+          tool_name: "Read",
+          tool_input: { file_path: "C:\\repo\\note.md" },
+        },
+        { CLI_BRIDGE_STRICT_APPROVAL: "1" },
+      ),
+    ).toBeNull();
+    expect(
+      getClaudePermissionAutoResponse(
+        {
+          tool_name: "Read",
+          tool_input: { file_path: "C:\\repo\\note.md" },
+        },
+        { CLI_BRIDGE_STRICT_APPROVAL: "" },
+      ),
+    ).toMatchObject({ action: "confirm" });
+  });
+
   test("auto-approves low-risk Claude Bash searches and listings", () => {
     expect(
       getClaudePermissionAutoResponse({

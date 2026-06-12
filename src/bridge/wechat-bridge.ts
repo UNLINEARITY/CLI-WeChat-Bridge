@@ -536,6 +536,7 @@ async function main(): Promise<void> {
   let lastOutputAt = 0;
   let lastHeartbeatAt = 0;
   let consecutivePollFailures = 0;
+  let backlogNoticeSent = false;
 
   const queueWechatTextAction = <T>(action: () => Promise<T>) => {
     const run = textSendChain.then(action);
@@ -927,6 +928,17 @@ async function main(): Promise<void> {
         stateStore.appendLog(
           `ignored_startup_backlog: count=${pollResult.ignoredBacklogCount}`,
         );
+        if (!backlogNoticeSent) {
+          backlogNoticeSent = true;
+          await queueWechatMessage(
+            stateStore.getState().authorizedUserId,
+            t("bridge.backlogIgnored", {
+              count: pollResult.ignoredBacklogCount,
+              graceSeconds: Math.round(MESSAGE_START_GRACE_MS / 1000),
+            }),
+            "notice",
+          );
+        }
       }
 
       for (const message of pollResult.messages) {

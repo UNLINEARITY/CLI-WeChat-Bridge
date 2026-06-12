@@ -3,6 +3,7 @@ import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
   isHighRiskShellCommand,
+  isStrictApprovalModeEnabled,
   isWechatOutboundAttachmentWriteCommand,
   normalizeOutput,
   truncatePreview,
@@ -173,6 +174,11 @@ export function buildClaudeHookScript(params: ClaudeHookScriptParams): string {
     return [
       "@echo off",
       "setlocal",
+      // The script is written as UTF-8, but cmd.exe decodes batch lines with
+      // the active OEM code page (GBK on zh-CN systems). Paths below may
+      // contain non-ASCII characters (e.g. a Chinese Windows user name), so
+      // switch to UTF-8 before any line that embeds a path.
+      "chcp 65001>nul",
       `set "CLAUDE_WECHAT_HOOK_PORT=${params.hookPort}"`,
       `set "CLAUDE_WECHAT_HOOK_TOKEN=${params.hookToken}"`,
       `${command} ${stderrRedirect}`,
@@ -328,7 +334,12 @@ export function getClaudeWechatOutboundAttachmentDenyMessage(
 
 export function getClaudePermissionAutoResponse(
   payload: ClaudeHookPayload,
+  env: NodeJS.ProcessEnv = process.env,
 ): ClaudePermissionAutoResponse | null {
+  if (isStrictApprovalModeEnabled(env)) {
+    return null;
+  }
+
   const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
   if (!toolName) {
     return null;

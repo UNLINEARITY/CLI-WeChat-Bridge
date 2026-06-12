@@ -1,4 +1,5 @@
 ﻿import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import net from "node:net";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ import {
   containsWechatOutboundAttachmentPathDeep,
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
+  isStrictApprovalModeEnabled,
   normalizeOutput,
   truncatePreview,
 } from "./bridge-utils.ts";
@@ -486,7 +488,12 @@ function containsHighRiskPermissionTarget(value: unknown): boolean {
 export function getCodexApprovalAutoResponse(
   method: CodexPendingApprovalRequest["method"],
   params: Record<string, unknown>,
+  env: NodeJS.ProcessEnv = process.env,
 ): CodexApprovalAutoResponse | null {
+  if (isStrictApprovalModeEnabled(env)) {
+    return null;
+  }
+
   if (method === "item/commandExecution/requestApproval") {
     const command = typeof params.command === "string" ? params.command : "";
     if (!commandApprovalAllowsAccept(params.availableDecisions)) {
@@ -1104,53 +1111,17 @@ export function buildCliEnvironment(
   const platform = options.platform ?? process.platform;
 
   if (kind === "codex" || kind === "claude" || kind === "opencode") {
-    if (platform !== "win32") {
-      return applyLoopbackNoProxy({
-        ...copyDefinedEnv(sourceEnv),
-        TERM: sourceEnv.TERM || "xterm-256color",
-      });
-    }
-
+    // Pass the full environment through on every platform. A previous
+    // Windows-only allowlist silently dropped user-configured variables such
+    // as ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY, which
+    // broke CLIs that authenticate via environment variables even though the
+    // same CLI worked when launched manually from the user's shell.
     const env: Record<string, string> = {
+      ...copyDefinedEnv(sourceEnv),
       TERM: sourceEnv.TERM || "xterm-256color",
     };
 
-    const keys = [
-      "PATH",
-      "PATHEXT",
-      "ComSpec",
-      "COMSPEC",
-      "SystemRoot",
-      "SYSTEMROOT",
-      "USERPROFILE",
-      "HOME",
-      "APPDATA",
-      "LOCALAPPDATA",
-      "TEMP",
-      "TMP",
-      "OS",
-      "ProgramFiles",
-      "ProgramFiles(x86)",
-      "CommonProgramFiles",
-      "CommonProgramFiles(x86)",
-      "HTTP_PROXY",
-      "HTTPS_PROXY",
-      "ALL_PROXY",
-      "http_proxy",
-      "https_proxy",
-      "all_proxy",
-      "NO_PROXY",
-      "no_proxy",
-    ] as const;
-
-    for (const key of keys) {
-      const value = sourceEnv[key];
-      if (value) {
-        env[key] = value;
-      }
-    }
-
-    if (!env.HOME && env.USERPROFILE) {
+    if (platform === "win32" && !env.HOME && env.USERPROFILE) {
       env.HOME = env.USERPROFILE;
     }
 
@@ -1163,10 +1134,20 @@ export function buildCliEnvironment(
   };
 }
 
+// ConPTY shipped in Windows 10 build 18309; on older builds node-pty must be
+// left to auto-select its winpty fallback instead of being forced onto ConPTY.
+export const WINDOWS_CONPTY_MIN_BUILD = 18309;
+
+export function windowsBuildSupportsConpty(osRelease: string): boolean {
+  const build = Number(osRelease.split(".")[2]);
+  return Number.isFinite(build) && build >= WINDOWS_CONPTY_MIN_BUILD;
+}
+
 export function buildPtySpawnOptions(params: {
   cwd: string;
   env: Record<string, string>;
   platform?: NodeJS.Platform;
+  osRelease?: string;
 }): Parameters<typeof spawnPty>[2] {
   const options: Parameters<typeof spawnPty>[2] = {
     name: "xterm-color",
@@ -1176,7 +1157,10 @@ export function buildPtySpawnOptions(params: {
     env: params.env,
   };
 
-  if ((params.platform ?? process.platform) === "win32") {
+  if (
+    (params.platform ?? process.platform) === "win32" &&
+    windowsBuildSupportsConpty(params.osRelease ?? os.release())
+  ) {
     (options as Parameters<typeof spawnPty>[2] & { useConpty?: boolean }).useConpty = true;
   }
 

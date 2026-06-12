@@ -9,6 +9,7 @@ export const messages: Record<string, string> = {
   "bridge.status.busy": "{adapter} is still working on the previous request. Wait for it to finish or send /interrupt.",
   "bridge.newSession.done": "New session started.",
   "bridge.fatalError": "Bridge error: {message}",
+  "bridge.backlogIgnored": "Ignored {count} backlog message(s) sent before the bridge started (they will not be processed).\nIf you actually sent them after the bridge started, your system clock is likely skewed by more than {graceSeconds}s — sync the clock and restart the bridge.",
 
   // === Daemon welcome & control ===
   "daemon.welcome": "WeChat Daemon ready.\nCWD: {cwd}\nActive: {adapter}\n\nCommands: /claude, /codex, /opencode, /stop, /confirm, /deny, /status\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
@@ -62,6 +63,15 @@ export const messages: Record<string, string> = {
   "doctor.label.node": "Node.js",
   "doctor.label.platform": "Platform",
   "doctor.label.winBuild": "Windows build",
+  "doctor.label.codePage": "Console code page",
+  "doctor.codePage.nonAsciiWarning": "{codePage} (not UTF-8 and the data directory path contains non-ASCII characters; hook scripts from older versions break in this environment — upgrade to the latest release)",
+  "doctor.label.connectivity": "WeChat connectivity",
+  "doctor.connectivity.ok": "reachable ({baseUrl})",
+  "doctor.connectivity.unreachable": "cannot reach {baseUrl} (check network and firewall)",
+  "doctor.connectivity.proxyHint": "cannot reach {baseUrl}. Proxy {proxy} detected, but Node fetch ignores proxy environment variables by default; if your network requires the proxy, set NODE_USE_ENV_PROXY=1 and retry.",
+  "doctor.label.clock": "System clock",
+  "doctor.clock.ok": "~{skewSeconds}s skew vs server time",
+  "doctor.clock.skewWarning": "~{skewSeconds}s skew vs server time (large skew makes the bridge treat fresh messages as pre-start backlog — sync the system clock)",
   "doctor.label.nodePty": "node-pty",
   "doctor.label.shell": "shell",
   "doctor.label.dataDir": "Data dir",

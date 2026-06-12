@@ -71,24 +71,36 @@ function makeDeps(options: {
   endpoint?: LocalCompanionEndpoint | null;
   legacyEndpoint?: LocalCompanionEndpoint | null;
   reachablePorts?: number[];
+  codePage?: number | null;
+  serverDate?: Date | null;
+  nowMs?: number;
+  env?: NodeJS.ProcessEnv;
+  dataDir?: string;
 } = {}): DoctorDeps {
+  const dataDir = options.dataDir ?? DATA_DIR;
   const files = new Map<string, string>();
   for (const [name, value] of Object.entries(options.files ?? {})) {
-    files.set(path.join(DATA_DIR, name), JSON.stringify(value));
+    files.set(path.join(dataDir, name), JSON.stringify(value));
   }
   const alivePids = new Set(options.alivePids ?? []);
   const reachablePorts = new Set(options.reachablePorts ?? []);
+  const nowMs = options.nowMs ?? Date.parse("2026-06-01T00:00:00.000Z");
 
   return {
     platform: "win32",
     arch: "x64",
     nodeVersion: "v24.0.0",
     osRelease: () => "10.0.26200",
+    env: options.env ?? {},
+    now: () => nowMs,
+    getWindowsCodePage: () => options.codePage ?? 65001,
+    fetchServerDate: async () =>
+      options.serverDate === undefined ? new Date(nowMs) : options.serverDate,
     findExecutable: (name) => `C:\\bin\\${name}.cmd`,
     loadNodePty: async () => undefined,
-    resolveDataDir: () => DATA_DIR,
-    exists: (filePath) => filePath === DATA_DIR ||
-      filePath === path.join(DATA_DIR, "account.json") ||
+    resolveDataDir: () => dataDir,
+    exists: (filePath) => filePath === dataDir ||
+      filePath === path.join(dataDir, "account.json") ||
       files.has(filePath),
     readTextFile: (filePath) => {
       const content = files.get(filePath);
@@ -355,5 +367,47 @@ describe("doctor report", () => {
     expect(output).not.toContain("运行时");
     expect(output).not.toContain("守护进程");
     expect(output).not.toContain(" / ");
+  });
+
+  test("warns when the console code page is non-UTF8 and the data dir has non-ASCII characters", async () => {
+    const risky = await buildDoctorReport(
+      { argv: [], mode: "bridge", cwd: CWD },
+      makeDeps({ codePage: 936, dataDir: "C:\\Users\\张三\\.cli-bridge" }),
+    );
+    expect(risky.join("\n")).toContain("[warn] 控制台代码页");
+
+    const safe = await buildDoctorReport(
+      { argv: [], mode: "bridge", cwd: CWD },
+      makeDeps({ codePage: 936 }),
+    );
+    expect(safe.join("\n")).toContain("[ok] 控制台代码页 936");
+  });
+
+  test("warns on large clock skew against the server date", async () => {
+    const nowMs = Date.parse("2026-06-01T00:00:00.000Z");
+    const skewed = await buildDoctorReport(
+      { argv: [], mode: "bridge", cwd: CWD },
+      makeDeps({ nowMs, serverDate: new Date(nowMs - 120_000) }),
+    );
+    expect(skewed.join("\n")).toContain("[warn] 系统时钟");
+
+    const aligned = await buildDoctorReport(
+      { argv: [], mode: "bridge", cwd: CWD },
+      makeDeps({ nowMs, serverDate: new Date(nowMs - 2_000) }),
+    );
+    expect(aligned.join("\n")).toContain("[ok] 系统时钟");
+  });
+
+  test("suggests NODE_USE_ENV_PROXY when the server is unreachable behind a proxy", async () => {
+    const lines = await buildDoctorReport(
+      { argv: [], mode: "bridge", cwd: CWD },
+      makeDeps({
+        serverDate: null,
+        env: { HTTPS_PROXY: "http://127.0.0.1:7890" },
+      }),
+    );
+    const output = lines.join("\n");
+    expect(output).toContain("[warn] 微信服务可达性");
+    expect(output).toContain("NODE_USE_ENV_PROXY=1");
   });
 });

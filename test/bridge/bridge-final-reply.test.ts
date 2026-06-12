@@ -4,9 +4,10 @@ import {
   OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE,
   forwardWechatFinalReply,
 } from "../../src/bridge/bridge-final-reply.ts";
+import { WECHAT_TEXT_CHUNK_MAX_CHARS } from "../../src/bridge/bridge-utils.ts";
 
 describe("forwardWechatFinalReply", () => {
-  test("sends long visible replies as one WeChat text message", async () => {
+  test("sends long visible replies as bounded WeChat text chunks", async () => {
     const calls: string[] = [];
     const rawText = "a".repeat(1800);
 
@@ -25,7 +26,11 @@ describe("forwardWechatFinalReply", () => {
       },
     });
 
-    expect(calls).toEqual([rawText]);
+    expect(calls.length).toBeGreaterThan(1);
+    for (const chunk of calls) {
+      expect(chunk.length).toBeLessThanOrEqual(WECHAT_TEXT_CHUNK_MAX_CHARS);
+    }
+    expect(calls.join("")).toBe(rawText);
   });
 
   test("stops final reply forwarding after the visible text send fails", async () => {

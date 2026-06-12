@@ -9,6 +9,7 @@ export const messages: Record<string, string> = {
   "bridge.status.busy": "{adapter} 仍在处理上一个请求。请等待完成或发送 /interrupt。",
   "bridge.newSession.done": "已开始新会话。",
   "bridge.fatalError": "桥接错误: {message}",
+  "bridge.backlogIgnored": "已忽略 {count} 条桥接启动前的积压消息（不会自动处理）。\n如果你是在桥接启动后才发送的消息却看到此提示，说明本机系统时钟可能不准（偏差超过 {graceSeconds} 秒），请校准时间后重启桥接。",
 
   // === Daemon 欢迎 & 控制 ===
   "daemon.welcome": "微信 Daemon 就绪。\n工作目录: {cwd}\n当前: {adapter}\n\n命令: /claude, /codex, /opencode, /stop, /confirm, /deny, /status\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
@@ -62,6 +63,15 @@ export const messages: Record<string, string> = {
   "doctor.label.node": "Node.js",
   "doctor.label.platform": "平台",
   "doctor.label.winBuild": "Windows build",
+  "doctor.label.codePage": "控制台代码页",
+  "doctor.codePage.nonAsciiWarning": "{codePage}（非 UTF-8，且数据目录路径含非 ASCII 字符；旧版本的 hook 脚本在此环境下会乱码失效，请升级到最新版本）",
+  "doctor.label.connectivity": "微信服务可达性",
+  "doctor.connectivity.ok": "可达 ({baseUrl})",
+  "doctor.connectivity.unreachable": "无法访问 {baseUrl}（检查网络与防火墙）",
+  "doctor.connectivity.proxyHint": "无法访问 {baseUrl}。检测到代理 {proxy}，但 Node fetch 默认不使用代理环境变量；若必须经代理出网，请设置 NODE_USE_ENV_PROXY=1 后重试。",
+  "doctor.label.clock": "系统时钟",
+  "doctor.clock.ok": "与服务器时间偏差约 {skewSeconds}s",
+  "doctor.clock.skewWarning": "与服务器时间偏差约 {skewSeconds}s（偏差过大会导致桥接启动后的消息被当作积压忽略，请校准系统时间）",
   "doctor.label.nodePty": "node-pty",
   "doctor.label.shell": "shell",
   "doctor.label.dataDir": "数据目录",

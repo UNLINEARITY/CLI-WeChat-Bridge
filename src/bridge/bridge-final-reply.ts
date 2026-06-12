@@ -3,6 +3,7 @@ import {
   formatFinalReplyMessage,
   parseWechatFinalReply,
   sanitizeWechatFinalReplyText,
+  splitWechatTextIntoChunks,
 } from "./bridge-utils.ts";
 
 export type WechatFinalReplySender = {
@@ -31,9 +32,13 @@ export async function forwardWechatFinalReply(params: {
   const visibleText = formatFinalReplyMessage(adapter, sanitizedText).trim();
 
   if (visibleText) {
-    const sent = await sender.sendText(visibleText);
-    if (sent === false) {
-      return;
+    // Send long replies in bounded chunks: a single oversized sendmessage call
+    // can be rejected by the WeChat API, silently losing the whole reply.
+    for (const chunk of splitWechatTextIntoChunks(visibleText)) {
+      const sent = await sender.sendText(chunk);
+      if (sent === false) {
+        return;
+      }
     }
   } else if (adapter === "opencode" && parsed.visibleText.trim()) {
     onEmptyVisibleReply?.({
