@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { execSync } from "node:child_process";
 import { CHANNEL_DATA_DIR, ensureChannelDataDir } from "../wechat/channel-config.ts";
 
 const UPDATE_CHECK_FILE = path.join(CHANNEL_DATA_DIR, "update-check.json");
@@ -17,48 +16,92 @@ export interface VersionInfo {
   hasUpdate: boolean;
 }
 
-/**
- * 使用 git 命令获取远程仓库最新版本号
- */
-export async function fetchLatestVersion(): Promise<string | null> {
+// npm registry 是权威更新源——它是用户实际安装的渠道;GitHub tags 作为回退,
+// 以便在 registry 暂时不可达或包尚未发布时仍能给出最新版本。
+const NPM_PACKAGE_NAME = "cli-wechat-bridge";
+const DEFAULT_NPM_REGISTRY_URL = `https://registry.npmjs.org/${NPM_PACKAGE_NAME}/latest`;
+const DEFAULT_GITHUB_TAGS_URL =
+  "https://api.github.com/repos/UNLINEARITY/CLI-WeChat-Bridge/tags?per_page=20";
+const FETCH_TIMEOUT_MS = 10_000;
+
+export interface FetchLatestVersionOptions {
+  /** 自定义 fetch 实现,测试时注入 mock。默认使用全局 fetch。 */
+  fetchImpl?: typeof fetch;
+  npmRegistryUrl?: string;
+  githubTagsUrl?: string;
+  timeoutMs?: number;
+}
+
+type FetchDeps = {
+  fetch: typeof fetch;
+  npmRegistryUrl: string;
+  githubTagsUrl: string;
+  timeoutMs: number;
+};
+
+function resolveFetchDeps(options: FetchLatestVersionOptions): FetchDeps {
+  return {
+    fetch: options.fetchImpl ?? globalThis.fetch,
+    npmRegistryUrl: options.npmRegistryUrl ?? DEFAULT_NPM_REGISTRY_URL,
+    githubTagsUrl: options.githubTagsUrl ?? DEFAULT_GITHUB_TAGS_URL,
+    timeoutMs: options.timeoutMs ?? FETCH_TIMEOUT_MS,
+  };
+}
+
+async function fetchJsonWithTimeout(
+  url: string,
+  deps: FetchDeps,
+): Promise<unknown | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), deps.timeoutMs);
   try {
-    // 尝试使用 git ls-remote 获取所有 tags
-    const tagsOutput = execSync('git ls-remote --tags origin', {
-      cwd: path.resolve(import.meta.dirname, "..", ".."),
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'ignore']
+    const res = await deps.fetch(url, {
+      method: "GET",
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
     });
-
-    if (!tagsOutput) {
+    if (!res.ok) {
       return null;
     }
+    return await res.json();
+  } catch {
+    // 网络/超时/解析失败一律视为该源不可用,交由调用方回退。
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
-    // 解析 tags，找到版本号格式（如 0.1.0, 0.2.0 等）
-    const versionTags = tagsOutput
-      .split('\n')
-      .filter(line => {
-        // 匹配 refs/tags/0.5.0 格式（不是 v0.5.0）
-        return line.includes('refs/tags/') &&
-               !line.includes('^{}') &&
-               /^\w+\s+refs\/tags\/\d+\.\d+\.\d+$/.test(line);
-      })
-      .map(line => {
-        const match = line.match(/refs\/tags\/(\d+\.\d+\.\d+)$/);
-        return match ? match[1] : null;
-      })
-      .filter((v): v is string => v !== null);
-
-    if (versionTags.length === 0) {
-      return null;
-    }
-
-    // 按版本号排序，返回最新的
-    versionTags.sort((a, b) => compareVersions(b, a));
-    return versionTags[0] ?? null;
-  } catch (error) {
-    // 如果 git 命令失败，静默返回 null
+async function fetchVersionFromNpm(deps: FetchDeps): Promise<string | null> {
+  const data = await fetchJsonWithTimeout(deps.npmRegistryUrl, deps);
+  if (!data || typeof data !== "object") {
     return null;
   }
+  const version = (data as { version?: unknown }).version;
+  return typeof version === "string" ? parseVersion(version) : null;
+}
+
+async function fetchVersionFromGithub(deps: FetchDeps): Promise<string | null> {
+  const data = await fetchJsonWithTimeout(deps.githubTagsUrl, deps);
+  if (!Array.isArray(data)) {
+    return null;
+  }
+  const versions = data
+    .map((tag) => parseVersion((tag as { name?: unknown }).name))
+    .filter((v): v is string => v !== null)
+    .sort((a, b) => compareVersions(b, a));
+  return versions[0] ?? null;
+}
+
+/**
+ * 从 npm registry 获取最新版本号(回退到 GitHub tags)。
+ * 通过 HTTPS 请求而非本地 git 命令,因此对全局安装的命令(wechat-check-update)同样可用。
+ */
+export async function fetchLatestVersion(
+  options: FetchLatestVersionOptions = {},
+): Promise<string | null> {
+  const deps = resolveFetchDeps(options);
+  return (await fetchVersionFromNpm(deps)) ?? (await fetchVersionFromGithub(deps));
 }
 
 /**
@@ -107,6 +150,19 @@ function writeUpdateCache(cache: UpdateCheckCache): void {
   } catch (error) {
     // 静默失败，不影响正常使用
   }
+}
+
+const VERSION_PATTERN = /(\d+\.\d+\.\d+)/;
+
+/**
+ * 从任意字符串中提取版本号,兼容带 "v" 前缀的 tag(如 "v1.1.1")。
+ */
+export function parseVersion(raw: unknown): string | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const match = VERSION_PATTERN.exec(raw.trim());
+  return match ? (match[1] ?? null) : null;
 }
 
 /**
