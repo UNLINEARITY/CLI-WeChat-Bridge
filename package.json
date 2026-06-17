@@ -48,6 +48,7 @@
     "wechat-check-update": "bin/wechat-check-update.mjs"
   },
   "scripts": {
+    "postinstall": "node scripts/ensure-node-pty-permissions.mjs",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
     "prepack": "npm run build",
