@@ -1835,6 +1835,20 @@ export function spawnFallbackProcess(
     }
   });
 
+  // spawn itself failed (e.g. ENOENT/EACCES) — surface as an exit so callers
+  // stop waiting, instead of throwing an unhandled "error" event that would
+  // crash the bridge on the PTY fallback path.
+  child.on("error", () => {
+    for (const listener of exitListeners) {
+      listener({ exitCode: 1 });
+    }
+  });
+
+  // Swallow broken-pipe errors on stdin writes after the child has exited.
+  child.stdin?.on("error", () => {
+    /* best effort */
+  });
+
   return {
     pid: child.pid,
     write(data: string) {

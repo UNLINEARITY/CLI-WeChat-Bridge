@@ -394,9 +394,53 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 }
 
 /**
+ * Collect all descendant PIDs of `rootPid` on POSIX by walking `pgrep -P`.
+ * Used so killProcessTreeSync can reach grandchildren even when the child was
+ * spawned without `detached` (and therefore shares our process group).
+ */
+function collectPosixDescendantsSync(rootPid: number): number[] {
+  const descendants: number[] = [];
+  const stack = [rootPid];
+  while (stack.length > 0) {
+    const parent = stack.pop();
+    if (parent === undefined) {
+      break;
+    }
+    try {
+      const result = spawnSync("pgrep", ["-P", String(parent)], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      if (result.error || result.status !== 0) {
+        continue;
+      }
+      const stdout = result.stdout ?? "";
+      for (const line of stdout.split(/\r?\n/)) {
+        const childPid = Number.parseInt(line.trim(), 10);
+        if (
+          Number.isInteger(childPid) &&
+          childPid > 0 &&
+          childPid !== rootPid &&
+          !descendants.includes(childPid)
+        ) {
+          descendants.push(childPid);
+          stack.push(childPid);
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return descendants;
+}
+
+/**
  * Synchronously kill a process and its entire descendant tree.
  * On Windows uses `taskkill /T /F /PID` to recursively kill all descendants.
- * On other platforms uses `process.kill(pid)` directly.
+ * On POSIX, first tries the process group (kill -pgid) for group leaders, then
+ * walks the descendant tree via pgrep — required because codex/opencode children
+ * are spawned without `detached`, so they share our process group and a bare
+ * kill(pid) would orphan them on Linux/macOS.
  */
 export function killProcessTreeSync(pid: number): void {
   if (!Number.isInteger(pid) || pid <= 0) {
@@ -413,9 +457,19 @@ export function killProcessTreeSync(pid: number): void {
       try { process.kill(pid); } catch { /* best effort */ }
     }
   } else {
-    try { process.kill(-pid); } catch {
-      try { process.kill(pid); } catch { /* best effort */ }
+    // Best effort: signal the whole group if the child happens to be a leader.
+    try { process.kill(-pid); } catch { /* not a group leader or already gone */ }
+    // Walk and kill descendants (leaves first), then the root, so grandchildren
+    // are not re-parented to init and left running.
+    const descendants = collectPosixDescendantsSync(pid);
+    for (let i = descendants.length - 1; i >= 0; i--) {
+      const descendantPid = descendants[i];
+      if (descendantPid === undefined) {
+        continue;
+      }
+      try { process.kill(descendantPid); } catch { /* best effort */ }
     }
+    try { process.kill(pid); } catch { /* best effort */ }
   }
 }
 

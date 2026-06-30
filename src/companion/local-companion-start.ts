@@ -442,6 +442,12 @@ function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
     windowsHide: true,
   });
 
+  // A detached background spawn must still handle its own 'error' event
+  // (e.g. ENOENT), otherwise it surfaces as an unhandled exception.
+  child.on("error", () => {
+    /* best effort: background bridge failed to detach */
+  });
+
   child.unref();
 }
 
