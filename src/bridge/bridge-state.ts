@@ -3,6 +3,7 @@ import fs from "node:fs";
 import {
   BRIDGE_LOCK_FILE,
   BRIDGE_LOG_FILE,
+  appendBoundedLog,
   ensureWorkspaceChannelDir,
   ensureChannelDataDir,
 } from "../wechat/channel-config.ts";
@@ -422,10 +423,9 @@ export class BridgeStateStore {
 
   appendLog(message: string): void {
     ensureChannelDataDir();
-    fs.appendFileSync(
+    appendBoundedLog(
       BRIDGE_LOG_FILE,
       `[${new Date().toISOString()}] ${message}\n`,
-      "utf-8",
     );
   }
 
@@ -440,9 +440,18 @@ export class BridgeStateStore {
     }
   }
 
-  private save(): void {
+  private writeAtomicJsonFile(filePath: string, value: unknown): void {
     ensureChannelDataDir();
-    fs.writeFileSync(this.stateFilePath, JSON.stringify(this.state, null, 2), "utf-8");
+    const data = JSON.stringify(value, null, 2);
+    // temp + rename so a crash mid-write cannot leave a truncated/half-written
+    // state or lock file that would break the next launch or look like a stale lock.
+    const tempPath = `${filePath}.${process.pid}.tmp`;
+    fs.writeFileSync(tempPath, data, "utf-8");
+    fs.renameSync(tempPath, filePath);
+  }
+
+  private save(): void {
+    this.writeAtomicJsonFile(this.stateFilePath, this.state);
   }
 
   private acquireLock(): void {
@@ -475,11 +484,7 @@ export class BridgeStateStore {
       }
     }
 
-    fs.writeFileSync(
-      BRIDGE_LOCK_FILE,
-      JSON.stringify(this.lockPayload, null, 2),
-      "utf-8",
-    );
+    this.writeAtomicJsonFile(BRIDGE_LOCK_FILE, this.lockPayload);
   }
 
   verifyRuntimeOwnership(): BridgeRuntimeOwnership {
@@ -503,11 +508,7 @@ export class BridgeStateStore {
     }
 
     if (ownership.rehydratedLock) {
-      fs.writeFileSync(
-        BRIDGE_LOCK_FILE,
-        JSON.stringify(this.lockPayload, null, 2),
-        "utf-8",
-      );
+      this.writeAtomicJsonFile(BRIDGE_LOCK_FILE, this.lockPayload);
     }
 
     return ownership;

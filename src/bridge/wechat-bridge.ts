@@ -451,7 +451,9 @@ async function main(): Promise<void> {
   const transport = new WeChatTransport({ log, logError });
 
   // 非阻塞地检查更新（不影响启动速度，也避免首次登录时打断二维码输出）
-  setTimeout(async () => {
+  // unref：不能让这个延迟检查把 event loop 挂活（如 --doctor 或快速退出场景），
+  // 否则会与强制退出 teardown 竞态。
+  const updateCheckTimer = setTimeout(async () => {
     try {
       const versionInfo = await checkForUpdate();
       if (versionInfo?.hasUpdate) {
@@ -461,6 +463,7 @@ async function main(): Promise<void> {
       // 静默失败，不影响正常使用
     }
   }, 3000); // 延迟3秒，确保不影响启动
+  updateCheckTimer.unref?.();
 
   const stateStore = new BridgeStateStore({
     ...options,

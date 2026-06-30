@@ -565,7 +565,12 @@ export function classifyWechatTransportError(
 
 function writeJsonFile(filePath: string, value: unknown): void {
   ensureChannelDataDir();
-  fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
+  const data = JSON.stringify(value, null, 2);
+  // Atomic write via temp file + rename, so a crash mid-write cannot leave a
+  // truncated/half-written JSON that would break readers on the next launch.
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, data, "utf-8");
+  fs.renameSync(tempPath, filePath);
 }
 
 function randomWechatUin(): string {
@@ -766,7 +771,17 @@ async function getUploadUrl(
     token: account.token,
     timeoutMs: SEND_TIMEOUT_MS,
   });
-  return JSON.parse(raw) as { upload_param?: string };
+  try {
+    return JSON.parse(raw) as { upload_param?: string };
+  } catch (error) {
+    // A 200-OK but non-JSON body (e.g. an HTML error page, empty body) would
+    // otherwise throw an unclassified SyntaxError that bypasses transport error
+    // classification/retry. Surface it as a meaningful error instead.
+    throw new Error(
+      `getUploadUrl returned a non-JSON response (${raw.length} bytes): ${String(error)}`,
+      { cause: error },
+    );
+  }
 }
 
 function buildCdnUploadUrl(
@@ -1064,10 +1079,23 @@ export function buildInboundMessageClaimPath(
 export function clearInboundMessageClaims(
   claimsDir = INBOUND_MESSAGE_CLAIMS_DIR,
 ): void {
+  // Delete claim files individually from a directory snapshot rather than
+  // `rmSync(claimsDir, { recursive })`. A recursive rmdir can remove a file a
+  // concurrent process just created via tryClaimInboundMessage, silently
+  // invalidating its claim and letting the same message be double-processed.
+  // Per-file removal only deletes files present at snapshot time.
+  let entries: string[];
   try {
-    fs.rmSync(claimsDir, { recursive: true, force: true });
+    entries = fs.readdirSync(claimsDir);
   } catch {
-    // Best effort cleanup.
+    return; // directory does not exist; nothing to clear
+  }
+  for (const entry of entries) {
+    try {
+      fs.rmSync(path.join(claimsDir, entry), { force: true });
+    } catch {
+      // best effort
+    }
   }
 }
 
@@ -1122,7 +1150,11 @@ export function tryClaimInboundMessage(
         ? (error as { code: string }).code
         : "";
     if (code !== "EEXIST") {
-      return true;
+      // Real persistence failure (permissions, disk full, missing dir, ...).
+      // Returning true here would claim success WITHOUT writing the claim file,
+      // letting concurrent processes all think they own this message and
+      // double-process it. Fail closed so the message is retried instead.
+      return false;
     }
   }
 

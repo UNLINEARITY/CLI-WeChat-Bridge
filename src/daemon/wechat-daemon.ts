@@ -67,6 +67,7 @@ import {
 import {
   BRIDGE_LOCK_FILE,
   BRIDGE_LOG_FILE,
+  appendBoundedLog,
   ensureChannelDataDir,
   migrateLegacyChannelFiles,
 } from "../wechat/channel-config.ts";
@@ -181,10 +182,9 @@ function logError(message: string): void {
 
 function appendDaemonLog(message: string): void {
   ensureChannelDataDir();
-  fs.appendFileSync(
+  appendBoundedLog(
     BRIDGE_LOG_FILE,
     `[${new Date().toISOString()}] daemon: ${message}\n`,
-    "utf8",
   );
 }
 

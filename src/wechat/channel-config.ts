@@ -30,6 +30,34 @@ export const CONTEXT_CACHE_FILE = path.join(
 );
 export const BRIDGE_STATE_FILE = path.join(CHANNEL_DATA_DIR, "bridge-state.json");
 export const BRIDGE_LOG_FILE = path.join(CHANNEL_DATA_DIR, "bridge.log");
+
+// Hard cap for bridge.log. Long-running daemons otherwise grow it without bound.
+export const BRIDGE_LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MiB
+
+/**
+ * Append a line to a log file, trimming it down to the tail half whenever it
+ * exceeds BRIDGE_LOG_MAX_BYTES. Trimming is best-effort under concurrent
+ * writers (a few lines may be lost during a trim) but keeps the file bounded.
+ */
+export function appendBoundedLog(filePath: string, line: string): void {
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.size > BRIDGE_LOG_MAX_BYTES) {
+      const keepSize = Math.floor(BRIDGE_LOG_MAX_BYTES / 2);
+      const fd = fs.openSync(filePath, "r");
+      try {
+        const tail = Buffer.alloc(keepSize);
+        const bytesRead = fs.readSync(fd, tail, 0, keepSize, stat.size - keepSize);
+        fs.writeFileSync(filePath, tail.subarray(0, bytesRead));
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+  } catch {
+    // File missing or unreadable: fall through to a plain append.
+  }
+  fs.appendFileSync(filePath, line);
+}
 export const BRIDGE_LOCK_FILE = path.join(CHANNEL_DATA_DIR, "bridge.lock.json");
 export const DAEMON_ENDPOINT_FILE = path.join(CHANNEL_DATA_DIR, "daemon-endpoint.json");
 export const CODEX_PANEL_ENDPOINT_FILE = path.join(
