@@ -6,6 +6,7 @@
   "files": [
     "bin/",
     "dist/",
+    "scripts/ensure-node-pty-permissions.mjs",
     "README.md",
     "LICENSE.txt"
   ],
