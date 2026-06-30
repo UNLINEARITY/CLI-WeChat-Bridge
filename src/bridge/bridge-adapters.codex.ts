@@ -1177,6 +1177,31 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     child.stderr.on("data", (chunk: string) => {
       this.appServerLog = appendBoundedLog(this.appServerLog, chunk);
     });
+    child.once("error", (error: Error) => {
+      // spawn itself failed (ENOENT/EACCES/EMFILE). Without this listener the
+      // 'error' event is unhandled and crashes the bridge. Mirror the exit
+      // handler's cleanup so the failure surfaces as a fatal_error instead.
+      const expectedShutdown = shouldSuppressCodexTransportFatalError({
+        transportShuttingDown: this.appServerShuttingDown,
+        shuttingDown: this.shuttingDown,
+        cleanPanelExitInProgress: this.cleanPanelExitInProgress,
+      });
+      this.appServer = null;
+      this.appServerPort = null;
+      this.appServerShuttingDown = false;
+      this.deleteAppServerAuthTokenFile();
+      this.appServerAuthToken = null;
+      if (expectedShutdown) {
+        return;
+      }
+      const details = this.describeAppServerLog();
+      this.emit({
+        type: "fatal_error",
+        message: `codex app-server failed to start: ${String(error)}${details}`,
+        timestamp: nowIso(),
+      });
+      this.terminateCodexClient();
+    });
     child.on("exit", (code, signal) => {
       const expectedShutdown = shouldSuppressCodexTransportFatalError({
         transportShuttingDown: this.appServerShuttingDown,

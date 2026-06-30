@@ -223,6 +223,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private workingNoticeTimer: ReturnType<typeof setTimeout> | null = null;
   private workingNoticeSent = false;
   private lastBusyAtMs = 0;
+  // Monotonic token bumped on every beginTrackedTurn. Lets a deferred turn
+  // completion (.then in handleSessionIdle) detect that a newer turn started
+  // while it was awaiting, so the stale completion becomes a no-op instead of
+  // clobbering the in-flight turn (stale final_reply / status flip / batcher clear).
+  private currentTurnToken = 0;
   private pendingLocalPrompt = "";
   private localPromptNoticeSent = false;
   private readonly loggedUnknownEventTypes = new Set<string>();
@@ -1109,10 +1114,21 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       const completedPreview = this.currentPreview;
 
       const turnStartedAtMs = this.lastBusyAtMs;
+      const completingTurnToken = this.currentTurnToken;
       void this.outputBatcher.flushNow()
         .catch(() => undefined)
         .then(async () => {
+          // A newer turn (local or wechat) may have started while we awaited
+          // the flush. If so, this completion is stale: dropping it avoids
+          // flipping the active turn back to idle, emitting the old final_reply,
+          // and clearing the new turn's buffered output.
+          if (this.currentTurnToken !== completingTurnToken) {
+            return;
+          }
           const finalReplyText = await this.resolveFinalReplyText(sessionId, turnStartedAtMs);
+          if (this.currentTurnToken !== completingTurnToken) {
+            return;
+          }
           this.setStatus("idle");
           if (finalReplyText) {
             this.emit({
@@ -2196,6 +2212,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       emitMirroredUserInput?: boolean;
     } = {},
   ): void {
+    this.currentTurnToken += 1;
     this.hasAcceptedInput = true;
     this.currentPreview = truncatePreview(text);
     this.state.lastInputAt = nowIso();

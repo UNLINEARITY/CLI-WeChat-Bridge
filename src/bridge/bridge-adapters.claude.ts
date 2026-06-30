@@ -504,6 +504,14 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         socket.setEncoding("utf8");
         socket.on("data", (chunk) => {
           buffer += chunk;
+          // Cap the buffer: a single hook frame is tiny, so a frame larger
+          // than 1 MiB means a misbehaving client (e.g. one that never sends a
+          // newline). Without this the buffer could grow unbounded. Sibling
+          // IPC paths already cap their buffers; this one did not.
+          if (buffer.length > 1024 * 1024) {
+            socket.destroy();
+            return;
+          }
           while (true) {
             const newlineIndex = buffer.indexOf("\n");
             if (newlineIndex < 0) {
@@ -1119,6 +1127,15 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     try {
       await super.reset();
+    } catch (error) {
+      // recoverFromInvalidResume is invoked fire-and-forget (void) and there is
+      // no global unhandled-rejection handler, so a throwing reset() must be
+      // caught here to avoid crashing the bridge.
+      this.emit({
+        type: "fatal_error",
+        message: `Failed to restart Claude after invalid resume: ${String(error)}`,
+        timestamp: nowIso(),
+      });
     } finally {
       this.recoveringInvalidResume = false;
     }
