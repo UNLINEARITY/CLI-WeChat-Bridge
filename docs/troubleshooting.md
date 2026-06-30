@@ -132,6 +132,26 @@ wechat-daemon --doctor
 
 如果输出 `node-pty: ✓ loaded`，重启 bridge 即可使用完整 PTY 模式。
 
+### spawn-helper 缺少执行权限（macOS / Linux）
+
+即使 `node-pty` 能正常加载（`--doctor` 显示 `node-pty: ✓ loaded`），PTY 仍可能起不来。典型症状是 Claude 适配器报：
+
+```text
+Error: Input must be provided either through stdin or as a prompt argument when using --print
+```
+
+或 bridge 日志中出现 `posix_spawnp failed`。原因是 node-pty 发布包里的 `spawn-helper` 预编译二进制权限为 `0644`（缺少执行位），`posix_spawnp` 无法 exec，导致 PTY 启动失败并回退到非 PTY 模式，而 Claude 适配器在该模式下会进入 `--print` 非交互模式并报错。
+
+本项目的 `postinstall` 脚本会在安装后自动为 `spawn-helper` 补上执行位。如果仍遇到该问题（例如使用了 `--ignore-scripts` 安装），可手动修复：
+
+```bash
+PKG="$(npm root -g)/cli-wechat-bridge/node_modules/node-pty"
+chmod +x "$PKG/prebuilds/darwin-arm64/spawn-helper" \
+         "$PKG/prebuilds/darwin-x64/spawn-helper" 2>/dev/null
+```
+
+修复后重启 bridge 即可恢复完整 PTY 模式。
+
 ## 微信上提示没有 context token
 
 通常表示当前联系人还没有建立可用的 iLink 上下文。启动 bridge 后，先由 owner 账号向 Bot 发送一条普通微信消息，一般即可建立上下文。
