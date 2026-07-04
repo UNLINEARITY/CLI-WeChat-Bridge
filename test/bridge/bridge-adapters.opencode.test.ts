@@ -432,7 +432,7 @@ describe("OpenCode SSE event dispatch", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("starts both local and global sync SSE loops", async () => {
+  test("starts local, global, and legacy global sync SSE loops", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
       command: "opencode",
@@ -449,7 +449,7 @@ describe("OpenCode SSE event dispatch", () => {
 
     internal.client = {
       event: {},
-      global: { syncEvent: {} },
+      global: { syncEvent: { subscribe: async () => ({ stream: [] }) } },
     };
     internal.runSseLoop = async (streamName: string) => {
       subscribedStreams.push(streamName);
@@ -459,6 +459,35 @@ describe("OpenCode SSE event dispatch", () => {
     await internal.sseLoopPromise;
 
     expect(subscribedStreams).toEqual(["event", "global-event", "global-sync"]);
+  });
+
+  test("skips the legacy global sync SSE loop when the SDK no longer exposes it", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      client: Record<string, unknown> | null;
+      sseLoopPromise: Promise<void> | null;
+      shuttingDown: boolean;
+      startSseListener(): void;
+      runSseLoop(streamName: string): Promise<void>;
+    };
+    const subscribedStreams: string[] = [];
+
+    internal.client = {
+      event: {},
+      global: {},
+    };
+    internal.runSseLoop = async (streamName: string) => {
+      subscribedStreams.push(streamName);
+    };
+
+    internal.startSseListener();
+    await internal.sseLoopPromise;
+
+    expect(subscribedStreams).toEqual(["event", "global-event"]);
   });
 });
 
@@ -2259,6 +2288,57 @@ describe("OpenCode local TUI tracking", () => {
         reason: "local_follow",
       }),
     ]);
+  });
+
+  test("normalizes newer global sync payloads carried by the global event stream", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      normalizeSdkEvent(
+        event: unknown,
+      ): { type: string; properties?: unknown; data?: unknown; directory?: string } | null;
+      shouldHandleSseEvent(
+        event: { type: string; properties?: unknown; data?: unknown; directory?: string },
+        streamName: string,
+      ): boolean;
+    };
+
+    const syncEvent = internal.normalizeSdkEvent({
+      directory: process.cwd(),
+      payload: {
+        type: "sync",
+        id: "global_event_1",
+        syncEvent: {
+          type: "session.updated.1",
+          id: "sync_event_1",
+          seq: 1,
+          aggregateID: "session_newer_global_sync",
+          data: {
+            sessionID: "session_newer_global_sync",
+            info: {
+              id: "session_newer_global_sync",
+              directory: process.cwd(),
+            },
+          },
+        },
+      },
+    });
+
+    expect(syncEvent).toMatchObject({
+      type: "session.updated.1",
+      directory: process.cwd(),
+      data: {
+        sessionID: "session_newer_global_sync",
+        info: {
+          id: "session_newer_global_sync",
+          directory: process.cwd(),
+        },
+      },
+    });
+    expect(internal.shouldHandleSseEvent(syncEvent!, "global-event")).toBe(true);
   });
 
   test("ignores payload-wrapped global sync session updates from another directory", () => {
