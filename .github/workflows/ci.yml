@@ -1,0 +1,76 @@
+# Continuous integration for pull requests and pushes to main.
+#
+# Runs the full quality gate (lint -> typecheck -> test -> build) on Linux,
+# macOS, and Windows. The matrix exists because node-pty is a native module
+# whose spawn-helper behavior is platform-specific (see the postinstall fix in
+# scripts/ensure-node-pty-permissions.mjs), so a regression on one OS is not
+# caught by the others.
+#
+# To make this gate actually block merges, enable branch protection on `main`:
+#   Settings -> Branches -> Edit rule for `main`
+#   -> "Require status checks to pass before merging"
+#   -> select the `Quality (ubuntu-latest)`, `Quality (macos-latest)`,
+#      `Quality (windows-latest)` checks
+# 让该门禁真正阻止不合格 PR 合并,需在 main 分支保护规则里勾选
+# "Require status checks to pass before merging" 并选中上面的三个 Quality 检查。
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save runner time.
+concurrency:
+  group: ci-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # frozen-lockfile guarantees a reproducible install; if a contributor
+      # edits package.json they must also update bun.lock locally.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Typecheck
+        run: bun run typecheck:src
+
+      - name: Test
+        run: bun test test
+
+      - name: Build
+        run: bun run build

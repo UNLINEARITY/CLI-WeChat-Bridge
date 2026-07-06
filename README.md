@@ -12,6 +12,7 @@
   <a href="https://www.npmjs.com/package/cli-wechat-bridge">
   <img alt="License" src="https://img.shields.io/badge/License-AGPL--3.0-7c3aed?style=for-the-badge&labelColor=1c1917">
 </a>
+  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/UNLINEARITY/CLI-WeChat-Bridge/ci.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white&labelColor=1c1917"></a>
 </p>
 
 **命令行工具的微信桥接**：本项目将微信消息桥接到本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview) 和 [`OpenCode`](https://github.com/anomalyco/opencode)，同时把本地输出、审批请求与运行状态同步回微信。
