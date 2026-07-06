@@ -39,6 +39,8 @@
     "wechat-codex-start": "bin/wechat-codex-start.mjs",
     "wechat-claude": "bin/wechat-claude.mjs",
     "wechat-claude-start": "bin/wechat-claude-start.mjs",
+    "wechat-claude-multi": "bin/wechat-claude-multi.mjs",
+    "wechat-claude-multi-start": "bin/wechat-claude-multi-start.mjs",
     "wechat-bridge-claude": "bin/wechat-bridge-claude.mjs",
     "wechat-bridge-shell": "bin/wechat-bridge-shell.mjs",
     "wechat-bridge-opencode": "bin/wechat-bridge-opencode.mjs",

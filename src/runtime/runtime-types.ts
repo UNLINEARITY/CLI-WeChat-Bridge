@@ -14,6 +14,7 @@ export type LocalClientEndpoint = {
   runtimeKind: RuntimeKind;
   instanceId: string;
   kind: "codex" | "claude" | "opencode" | "shell";
+  instance?: number;
   port: number;
   token: string;
   renderMode?: RuntimeRenderMode;

@@ -142,6 +142,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           runtimeKind: "legacy_adapter",
           instanceId: `${process.pid}-${Date.now().toString(36)}`,
           kind: this.options.kind,
+          instance: this.options.instance,
           port: address.port,
           token: buildLocalCompanionToken(),
           cwd: this.options.cwd,

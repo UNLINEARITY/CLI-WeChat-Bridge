@@ -6,6 +6,7 @@ import {
   appendBoundedLog,
   ensureWorkspaceChannelDir,
   ensureChannelDataDir,
+  getBridgeLockFile,
 } from "../wechat/channel-config.ts";
 import type {
   BridgeAdapterKind,
@@ -21,6 +22,7 @@ type BridgeStateOptions = {
   adapter: BridgeAdapterKind;
   command: string;
   cwd: string;
+  instance?: number;
   profile?: string;
   lifecycle: BridgeLifecycleMode;
   sessionStartMode?: BridgeSessionStartMode;
@@ -32,6 +34,7 @@ export type BridgeLockPayload = {
   parentPid: number;
   instanceId: string;
   adapter: BridgeAdapterKind;
+  instance?: number;
   command: string;
   cwd: string;
   startedAt: string;
@@ -156,6 +159,9 @@ export function normalizeBridgeLockPayload(value: unknown): BridgeLockPayload | 
     parentPid: typeof record.parentPid === "number" ? record.parentPid : 0,
     instanceId: record.instanceId,
     adapter,
+    instance: typeof record.instance === "number" && record.instance > 0
+      ? record.instance
+      : undefined,
     command: record.command,
     cwd: record.cwd,
     startedAt: record.startedAt,
@@ -164,12 +170,13 @@ export function normalizeBridgeLockPayload(value: unknown): BridgeLockPayload | 
   };
 }
 
-export function readBridgeLockFile(): BridgeLockPayload | null {
+export function readBridgeLockFile(instance?: number): BridgeLockPayload | null {
   try {
-    if (!fs.existsSync(BRIDGE_LOCK_FILE)) {
+    const lockFile = getBridgeLockFile(instance);
+    if (!fs.existsSync(lockFile)) {
       return null;
     }
-    return normalizeBridgeLockPayload(JSON.parse(fs.readFileSync(BRIDGE_LOCK_FILE, "utf-8")));
+    return normalizeBridgeLockPayload(JSON.parse(fs.readFileSync(lockFile, "utf-8")));
   } catch {
     return null;
   }
@@ -278,6 +285,7 @@ export class BridgeStateStore {
       parentPid: process.ppid,
       instanceId: this.instanceId,
       adapter: options.adapter,
+      instance: options.instance,
       command: options.command,
       cwd: options.cwd,
       startedAt: new Date(this.bridgeStartedAtMs).toISOString(),
@@ -431,9 +439,10 @@ export class BridgeStateStore {
 
   releaseLock(): void {
     try {
-      const currentLock = readBridgeLockFile();
+      const lockFile = getBridgeLockFile(this.lockPayload.instance);
+      const currentLock = readBridgeLockFile(this.lockPayload.instance);
       if (currentLock?.pid === process.pid) {
-        fs.rmSync(BRIDGE_LOCK_FILE, { force: true });
+        fs.rmSync(lockFile, { force: true });
       }
     } catch {
       // Best effort cleanup.
@@ -455,7 +464,8 @@ export class BridgeStateStore {
   }
 
   private acquireLock(): void {
-    const existing = readBridgeLockFile();
+    const lockFile = getBridgeLockFile(this.lockPayload.instance);
+    const existing = readBridgeLockFile(this.lockPayload.instance);
     if (
       existing &&
       existing.pid !== process.pid &&
@@ -484,7 +494,7 @@ export class BridgeStateStore {
       }
     }
 
-    this.writeAtomicJsonFile(BRIDGE_LOCK_FILE, this.lockPayload);
+    this.writeAtomicJsonFile(lockFile, this.lockPayload);
   }
 
   verifyRuntimeOwnership(): BridgeRuntimeOwnership {
@@ -496,7 +506,7 @@ export class BridgeStateStore {
         typeof workspaceState?.instanceId === "string"
           ? workspaceState.instanceId
           : undefined,
-      lock: readBridgeLockFile(),
+      lock: readBridgeLockFile(this.lockPayload.instance),
     });
 
     if (!ownership.ok) {
@@ -508,7 +518,8 @@ export class BridgeStateStore {
     }
 
     if (ownership.rehydratedLock) {
-      this.writeAtomicJsonFile(BRIDGE_LOCK_FILE, this.lockPayload);
+      const lockFile = getBridgeLockFile(this.lockPayload.instance);
+      this.writeAtomicJsonFile(lockFile, this.lockPayload);
     }
 
     return ownership;

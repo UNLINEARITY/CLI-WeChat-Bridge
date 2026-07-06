@@ -79,6 +79,7 @@ type BridgeCliOptions = {
   adapter: BridgeAdapterKind;
   command: string;
   cwd: string;
+  instance?: number;
   profile?: string;
   lifecycle: BridgeLifecycleMode;
   sessionStartMode: BridgeSessionStartMode;
@@ -218,6 +219,47 @@ function formatWechatSendRetryLogEntry(params: {
   return `wechat_send_retry: context=${params.context} recipient=${params.recipientId} attempt=${params.attempt} delay_ms=${params.delayMs} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
 }
 
+/** Prefix user-facing WeChat messages with an instance label for multi-instance bridges. */
+function prefixInstanceMessage(text: string, instance?: number): string {
+  if (!instance) return text;
+  const trimmed = text.trim();
+  return trimmed ? `[claude@${instance}]\n${trimmed}` : `[claude@${instance}]`;
+}
+
+/**
+ * Extract the first text line from a raw WeChat message for routing decisions.
+ * Must run BEFORE claiming so messages for other instances aren't locked.
+ */
+function quickExtractText(raw: { item_list?: Array<{ type?: number; text_item?: { text?: string } }> }): string {
+  if (!raw.item_list) return "";
+  for (const item of raw.item_list) {
+    if (item.type === 1 && item.text_item?.text) return item.text_item.text;
+  }
+  return "";
+}
+
+/** Instance-routing regex: /claude@N at the start of a message (possibly with whitespace after). */
+const INSTANCE_ROUTE_RE = /^\/claude@(\d+)(?:\s|$)/;
+
+/**
+ * Determines whether an instance-specific bridge should process (claim) a raw
+ * WeChat message.  Messages explicitly routed to a different instance are
+ * skipped so the correct instance can claim them.
+ */
+function shouldInstanceBridgeProcessMessage(
+  raw: { item_list?: Array<{ type?: number; text_item?: { text?: string } }> },
+  instance: number,
+): boolean {
+  const text = quickExtractText(raw).trim();
+  const match = text.match(INSTANCE_ROUTE_RE);
+  if (match) {
+    // Message has explicit routing — only process if it matches our instance
+    return parseInt(match[1], 10) === instance;
+  }
+  // No routing prefix — any instance can process (backward compatible)
+  return true;
+}
+
 export function isRetryableWechatSendError(error: unknown): boolean {
   if (isWechatContextTokenStaleError(error)) {
     return false;
@@ -325,6 +367,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
   let adapter: BridgeAdapterKind | null = null;
   let commandOverride: string | undefined;
   let cwd = process.cwd();
+  let instance: number | undefined;
   let profile: string | undefined;
   let lifecycle: BridgeLifecycleMode = "persistent";
   let sessionStartMode: BridgeSessionStartMode = "restore";
@@ -353,6 +396,19 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
           throw new Error("--cwd requires a value");
         }
         cwd = path.resolve(next);
+        i += 1;
+        break;
+      case "--instance":
+        if (!next) {
+          throw new Error("--instance requires a value");
+        }
+        {
+          const parsed = Number(next);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            throw new Error("--instance must be a non-negative integer");
+          }
+          instance = parsed > 0 ? parsed : undefined;
+        }
         i += 1;
         break;
       case "--profile":
@@ -397,6 +453,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
     adapter,
     command: commandOverride ?? defaultCommand,
     cwd,
+    instance,
     profile,
     lifecycle,
     sessionStartMode,
@@ -640,7 +697,7 @@ async function main(): Promise<void> {
   };
 
   const outputBatcher = new OutputBatcher(async (text) => {
-    await queueWechatMessage(stateStore.getState().authorizedUserId, text);
+    await queueWechatMessage(stateStore.getState().authorizedUserId, prefixInstanceMessage(text, options.instance));
   });
   const maybeDrainDeferredInboundMessages = async (): Promise<void> => {
     if (drainingDeferredInboundMessages || !ensureRuntimeOwnership()) {
@@ -891,6 +948,10 @@ async function main(): Promise<void> {
         pollResult = await transport.pollMessages({
           timeoutMs: DEFAULT_LONG_POLL_TIMEOUT_MS,
           minCreatedAtMs: stateStore.getState().bridgeStartedAtMs - MESSAGE_START_GRACE_MS,
+          shouldProcess:
+            options.instance
+              ? (raw) => shouldInstanceBridgeProcessMessage(raw, options.instance!)
+              : undefined,
         });
       } catch (err) {
         const classification = classifyWechatTransportError(err);
@@ -1129,7 +1190,7 @@ function wireAdapterEvents(params: {
               sendText: async (text) => {
                 const sent = await queueWechatMessage(
                   authorizedUserId,
-                  text,
+                  prefixInstanceMessage(text, options.instance),
                   "final_reply",
                 );
                 if (sent) {
@@ -1378,6 +1439,15 @@ async function handleInboundMessage(params: {
     deferInboundMessage,
   } = params;
   const state = stateStore.getState();
+
+  // Strip instance routing prefix for instance-specific bridges.
+  // The transport filter already ensured this message is for us.
+  if (options.instance) {
+    const stripped = message.text.replace(INSTANCE_ROUTE_RE, "").trim();
+    if (stripped !== message.text) {
+      message = { ...message, text: stripped };
+    }
+  }
 
   if (message.senderId !== state.authorizedUserId) {
     await queueWechatMessage(
