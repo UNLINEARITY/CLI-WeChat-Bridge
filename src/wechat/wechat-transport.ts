@@ -160,6 +160,8 @@ export type ExtractedInboundWechatMessageContent = {
 type PollMessagesOptions = {
   timeoutMs?: number;
   minCreatedAtMs?: number;
+  /** Return false to skip a raw message before claiming, so another process can claim it. */
+  shouldProcess?: (raw: WeixinMessage) => boolean;
 };
 
 type PollMessagesResult = {
@@ -1340,6 +1342,13 @@ export class WeChatTransport {
         createdAtMs < options.minCreatedAtMs
       ) {
         ignoredBacklogCount += 1;
+        continue;
+      }
+
+      // Instance routing filter: skip messages that should be handled by a
+      // different bridge instance.  Must run BEFORE claiming so the correct
+      // instance can claim the message.
+      if (options.shouldProcess && !options.shouldProcess(rawMessage)) {
         continue;
       }
 

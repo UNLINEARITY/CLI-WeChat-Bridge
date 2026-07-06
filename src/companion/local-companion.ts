@@ -28,6 +28,7 @@ function log(adapter: string, message: string): void {
 export type LocalCompanionCliOptions = {
   adapter: "codex" | "claude" | "opencode";
   cwd: string;
+  instance?: number;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs: string[];
 };
@@ -35,6 +36,7 @@ export type LocalCompanionCliOptions = {
 function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
   let adapter: "codex" | "claude" | "opencode" | null = null;
   let cwd = process.cwd();
+  let instance: number | undefined;
   let sessionStartMode: BridgeSessionStartMode = "restore";
   const cliArgs: string[] = [];
 
@@ -48,9 +50,10 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: local-companion --adapter <codex|claude|opencode> [--cwd <path>] [...cli args]",
+          "Usage: local-companion --adapter <codex|claude|opencode> [--cwd <path>] [--instance <N>] [...cli args]",
           "",
           'Starts the visible local companion and connects it to the matching running bridge for the current directory.',
+          "Use --instance <N> to connect to a numbered instance slot.",
           "Unknown arguments are forwarded to the visible CLI client.",
           "",
         ].join("\n"),
@@ -76,6 +79,19 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
       continue;
     }
 
+    if (arg === "--instance") {
+      if (!next) {
+        throw new Error("--instance requires a value");
+      }
+      const parsed = Number(next);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error("--instance must be a non-negative integer");
+      }
+      instance = parsed > 0 ? parsed : undefined;
+      i += 1;
+      continue;
+    }
+
     if (arg === "--session-start-mode") {
       if (!next || !["restore", "new"].includes(next)) {
         throw new Error(`Invalid session start mode: ${next ?? "(missing)"}`);
@@ -92,7 +108,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     throw new Error("Missing required --adapter <codex|claude|opencode>");
   }
 
-  return { adapter, cwd, sessionStartMode, cliArgs };
+  return { adapter, cwd, instance, sessionStartMode, cliArgs };
 }
 
 function delay(ms: number): Promise<void> {
@@ -107,10 +123,12 @@ function readMatchingEndpoint(
 ): LocalCompanionEndpoint {
   const endpoint = readLocalCompanionEndpoint(options.cwd, {
     adapter: options.adapter,
+    instance: options.instance,
   });
   if (!endpoint || endpoint.kind !== options.adapter) {
+    const instanceHint = options.instance ? `@${options.instance}` : "";
     throw new Error(
-      `No active ${options.adapter} bridge endpoint was found for ${options.cwd}. Start "wechat-bridge-${options.adapter}" in that directory first.`,
+      `No active ${options.adapter}${instanceHint} bridge endpoint was found for ${options.cwd}. Start "wechat-bridge-${options.adapter}" in that directory first.`,
     );
   }
 

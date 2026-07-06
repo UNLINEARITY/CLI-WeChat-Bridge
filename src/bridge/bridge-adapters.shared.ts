@@ -56,6 +56,7 @@ export type AdapterOptions = {
   kind: BridgeAdapterKind;
   command: string;
   cwd: string;
+  instance?: number;
   profile?: string;
   extraCliArgs?: string[];
   lifecycle?: BridgeLifecycleMode;

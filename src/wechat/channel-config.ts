@@ -59,6 +59,13 @@ export function appendBoundedLog(filePath: string, line: string): void {
   fs.appendFileSync(filePath, line);
 }
 export const BRIDGE_LOCK_FILE = path.join(CHANNEL_DATA_DIR, "bridge.lock.json");
+
+export function getBridgeLockFile(instance?: number): string {
+  if (instance !== undefined && instance > 0) {
+    return path.join(CHANNEL_DATA_DIR, `bridge.lock.claude@${instance}.json`);
+  }
+  return BRIDGE_LOCK_FILE;
+}
 export const DAEMON_ENDPOINT_FILE = path.join(CHANNEL_DATA_DIR, "daemon-endpoint.json");
 export const CODEX_PANEL_ENDPOINT_FILE = path.join(
   CHANNEL_DATA_DIR,
@@ -215,10 +222,14 @@ export function getWorkspaceChannelPaths(cwd: string): WorkspaceChannelPaths {
 export function getWorkspaceAdapterEndpointFile(
   cwd: string,
   adapter: WorkspaceEndpointAdapter,
+  instance?: number,
 ): string {
+  const suffix = instance !== undefined && instance > 0
+    ? `${adapter}@${instance}-companion-endpoint.json`
+    : `${adapter}-companion-endpoint.json`;
   return path.join(
     getWorkspaceChannelPaths(cwd).workspaceDir,
-    `${adapter}-companion-endpoint.json`,
+    suffix,
   );
 }
 

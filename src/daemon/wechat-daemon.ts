@@ -69,6 +69,7 @@ import {
   BRIDGE_LOG_FILE,
   appendBoundedLog,
   ensureChannelDataDir,
+  getBridgeLockFile,
   migrateLegacyChannelFiles,
 } from "../wechat/channel-config.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
@@ -103,9 +104,11 @@ import {
 import {
   attachDaemonRequestListener,
   buildDaemonToken,
+  buildSlotKey,
   clearDaemonEndpoint,
   DAEMON_PROTOCOL_VERSION,
   isPidAlive,
+  parseSlotKey,
   readDaemonEndpoint,
   sendDaemonRequest,
   sendDaemonResponse,
@@ -281,18 +284,14 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
   return { cwd, profile, initialAdapter, openVisible };
 }
 
-export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null {
+export function parseDaemonSwitchCommand(
+  text: string,
+): { adapter: DaemonAdapterKind; instance?: number } | null {
   const normalized = text.trim().toLowerCase();
-  switch (normalized) {
-    case "/codex":
-      return "codex";
-    case "/claude":
-      return "claude";
-    case "/opencode":
-      return "opencode";
-    default:
-      return null;
-  }
+  const match = normalized.match(/^\/(codex|claude|opencode)(?:@(\d+))?$/);
+  if (!match) return null;
+  const instance = match[2] ? parseInt(match[2], 10) : undefined;
+  return { adapter: match[1] as DaemonAdapterKind, instance };
 }
 
 export function defaultDaemonSessionStartMode(
@@ -359,6 +358,7 @@ function prefixDaemonAdapterMessage(adapter: DaemonAdapterKind, text: string): s
 export function buildVisibleClientLaunchArgs(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
+  instance?: number;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
 }): string[] {
@@ -384,6 +384,9 @@ export function buildVisibleClientLaunchArgs(params: {
   if (params.adapter !== "codex") {
     args.push("--adapter", params.adapter);
   }
+  if (params.instance && params.instance > 0) {
+    args.push("--instance", String(params.instance));
+  }
   if (params.sessionStartMode && params.sessionStartMode !== "restore") {
     args.push("--session-start-mode", params.sessionStartMode);
   }
@@ -393,12 +396,16 @@ export function buildVisibleClientLaunchArgs(params: {
 
 export function buildWindowsVisibleClientLaunchCommand(params: {
   adapter: DaemonAdapterKind;
+  instance?: number;
   cwd: string;
   args: string[];
 }): string {
+  const title = params.instance
+    ? `wechat-${params.adapter}@${params.instance}`
+    : `wechat-${params.adapter}`;
   return [
     "start",
-    quoteWindowsCommandArg(`wechat-${params.adapter}`),
+    quoteWindowsCommandArg(title),
     "/D",
     quoteWindowsCommandArg(params.cwd),
     quoteWindowsCommandArg(process.execPath),
@@ -450,6 +457,7 @@ function formatLaunchPreview(launch: VisibleClientLaunch): string {
 
 function openVisibleClient(params: {
   adapter: DaemonAdapterKind;
+  instance?: number;
   cwd: string;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
@@ -463,6 +471,7 @@ function openVisibleClient(params: {
       "/c",
       buildWindowsVisibleClientLaunchCommand({
         adapter: params.adapter,
+        instance: params.instance,
         cwd: params.cwd,
         args,
       }),
@@ -490,7 +499,9 @@ function openVisibleClient(params: {
     };
   }
 
-  const title = `wechat-${params.adapter}`;
+  const title = params.instance
+    ? `wechat-${params.adapter}@${params.instance}`
+    : `wechat-${params.adapter}`;
   const fullArgs = [process.execPath, ...args];
 
   if (process.platform === "darwin") {
@@ -552,8 +563,8 @@ end tell`;
   };
 }
 
-function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean {
-  const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
+function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind, instance?: number): boolean {
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter, instance });
   if (!endpoint?.companionPid) {
     return false;
   }
@@ -561,7 +572,7 @@ function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean 
     return true;
   }
 
-  clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter });
+  clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter, instance });
   return false;
 }
 
@@ -582,11 +593,12 @@ export async function waitForVisibleClientConnection(
   params: {
     cwd: string;
     adapter: DaemonAdapterKind;
+    instance?: number;
     timeoutMs?: number;
     pollMs?: number;
   },
   deps: {
-    isAlive?: (cwd: string, adapter: DaemonAdapterKind) => boolean;
+    isAlive?: (cwd: string, adapter: DaemonAdapterKind, instance?: number) => boolean;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
   } = {},
@@ -594,12 +606,13 @@ export async function waitForVisibleClientConnection(
   const timeoutMs = params.timeoutMs ?? VISIBLE_CLIENT_CONNECT_TIMEOUT_MS;
   const pollMs = params.pollMs ?? VISIBLE_CLIENT_CONNECT_POLL_MS;
   const isAlive = deps.isAlive ?? isVisibleClientAlive;
+  const instance = params.instance;
   const sleepFn = deps.sleep ?? sleep;
   const now = deps.now ?? (() => Date.now());
   const deadline = now() + timeoutMs;
 
   while (true) {
-    if (isAlive(params.cwd, params.adapter)) {
+    if (isAlive(params.cwd, params.adapter, instance)) {
       return true;
     }
 
@@ -676,22 +689,20 @@ export function formatDaemonStatus(status: DaemonStatus): string {
   const lines = [
     "wechat-daemon status",
     `cwd: ${status.cwd}`,
-    `active: ${status.activeAdapter ?? "(none)"}`,
+    `active: ${status.activeSlotKey ?? status.activeAdapter ?? "(none)"}`,
     `started_at: ${status.startedAt}`,
   ];
 
-  for (const adapter of DAEMON_ADAPTERS) {
-    const slot = status.slots.find((entry) => entry.adapter === adapter);
-    if (!slot) {
-      lines.push(`${adapter}: not started`);
-      continue;
-    }
+  for (const slot of status.slots) {
+    const slotLabel = slot.instance
+      ? `${slot.adapter}@${slot.instance}`
+      : slot.adapter;
     const flags = [
       slot.pendingApproval ? "pending_approval" : "",
       slot.pendingUserInput ? "pending_input" : "",
       slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
     ].filter(Boolean);
-    lines.push(`${adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`);
+    lines.push(`${slotLabel}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`);
   }
 
   return lines.join("\n");
@@ -702,11 +713,11 @@ class WechatDaemon {
   private readonly profile?: string;
   private readonly authorizedUserId: string;
   private readonly transport: WeChatTransport;
-  private readonly slots = new Map<DaemonAdapterKind, DaemonSlot>();
+  private readonly slots = new Map<string, DaemonSlot>();
   private readonly startedAt = new Date().toISOString();
   private readonly bridgeStartedAtMs = Date.now();
   private backlogNoticeSent = false;
-  private activeAdapter: DaemonAdapterKind | null = null;
+  private activeSlotKey: string | null = null;
   takenOverAdapter?: DaemonAdapterKind;
   private textSendChain = Promise.resolve();
   private attachmentSendChain = Promise.resolve();
@@ -787,16 +798,23 @@ class WechatDaemon {
   getStatus(): DaemonStatus {
     return {
       cwd: this.cwd,
-      activeAdapter: this.activeAdapter ?? undefined,
+      activeAdapter: this.activeSlotKey
+        ? parseSlotKey(this.activeSlotKey)?.adapter
+        : undefined,
+      activeSlotKey: this.activeSlotKey ?? undefined,
       startedAt: this.startedAt,
-      slots: Array.from(this.slots.values()).map((slot): DaemonSlotSummary => {
-        const endpoint = readLocalCompanionEndpoint(this.cwd, {
+      slots: Array.from(this.slots.entries()).map(([key, slot]): DaemonSlotSummary => {
+        const parsed = parseSlotKey(key);
+        const slotCwd = slot.runtime.getState().cwd || this.cwd;
+        const endpoint = readLocalCompanionEndpoint(slotCwd, {
           adapter: slot.adapter,
+          instance: parsed?.instance,
         });
         return {
           adapter: slot.adapter,
+          instance: parsed?.instance,
           status: slot.runtime.getState().status,
-          cwd: this.cwd,
+          cwd: slotCwd,
           companionPid: endpoint?.companionPid,
           pendingApproval: slot.pendingConfirmations.length > 0,
           pendingUserInput: Boolean(slot.pendingUserInput),
@@ -896,7 +914,9 @@ class WechatDaemon {
           await this.queueWechatMessage(
             message.senderId,
             formatUserFacingInboundError({
-              adapter: this.activeAdapter ?? "codex",
+              adapter: this.activeSlotKey
+                ? (parseSlotKey(this.activeSlotKey)?.adapter ?? "codex")
+                : "codex",
               cwd: this.cwd,
               errorText,
               isUserFacingShellRejection,
@@ -959,32 +979,34 @@ class WechatDaemon {
         }, 0);
         return { shuttingDown: true };
       case "ensure_slot":
-        if (!isSameWorkspaceCwd(request.cwd, this.cwd)) {
+      case "switch_adapter": {
+        const slotCwd = request.cwd ?? this.cwd;
+        // For instance-specific slots, skip the strict CWD check.
+        // Plain (non-instance) slots still validate against the daemon cwd
+        // for backward compatibility.
+        if (!request.instance && !isSameWorkspaceCwd(slotCwd, this.cwd)) {
           throw new Error(
-            `wechat-daemon is bound to ${this.cwd}; requested cwd was ${request.cwd}.`,
+            `wechat-daemon is bound to ${this.cwd}; requested cwd was ${slotCwd}. Use --instance <N> for per-directory slots.`,
           );
         }
         return await this.ensureSlot(request.adapter, {
+          instance: request.instance,
+          cwd: slotCwd,
           profile: request.profile,
           cliArgs: request.cliArgs,
           openVisible: request.openVisible ?? true,
           sessionStartMode: request.sessionStartMode,
           reuseExistingVisible: request.reuseExistingVisible ?? true,
         });
-      case "switch_adapter":
-        return await this.ensureSlot(request.adapter, {
-          profile: request.profile,
-          cliArgs: request.cliArgs,
-          openVisible: request.openVisible ?? true,
-          sessionStartMode: request.sessionStartMode,
-          reuseExistingVisible: request.reuseExistingVisible ?? true,
-        });
+      }
     }
   }
 
   private async ensureSlot(
     adapter: DaemonAdapterKind,
     options: {
+      instance?: number;
+      cwd?: string;
       profile?: string;
       cliArgs?: string[];
       openVisible?: boolean;
@@ -993,14 +1015,19 @@ class WechatDaemon {
     } = {},
   ): Promise<{
     activeAdapter: DaemonAdapterKind;
+    activeSlotKey: string;
     created: boolean;
     openedVisible: boolean;
     visibleConnected: boolean;
     activated: boolean;
     previousActiveAdapter?: DaemonAdapterKind;
   }> {
-    const previousActiveAdapter = this.activeAdapter ?? undefined;
-    let slot = this.slots.get(adapter);
+    const slotKey = buildSlotKey(adapter, options.instance);
+    const slotCwd = options.cwd ?? this.cwd;
+    const previousActiveAdapter = this.activeSlotKey
+      ? parseSlotKey(this.activeSlotKey)?.adapter
+      : undefined;
+    let slot = this.slots.get(slotKey);
     let created = false;
     if (!slot) {
       const createSessionStartMode =
@@ -1010,15 +1037,17 @@ class WechatDaemon {
         this.takenOverAdapter = undefined;
       }
       slot = await this.createSlot(adapter, {
+        cwd: slotCwd,
+        instance: options.instance,
         profile: options.profile ?? this.profile,
         sessionStartMode: createSessionStartMode,
       });
-      this.slots.set(adapter, slot);
+      this.slots.set(slotKey, slot);
       created = true;
     }
 
     let openedVisible = false;
-    let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
+    let visibleConnected = isVisibleClientAlive(slotCwd, adapter, options.instance);
     const sessionStartMode = resolveDaemonSessionStartMode({
       adapter,
       explicitSessionStartMode: options.sessionStartMode,
@@ -1035,53 +1064,56 @@ class WechatDaemon {
       visibleConnected
     ) {
       await this.startFreshSlotSession(slot);
-      appendDaemonLog(`fresh_session_started: adapter=${adapter} source=start_command`);
+      appendDaemonLog(`fresh_session_started: adapter=${slotKey} source=start_command`);
     }
 
     if (options.openVisible !== false && !visibleConnected) {
       slot.controller.syncLocalClientEndpoint();
       const launch = openVisibleClient({
         adapter,
-        cwd: this.cwd,
+        instance: options.instance,
+        cwd: slotCwd,
         sessionStartMode,
         cliArgs: options.cliArgs,
         onError: (error) => {
           appendDaemonLog(
-            `visible_client_open_error: adapter=${adapter} error=${truncatePreview(error.message, 400)}`,
+            `visible_client_open_error: adapter=${slotKey} error=${truncatePreview(error.message, 400)}`,
           );
         },
       });
       openedVisible = true;
       appendDaemonLog(
-        `visible_client_open_attempt: adapter=${adapter} cwd=${this.cwd} pid=${launch.pid ?? "unknown"} command=${truncatePreview(formatLaunchPreview(launch), 400)}`,
+        `visible_client_open_attempt: adapter=${slotKey} cwd=${slotCwd} pid=${launch.pid ?? "unknown"} command=${truncatePreview(formatLaunchPreview(launch), 400)}`,
       );
       visibleConnected = await waitForVisibleClientConnection({
-        cwd: this.cwd,
+        cwd: slotCwd,
         adapter,
+        instance: options.instance,
       });
       if (visibleConnected) {
-        appendDaemonLog(`visible_client_connected: adapter=${adapter} cwd=${this.cwd}`);
+        appendDaemonLog(`visible_client_connected: adapter=${slotKey} cwd=${slotCwd}`);
       } else {
         log(
-          `${adapter} visible CLI did not connect within ${formatDuration(VISIBLE_CLIENT_CONNECT_TIMEOUT_MS)}. Check ${BRIDGE_LOG_FILE}.`,
+          `${slotKey} visible CLI did not connect within ${formatDuration(VISIBLE_CLIENT_CONNECT_TIMEOUT_MS)}. Check ${BRIDGE_LOG_FILE}.`,
         );
         const cleanedLauncher = cleanupVisibleClientLauncher(launch);
         appendDaemonLog(
-          `visible_client_connect_timeout: adapter=${adapter} cwd=${this.cwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS} cleaned_launcher=${cleanedLauncher}`,
+          `visible_client_connect_timeout: adapter=${slotKey} cwd=${slotCwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS} cleaned_launcher=${cleanedLauncher}`,
         );
       }
     }
 
     const activated = options.openVisible === false || visibleConnected;
     if (activated) {
-      this.activeAdapter = adapter;
+      this.activeSlotKey = slotKey;
     }
 
     appendDaemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
+      `switch_adapter: adapter=${slotKey} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
     );
     return {
       activeAdapter: adapter,
+      activeSlotKey: slotKey,
       created,
       openedVisible,
       visibleConnected,
@@ -1092,19 +1124,20 @@ class WechatDaemon {
 
   private async createSlot(
     adapter: DaemonAdapterKind,
-    options: { profile?: string; sessionStartMode?: BridgeSessionStartMode },
+    options: { cwd: string; instance?: number; profile?: string; sessionStartMode?: BridgeSessionStartMode },
   ): Promise<DaemonSlot> {
-    clearLocalCompanionEndpoint(this.cwd, undefined, { adapter });
+    clearLocalCompanionEndpoint(options.cwd, undefined, { adapter });
     const runtime = createRuntimeHost({
       kind: adapter,
       command: resolveDefaultAdapterCommand(adapter),
-      cwd: this.cwd,
+      cwd: options.cwd,
+      instance: options.instance,
       profile: options.profile,
       lifecycle: "persistent",
       sessionStartMode: options.sessionStartMode,
       companionLaunchMode: "daemon_auto",
     });
-    const controller = new BridgeController(runtime, this.cwd);
+    const controller = new BridgeController(runtime, options.cwd);
     const slot: DaemonSlot = {
       adapter,
       runtime,
@@ -1127,7 +1160,7 @@ class WechatDaemon {
     await runtime.start();
     controller.syncLocalClientEndpoint();
     appendDaemonLog(
-      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
+      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${options.cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
     return slot;
   }
@@ -1394,7 +1427,8 @@ class WechatDaemon {
     if (emojiMatch) {
       const switchTarget = parseDaemonSwitchCommand(emojiMatch.command);
       if (switchTarget && emojiMatch.remainder) {
-        const result = await this.ensureSlot(switchTarget, {
+        const result = await this.ensureSlot(switchTarget.adapter, {
+          instance: switchTarget.instance,
           openVisible: true,
           reuseExistingVisible: true,
         });
@@ -1402,9 +1436,10 @@ class WechatDaemon {
           message = { ...message, text: emojiMatch.remainder };
         } else {
           const detail = formatDaemonSwitchResultDetail(result);
+          const targetLabel = buildSlotKey(switchTarget.adapter, switchTarget.instance);
           await this.queueWechatMessage(
             message.senderId,
-            `Could not activate terminal: ${switchTarget}.\n${detail}`,
+            `Could not activate terminal: ${targetLabel}.\n${detail}`,
           );
           return;
         }
@@ -1416,16 +1451,18 @@ class WechatDaemon {
       }
     }
 
-    const switchAdapter = parseDaemonSwitchCommand(message.text);
-    if (switchAdapter) {
-      const result = await this.ensureSlot(switchAdapter, {
+    const switchCmd = parseDaemonSwitchCommand(message.text);
+    if (switchCmd) {
+      const result = await this.ensureSlot(switchCmd.adapter, {
+        instance: switchCmd.instance,
         openVisible: true,
         reuseExistingVisible: true,
       });
       const detail = formatDaemonSwitchResultDetail(result);
+      const targetLabel = buildSlotKey(switchCmd.adapter, switchCmd.instance);
       const heading = result.activated
-        ? `Active terminal: ${switchAdapter}.`
-        : `Could not activate terminal: ${switchAdapter}.`;
+        ? `Active terminal: ${targetLabel}.`
+        : `Could not activate terminal: ${targetLabel}.`;
       await this.queueWechatMessage(
         message.senderId,
         `${heading}\n${detail}`,
@@ -1756,10 +1793,28 @@ class WechatDaemon {
   }
 
   private getActiveSlot(): DaemonSlot | null {
-    if (!this.activeAdapter) {
+    if (!this.activeSlotKey) {
       return null;
     }
-    return this.slots.get(this.activeAdapter) ?? null;
+    return this.slots.get(this.activeSlotKey) ?? null;
+  }
+
+  private resolveSlotByAdapter(adapter: DaemonAdapterKind): DaemonSlot | null {
+    // First check the active slot
+    if (this.activeSlotKey) {
+      const slot = this.slots.get(this.activeSlotKey);
+      if (slot && slot.adapter === adapter) return slot;
+    }
+    // Fallback: find any slot matching this adapter kind (prefer bare key)
+    const bareKey = adapter;
+    const bareSlot = this.slots.get(bareKey);
+    if (bareSlot) return bareSlot;
+    // Find first instance-numbered slot for this adapter
+    for (const [key, slot] of this.slots) {
+      const parsed = parseSlotKey(key);
+      if (parsed && parsed.adapter === adapter) return slot;
+    }
+    return null;
   }
 
   private async dispatchInboundWechatText(
@@ -2176,13 +2231,14 @@ async function waitForProcessExit(params: {
 
 function clearSingleBridgeLock(lock: BridgeLockPayload): void {
   try {
-    const current = readBridgeLockFile();
+    const lockFile = getBridgeLockFile(lock.instance);
+    const current = readBridgeLockFile(lock.instance);
     if (
       !current ||
       current.pid === lock.pid ||
       current.instanceId === lock.instanceId
     ) {
-      fs.rmSync(BRIDGE_LOCK_FILE, { force: true });
+      fs.rmSync(lockFile, { force: true });
     }
   } catch {
     // Best effort cleanup.
