@@ -58,6 +58,16 @@ jobs:
         with:
           node-version: "24"
 
+      # Cache Bun's global package cache so repeated CI runs (e.g. each new
+      # commit on a PR) skip re-downloading dependencies. Keyed on bun.lock,
+      # so the cache rebuilds only when dependencies actually change.
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+
       # frozen-lockfile guarantees a reproducible install; if a contributor
       # edits package.json they must also update bun.lock locally.
       - name: Install dependencies
