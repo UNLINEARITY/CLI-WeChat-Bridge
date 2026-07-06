@@ -1276,14 +1276,23 @@ function extractInlineWechatAttachments(text: string): ParsedWechatFinalReply {
   };
 }
 
+// Platform-independent absolute-path check for WeChat attachment candidates.
+// Recognizes Windows drive paths (C:\, C:/) and POSIX root paths (/, \), so an
+// agent-emitted path resolves on any host OS. Node's path.isAbsolute is
+// platform-specific: it rejects "C:\Users\..." on Linux/macOS, which dropped
+// the attachment and failed CI on non-Windows runners.
+function isWechatAttachmentAbsolutePath(candidate: string): boolean {
+  return /^(?:[A-Za-z]:[\\/]|[\\/])/.test(candidate);
+}
+
 function resolveWechatAttachmentPath(candidatePath: string): string | null {
   const normalizedCandidate = normalizeWechatAttachmentCandidate(candidatePath);
   if (!normalizedCandidate) {
     return null;
   }
 
-  if (path.isAbsolute(normalizedCandidate)) {
-    return path.normalize(normalizedCandidate);
+  if (isWechatAttachmentAbsolutePath(normalizedCandidate)) {
+    return normalizedCandidate;
   }
 
   const homeRelativeMatch =
@@ -1303,12 +1312,15 @@ function resolveWechatAttachmentPath(candidatePath: string): string | null {
   return path.normalize(path.join(os.homedir(), ...relativeSegments));
 }
 
+// Trim and clean a WeChat attachment candidate path. Intentionally does NOT
+// rewrite separators to path.sep: the path must keep its original separator
+// style (Windows "\" or POSIX "/") so the bridge can resolve agent-emitted
+// paths regardless of host OS (see isWechatAttachmentAbsolutePath).
 function normalizeWechatAttachmentCandidate(candidatePath: string): string {
   return candidatePath
     .trim()
     .replace(/^`|`$/g, "")
-    .replace(/\.\s+([A-Za-z0-9]{2,8})(?=$|[?/\s])/g, ".$1")
-    .replace(/[\\/]+/g, path.sep);
+    .replace(/\.\s+([A-Za-z0-9]{2,8})(?=$|[?/\s])/g, ".$1");
 }
 
 function inferInlineWechatAttachmentKind(filePath: string): WechatAttachmentKind | null {
