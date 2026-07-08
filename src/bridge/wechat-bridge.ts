@@ -254,7 +254,7 @@ function shouldInstanceBridgeProcessMessage(
   const match = text.match(INSTANCE_ROUTE_RE);
   if (match) {
     // Message has explicit routing — only process if it matches our instance
-    return parseInt(match[1], 10) === instance;
+    return parseInt(match[1]!, 10) === instance;
   }
   // No routing prefix — any instance can process (backward compatible)
   return true;
