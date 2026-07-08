@@ -4,6 +4,16 @@
 
 ## 版本列表
 
+### [v1.1.2](./1.1.2.md) / [中文说明](./1.1.2_CN.md)
+**跨平台安装修复 + 崩溃/竞态加固 + 原子持久化 + 环境变量与诊断增强 + 基于 npm 的更新检查 + 三平台 CI** - 修复 node-pty 在 macOS/Linux 因 spawn-helper 缺执行位导致的静默 PTY fallback；为 adapter 加入 turn 完成竞态守卫和 spawn 错误处理；共享状态原子写入、入站去重 fail-closed、bridge.log 限长；恢复被过严白名单丢弃的 Windows 环境变量（ANTHROPIC_BASE_URL/OPENAI_API_KEY）；check-update 改查 npm registry；新增 Ubuntu/macOS/Windows 三平台 CI 质量门禁
+- **跨平台安装**：postinstall 恢复 node-pty spawn-helper 执行位（修复 macOS/Linux posix_spawnp 失败的静默 fallback），并纳入 published files（修复全局安装 MODULE_NOT_FOUND）
+- **崩溃与竞态**：OpenCode 单调 turn token 防陈旧完成覆盖、Codex app-server spawn 错误处理、Claude invalid-resume 捕获、PTY fallback spawn/stdin 错误处理、POSIX 进程树 pgrep 后代清理
+- **持久化与去重**：context_tokens/bridge-state/bridge-lock 原子写入、入站 claim fail-closed、claim 清理基于 readdir 快照、bridge.log appendBoundedLog 5 MiB 上限、update-check setTimeout unref
+- **环境与消息**：Windows 传完整 process.env（恢复 ANTHROPIC_BASE_URL/OPENAI_API_KEY）、消息 grace 窗口 5s→30s、长回复 1200 字符分段、附件路径平台无关化、doctor 时钟偏差/代码页/代理检查、CLI_BRIDGE_STRICT_APPROVAL 严格审批
+- **更新检查**：wechat-check-update 改查 npm registry + GitHub tags API，全局安装可用；process.exit→process.exitCode 修复 Windows+Node24 的 UV_HANDLE_CLOSING 崩溃
+- **CI**：GitHub Actions 三平台质量门禁、双语 PR 模板、bun install 缓存、README CI 徽章
+- **统计**：36 个文件，新增 1,182 行，删除 159 行
+
 ### [v1.1.1](./1.1.1.md) / [中文说明](./1.1.1_CN.md)
 **按适配器收敛的 doctor 诊断 + 紧凑 i18n 输出 + 架构/PTY 排障文档** - `wechat-daemon --doctor` 保持 daemon 全局检查，独立桥接 `--doctor` 只检查对应 adapter，shell 模式不再列出无关 CLI；doctor 输出默认中文，`CLI_BRIDGE_LANG=en` 切换为纯英文，并用更紧凑的字段格式展示 bridge lock、endpoint、数据目录和凭据状态
 - **doctor 诊断**：覆盖 Node.js、Windows build、`node-pty`、adapter 命令、daemon endpoint、bridge lock、workspace companion endpoint、旧 endpoint、数据目录和凭据
@@ -161,6 +171,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.1.2 | 2026-07-07 | node-pty 跨平台执行位修复、崩溃/turn 竞态加固、原子持久化与入站 fail-closed 去重、Windows 环境变量与诊断增强、npm-based 更新检查、三平台 CI 质量门禁 | 36 个文件，+1,182/-159 |
 | 1.1.1 | 2026-06-02 | 按适配器收敛的 doctor 诊断、紧凑 i18n 输出、bridge lock 字段化展示、架构文档与 PTY 排障补充 | 12 个文件，+1,706/-8 |
 | 1.1.0 | 2026-05-27 | i18n 中文默认、Claude 思考转发、自动批准修复、批量审批、单桥 emoji 绑定、进程树清理、跨平台诊断 | 26 个文件，+922/-206 |
 | 1.0.9 | 2026-05-26 | 微信表情绑定、Stop 恢复、图片读取、daemon 会话保留、进程安全、macOS/Linux 可见终端、协议变更为 AGPL-3.0 双协议 | 6 个文件，+300 |
