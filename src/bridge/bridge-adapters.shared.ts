@@ -181,6 +181,12 @@ export const OPENCODE_SERVER_READY_TIMEOUT_MS = 10_000;
 export const OPENCODE_SSE_RECONNECT_DELAY_MS = 2_000;
 export const OPENCODE_SESSION_IDLE_SETTLE_MS = 1_500;
 export const OPENCODE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
+// `opencode serve` binds its TCP port before the HTTP layer is ready. The
+// health probe therefore retries within this total budget so the startup
+// race self-heals instead of hanging until undici's ~300s headersTimeout.
+export const OPENCODE_HTTP_READY_TIMEOUT_MS = 15_000;
+export const OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS = 3_000;
+export const OPENCODE_HTTP_READY_PROBE_INTERVAL_MS = 500;
 
 export type ShellRuntimeFamily = "powershell" | "posix";
 
