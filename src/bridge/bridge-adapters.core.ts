@@ -1,4 +1,5 @@
 ﻿import net from "node:net";
+import path from "node:path";
 import { spawn as spawnPty } from "node-pty";
 import type { IPty } from "node-pty";
 import { t } from "../i18n/index.ts";
@@ -49,6 +50,43 @@ const {
   resolveSpawnTarget,
   spawnFallbackProcess,
 } = shared;
+
+/**
+ * On Windows, node-pty (ConPTY) uses CreateProcess which can execute .cmd/.bat
+ * files directly — no need for the cmd.exe wrapper that resolveSpawnTarget adds
+ * for child_process.spawn compatibility.  The wrapper causes double-quoting when
+ * the script path contains spaces: node-pty quotes the already-quoted path,
+ * making cmd.exe treat the literal quotes as part of the filename.
+ */
+function unwrapCmdExeForPty(rawTarget: SpawnTarget): SpawnTarget {
+  if (process.platform !== "win32") {
+    return rawTarget;
+  }
+
+  const fileName = path.basename(rawTarget.file).toLowerCase();
+  if (fileName !== "cmd.exe") {
+    return rawTarget;
+  }
+
+  const args = rawTarget.args;
+  if (args.length < 4 || args[0] !== "/d" || args[1] !== "/s" || args[2] !== "/c") {
+    return rawTarget;
+  }
+
+  // Strip surrounding double-quotes from the /c argument to recover the
+  // actual script path.  quoteForCmd wraps paths containing spaces in
+  // double-quotes, so we reverse that here.
+  const commandLine = args[3] ?? "";
+  const actualScript = commandLine.replace(/^"(.*)"$/s, "$1");
+
+  // Remaining args beyond the /c handler (args[4..]) are extra arguments
+  // that were passed through wrapWithCmdExe; forward them as the new target's
+  // args so they stay prepended before buildSpawnArgs().
+  return {
+    file: actualScript,
+    args: args.slice(4),
+  };
+}
 
 export class LocalCompanionProxyAdapter implements BridgeAdapter {
   private readonly options: AdapterOptions;
@@ -691,7 +729,8 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
 
     let spawnTarget: SpawnTarget | null = null;
     try {
-      spawnTarget = resolveSpawnTarget(this.options.command, this.options.kind);
+      const rawTarget = resolveSpawnTarget(this.options.command, this.options.kind);
+      spawnTarget = unwrapCmdExeForPty(rawTarget);
       const env = this.buildEnv();
       const spawnArgs = [...spawnTarget.args, ...this.buildSpawnArgs()];
 
