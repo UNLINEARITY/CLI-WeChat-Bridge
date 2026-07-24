@@ -8,8 +8,28 @@ import {
 } from "../wechat/channel-config.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 
-export const DAEMON_PROTOCOL_VERSION = 1;
+export const DAEMON_PROTOCOL_VERSION = 2;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode";
+
+/** Build a slot map key from adapter kind and optional instance number.
+ *  `buildSlotKey("claude")` → `"claude"`
+ *  `buildSlotKey("claude", 1)` → `"claude@1"` */
+export function buildSlotKey(adapter: DaemonAdapterKind, instance?: number): string {
+  if (instance !== undefined && instance > 0) {
+    return `${adapter}@${instance}`;
+  }
+  return adapter;
+}
+
+/** Parse a slot map key back into adapter kind and optional instance number.
+ *  `parseSlotKey("claude@1")` → `{ adapter: "claude", instance: 1 }`
+ *  `parseSlotKey("claude")` → `{ adapter: "claude" }` */
+export function parseSlotKey(key: string): { adapter: DaemonAdapterKind; instance?: number } | null {
+  const match = key.match(/^(codex|claude|opencode)(?:@(\d+))?$/);
+  if (!match) return null;
+  const instance = match[2] ? parseInt(match[2], 10) : undefined;
+  return { adapter: match[1] as DaemonAdapterKind, instance };
+}
 
 export type DaemonEndpoint = {
   protocolVersion: number;
@@ -22,6 +42,7 @@ export type DaemonEndpoint = {
 
 export type DaemonSlotSummary = {
   adapter: DaemonAdapterKind;
+  instance?: number;
   status: string;
   cwd: string;
   companionPid?: number;
@@ -32,6 +53,7 @@ export type DaemonSlotSummary = {
 export type DaemonStatus = {
   cwd: string;
   activeAdapter?: DaemonAdapterKind;
+  activeSlotKey?: string;
   startedAt: string;
   slots: DaemonSlotSummary[];
 };
@@ -40,6 +62,7 @@ export type DaemonRequest =
   | {
       command: "ensure_slot";
       adapter: DaemonAdapterKind;
+      instance?: number;
       cwd: string;
       profile?: string;
       cliArgs?: string[];
@@ -50,6 +73,8 @@ export type DaemonRequest =
   | {
       command: "switch_adapter";
       adapter: DaemonAdapterKind;
+      instance?: number;
+      cwd?: string;
       profile?: string;
       cliArgs?: string[];
       openVisible?: boolean;

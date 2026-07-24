@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 import type net from "node:net";
 
 import {
@@ -41,10 +42,12 @@ export type LocalCompanionEndpoint = LocalClientEndpoint;
 
 type EndpointReadOptions = {
   adapter?: BridgeAdapterKind;
+  instance?: number;
 };
 
 type EndpointWriteOptions = {
   writeLegacy?: boolean;
+  instance?: number;
 };
 
 export type LocalCompanionMessage =
@@ -195,8 +198,9 @@ export function writeLocalCompanionEndpoint(
     ...serializeEndpoint(endpoint),
   };
 
+  const instance = options.instance ?? endpoint.instance;
   fs.writeFileSync(
-    getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind),
+    getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind, instance),
     JSON.stringify(payload, null, 2),
     "utf8",
   );
@@ -213,7 +217,7 @@ export function readLocalCompanionEndpoint(
     const { endpointFile } = getWorkspaceChannelPaths(cwd);
     if (options.adapter) {
       const scoped = readEndpointFile(
-        getWorkspaceAdapterEndpointFile(cwd, options.adapter),
+        getWorkspaceAdapterEndpointFile(cwd, options.adapter, options.instance),
       );
       if (scoped) {
         return scoped;
@@ -233,16 +237,84 @@ export function clearLocalCompanionEndpoint(
   options: EndpointReadOptions = {},
 ): void {
   try {
-    const { endpointFile } = getWorkspaceChannelPaths(cwd);
-    const files = options.adapter
-      ? [getWorkspaceAdapterEndpointFile(cwd, options.adapter), endpointFile]
-      : [
-          endpointFile,
-          getWorkspaceAdapterEndpointFile(cwd, "codex"),
-          getWorkspaceAdapterEndpointFile(cwd, "claude"),
-          getWorkspaceAdapterEndpointFile(cwd, "opencode"),
-          getWorkspaceAdapterEndpointFile(cwd, "shell"),
-        ];
+    const { workspaceDir, endpointFile: legacyFile } = getWorkspaceChannelPaths(cwd);
+    if (options.adapter) {
+      // When clearing by adapter with a specific instance, only clear that
+      // instance file.  When clearing without an instance, remove all files
+      // matching the adapter prefix (including instance-specific ones) and
+      // the legacy endpoint file.
+      if (options.instance !== undefined && options.instance > 0) {
+        const filePath = getWorkspaceAdapterEndpointFile(cwd, options.adapter, options.instance);
+        if (fs.existsSync(filePath)) {
+          const endpoint = readEndpointFile(filePath);
+          if (!instanceId || !endpoint || endpoint.instanceId === instanceId) {
+            fs.rmSync(filePath, { force: true });
+          }
+        }
+      } else {
+        // Clear all files matching this adapter prefix (e.g. claude*, codex*, opencode*)
+        let entries: fs.Dirent[];
+        try {
+          entries = fs.readdirSync(workspaceDir, { withFileTypes: true });
+        } catch {
+          entries = [];
+        }
+        for (const entry of entries) {
+          if (
+            entry.isFile() &&
+            entry.name.startsWith(`${options.adapter}-`) &&
+            entry.name.endsWith("-companion-endpoint.json")
+          ) {
+            const filePath = path.join(workspaceDir, entry.name);
+            if (!instanceId) {
+              fs.rmSync(filePath, { force: true });
+            } else {
+              const endpoint = readEndpointFile(filePath);
+              if (!endpoint || endpoint.instanceId === instanceId) {
+                fs.rmSync(filePath, { force: true });
+              }
+            }
+          }
+          // Also match instance-specific files: claude@1-companion-endpoint.json
+          if (
+            entry.isFile() &&
+            entry.name.startsWith(`${options.adapter}@`) &&
+            entry.name.endsWith("-companion-endpoint.json")
+          ) {
+            const filePath = path.join(workspaceDir, entry.name);
+            if (!instanceId) {
+              fs.rmSync(filePath, { force: true });
+            } else {
+              const endpoint = readEndpointFile(filePath);
+              if (!endpoint || endpoint.instanceId === instanceId) {
+                fs.rmSync(filePath, { force: true });
+              }
+            }
+          }
+        }
+        // Also clear the legacy endpoint file
+        if (fs.existsSync(legacyFile)) {
+          if (!instanceId) {
+            fs.rmSync(legacyFile, { force: true });
+          } else {
+            const endpoint = readEndpointFile(legacyFile);
+            if (!endpoint || endpoint.instanceId === instanceId) {
+              fs.rmSync(legacyFile, { force: true });
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // No adapter specified: clear all endpoint files.
+    const files = [
+      legacyFile,
+      getWorkspaceAdapterEndpointFile(cwd, "codex"),
+      getWorkspaceAdapterEndpointFile(cwd, "claude"),
+      getWorkspaceAdapterEndpointFile(cwd, "opencode"),
+      getWorkspaceAdapterEndpointFile(cwd, "shell"),
+    ];
 
     for (const filePath of files) {
       if (!fs.existsSync(filePath)) {

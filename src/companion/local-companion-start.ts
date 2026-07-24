@@ -38,6 +38,7 @@ type LocalCompanionLaunchAdapter = Exclude<BridgeAdapterKind, "shell">;
 type LocalCompanionStartCliOptions = {
   adapter: LocalCompanionLaunchAdapter;
   cwd: string;
+  instance?: number;
   profile?: string;
   timeoutMs: number;
   sessionStartMode: BridgeSessionStartMode;
@@ -196,6 +197,7 @@ export function decideLaunchAction(
 export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   let adapter: LocalCompanionLaunchAdapter = DEFAULT_ADAPTER;
   let cwd = process.cwd();
+  let instance: number | undefined;
   let profile: string | undefined;
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
   const cliArgs: string[] = [];
@@ -210,14 +212,15 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...codex args]",
-          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...claude args]",
-          "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...opencode args]",
-          "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
+          "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--instance <N>] [...codex args]",
+          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--instance <N>] [...claude args]",
+          "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--instance <N>] [...opencode args]",
+          "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--instance <N>] [...cli args]",
           "",
           "Starts a bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
           "Claude and OpenCode launchers start a fresh CLI session by default.",
           "All adapters are companion-bound: closing the companion/panel also stops the bridge.",
+          "Use --instance <N> to start a numbered instance that can be addressed via /claude@N in WeChat.",
           "Unknown arguments are forwarded to the visible CLI client.",
           "",
         ].join("\n"),
@@ -239,6 +242,19 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
         throw new Error("--cwd requires a value");
       }
       cwd = path.resolve(next);
+      i += 1;
+      continue;
+    }
+
+    if (arg === "--instance") {
+      if (!next) {
+        throw new Error("--instance requires a value");
+      }
+      const parsed = Number(next);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        throw new Error("--instance must be a non-negative integer");
+      }
+      instance = parsed > 0 ? parsed : undefined;
       i += 1;
       continue;
     }
@@ -271,6 +287,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   return {
     adapter,
     cwd,
+    instance,
     profile,
     timeoutMs,
     sessionStartMode: defaultSessionStartMode(adapter),
@@ -414,6 +431,10 @@ export function buildBackgroundBridgeArgs(
     lifecycle,
   );
 
+  if (options.instance && options.instance > 0) {
+    args.push("--instance", String(options.instance));
+  }
+
   if (options.sessionStartMode !== "restore") {
     args.push("--session-start-mode", options.sessionStartMode);
   }
@@ -478,7 +499,7 @@ async function ensureBridgeReady(
   // leftover endpoint.  The bridge (WeChat transport) may have crashed while
   // the opencode server kept running.  Starting only the panel would leave no
   // bridge to poll WeChat messages.
-  const lock = readBridgeLockFile();
+  const lock = readBridgeLockFile(options.instance);
   const lockProcessAlive = lock ? isPidAlive(lock.pid) : false;
   if (!lock || !lockProcessAlive) {
     if (lock && !lockProcessAlive) {
@@ -560,15 +581,17 @@ export async function tryDelegateToDaemon(
     return false;
   }
 
-  if (!isSameWorkspaceCwd(endpoint.cwd, options.cwd)) {
+  // Instance-specific slots are allowed to have their own CWD.
+  if (!options.instance && !isSameWorkspaceCwd(endpoint.cwd, options.cwd)) {
     throw new Error(
-      `wechat-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}; v1 daemon switching is limited to its startup cwd.`,
+      `wechat-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}. Use --instance <N> for per-directory slots.`,
     );
   }
 
   const response: DaemonResponse = await sendRequest(endpoint, {
     command: "ensure_slot",
     adapter: options.adapter,
+    instance: options.instance,
     cwd: options.cwd,
     profile: options.profile,
     cliArgs: options.cliArgs,
