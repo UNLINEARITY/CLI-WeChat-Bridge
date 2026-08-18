@@ -24,15 +24,27 @@ import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
   containsWechatOutboundAttachmentPathDeep,
+  detectCliApproval,
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
   isStrictApprovalModeEnabled,
   normalizeOutput,
+  nowIso,
   truncatePreview,
 } from "./bridge-utils.ts";
 import {
+  coerceWebSocketMessageData,
+  describeUnknownError,
+  getCodexRpcRequestId,
+  getLocalCompanionCommandName,
   getNotificationThreadId,
+  getNotificationTurnId,
+  getSharedSessionIdFromAdapterState,
+  isRecentIsoTimestamp,
   isRecord,
+  normalizeCodexRpcError,
+  quotePosixCommandArg,
+  quoteWindowsCommandArg,
   type CodexRpcRequestId,
 } from "./bridge-adapter-common.ts";
 
@@ -84,12 +96,12 @@ export type ResolveSpawnTargetOptions = {
 export type CodexRpcPendingRequest = {
   method: string;
   resolve: (value: unknown) => void;
-  reject: (reason?: unknown) => void;
+  reject: (error: Error) => void;
 };
 
 export type CodexQueuedNotification = {
   method: string;
-  params: Record<string, unknown>;
+  params: unknown;
 };
 
 export type CodexPendingApprovalRequest = {
@@ -124,25 +136,19 @@ export type CodexActiveTurn = {
 };
 
 export type CodexSessionMeta = {
-  id?: string;
-  timestamp?: string;
+  id: string;
   cwd?: string;
-  source?: string | { custom?: string };
-  originator?: string;
-};
-
-export type CodexSessionSummary = {
-  threadId: string;
-  title: string;
-  lastUpdatedAt: string;
+  timestamp?: string;
   source?: string;
-  filePath: string;
+  originator?: string;
+  model_provider?: string;
+  cli_version?: string;
 };
 
 export type CodexRecentSessionFile = {
-  threadId: string;
   filePath: string;
-  modifiedAtMs: number;
+  threadId: string;
+  updatedAtMs: number;
 };
 
 export type ClaudePendingHookApproval = {
@@ -153,18 +159,10 @@ export type ClaudePendingHookApproval = {
 export const DEFAULT_COLS = 120;
 export const DEFAULT_ROWS = 30;
 export const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-export const WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".com"];
-export const WINDOWS_POWERSHELL_EXTENSION = ".ps1";
-export const CODEX_SESSION_POLL_INTERVAL_MS = 500;
-export const CODEX_SESSION_MATCH_WINDOW_MS = 30_000;
-export const CODEX_SESSION_FALLBACK_SCAN_INTERVAL_MS = 5_000;
-export const CODEX_THREAD_SIGNAL_TTL_MS = 30_000;
-export const CODEX_RECENT_SESSION_KEY_LIMIT = 64;
-export const INTERRUPT_SETTLE_DELAY_MS = 1_500;
-export const CODEX_FINAL_REPLY_SETTLE_DELAY_MS = 1_000;
-export const CODEX_STARTUP_WARMUP_MS = 1_200;
+
 export const CODEX_APP_SERVER_HOST = "127.0.0.1";
-export const CODEX_APP_SERVER_READY_TIMEOUT_MS = 10_000;
+export const CODEX_APP_SERVER_READY_TIMEOUT_MS = 15_000;
+export const CODEX_APP_SERVER_RPC_TIMEOUT_MS = 25_000;
 export const CODEX_APP_SERVER_LOG_LIMIT = 12_000;
 export const CODEX_RPC_CONNECT_RETRY_MS = 150;
 export const CODEX_RPC_RECONNECT_TIMEOUT_MS = 5_000;
@@ -173,19 +171,20 @@ export const LOCAL_COMPANION_RECONNECT_GRACE_MS = 15_000;
 export const CLAUDE_HOOK_LISTEN_HOST = "127.0.0.1";
 export const CLAUDE_HELP_PROBE_TIMEOUT_MS = 5_000;
 export const CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
-export const DEFAULT_UNIX_SHELL_CANDIDATES = ["pwsh", "bash", "zsh", "sh"] as const;
-export const POSIX_SHELL_NAMES = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
-export const CLAUDE_FLAG_SUPPORT_CACHE = new Map<string, boolean>();
 export const OPENCODE_SERVER_HOST = "127.0.0.1";
 export const OPENCODE_SERVER_READY_TIMEOUT_MS = 10_000;
 export const OPENCODE_SSE_RECONNECT_DELAY_MS = 2_000;
 export const OPENCODE_SESSION_IDLE_SETTLE_MS = 1_500;
 export const OPENCODE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
+export const DEFAULT_UNIX_SHELL_CANDIDATES = ["pwsh", "bash", "zsh", "sh"] as const;
+export const POSIX_SHELL_NAMES = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
+export const CLAUDE_FLAG_SUPPORT_CACHE = new Map<string, boolean>();
 
 export type ShellRuntimeFamily = "powershell" | "posix";
 
 export type ShellRuntime = {
   family: ShellRuntimeFamily;
+  executable: string;
   launchArgs: string[];
 };
 
@@ -207,13 +206,13 @@ export function buildCodexCliArgs(
   const args: string[] = [];
 
   if (options.resumeThreadId) {
-    args.push("resume", options.resumeThreadId);
+    args.push("resume", options.resumeThreadId, "--remote", remoteUrl);
+  } else {
+    args.push("--remote", remoteUrl);
   }
 
-  args.push("--enable", "tui_app_server", "--remote", remoteUrl);
-
   if (options.inlineMode) {
-    args.push("--no-alt-screen");
+    args.push("--inline");
   }
 
   if (options.profile) {
@@ -224,7 +223,7 @@ export function buildCodexCliArgs(
 }
 
 export function hasClaudeNoAltScreenOption(helpText: string): boolean {
-  return helpText.includes("--no-alt-screen");
+  return /--no-alt-screen\b/.test(helpText);
 }
 
 export function buildClaudeCliArgs(options: {
@@ -244,10 +243,13 @@ export function buildClaudeCliArgs(options: {
   if (options.includeNoAltScreen) {
     args.push("--no-alt-screen");
   }
+
   args.push("--settings", options.settingsFilePath);
+
   if (options.resumeConversationId) {
     args.push("--resume", options.resumeConversationId);
   }
+
   if (options.profile) {
     args.push("--profile", options.profile);
   }
@@ -270,16 +272,7 @@ export function assertNoReservedExtraCliArgs(
 }
 
 export function isClaudeInvalidResumeError(text: string): boolean {
-  const normalized = normalizeOutput(text);
-  if (!normalized) {
-    return false;
-  }
-
-  return (
-    normalized.includes("No conversation found with session ID:") ||
-    normalized.includes("No conversation found with session name:") ||
-    normalized.includes("No conversation found with session:")
-  );
+  return /Invalid conversation ID\b/i.test(text);
 }
 
 export function shouldIncludeClaudeNoAltScreen(command: string): boolean {
@@ -325,12 +318,8 @@ export function buildCodexApprovalRequest(
 
   if (method === "item/commandExecution/requestApproval") {
     const command = typeof params.command === "string" ? params.command : "";
-    const cwd = typeof params.cwd === "string" ? params.cwd : "";
     const reason = typeof params.reason === "string" ? params.reason : "";
-    const preview =
-      command && cwd
-        ? `${command} (${cwd})`
-        : command || reason || "Command execution approval requested.";
+    const preview = command || reason || "Command execution approval requested.";
 
     return {
       source: "cli",
@@ -594,37 +583,19 @@ export function buildCodexPermissionsRequestApprovalResponse(
       permissions.network = network;
     }
     if (fileSystem) {
+      if (options.strictAutoReview === true && Array.isArray(fileSystem.write)) {
+        const safeWritePaths = fileSystem.write.filter(
+          (pathValue) => typeof pathValue === "string" && !isHighRiskPermissionPath(pathValue),
+        );
+        fileSystem.write = safeWritePaths;
+      }
       permissions.fileSystem = fileSystem;
     }
   }
 
-  const response: Record<string, unknown> = {
+  return {
     permissions,
     scope: "turn",
-  };
-  if (options.strictAutoReview) {
-    response.strictAutoReview = true;
-  }
-  return response;
-}
-
-export function buildCodexMcpServerElicitationDeclineResponse(): Record<string, unknown> {
-  return {
-    action: "decline",
-    content: null,
-    _meta: null,
-  };
-}
-
-export function buildCodexDynamicToolCallFailureResponse(): Record<string, unknown> {
-  return {
-    contentItems: [
-      {
-        type: "inputText",
-        text: "Dynamic tool calls are not supported by the WeChat bridge.",
-      },
-    ],
-    success: false,
   };
 }
 
@@ -665,7 +636,7 @@ export function buildCodexUserInputRequest(params: unknown): UserInputRequest | 
                 description,
               };
             })
-            .filter((option): option is UserInputRequestOption => Boolean(option))
+            .filter((option): option is NonNullable<typeof option> => Boolean(option))
         : null;
 
       return {
@@ -694,356 +665,405 @@ export function extractCodexFinalTextFromItem(item: unknown): string | null {
     return null;
   }
 
-  const text = typeof item.text === "string" ? normalizeOutput(item.text).trim() : "";
-  return text || null;
+  return typeof item.text === "string" && item.text.trim() ? item.text.trim() : null;
+}
+
+export function extractCodexThreadStartedThreadId(item: unknown): string | null {
+  if (!isRecord(item) || item.type !== "thread_started") {
+    return null;
+  }
+
+  return typeof item.thread_id === "string" && item.thread_id.trim()
+    ? item.thread_id.trim()
+    : null;
+}
+
+export function extractCodexThreadFollowIdFromStatusChanged(
+  params: Record<string, unknown>,
+): string | null {
+  if (params.status !== "idle" && params.status !== "busy") {
+    return null;
+  }
+
+  return typeof params.threadId === "string" && params.threadId.trim()
+    ? params.threadId.trim()
+    : null;
 }
 
 export function extractCodexUserMessageText(item: unknown): string | null {
-  if (!isRecord(item) || item.type !== "userMessage" || !Array.isArray(item.content)) {
+  if (!isRecord(item) || item.type !== "userMessage") {
     return null;
   }
 
-  const parts = item.content
-    .map((entry) => {
-      if (!isRecord(entry) || typeof entry.type !== "string") {
-        return "";
-      }
-
-      switch (entry.type) {
-        case "text":
-          return typeof entry.text === "string" ? entry.text : "";
-        case "image":
-          return "[image]";
-        case "localImage":
-          return typeof entry.path === "string" ? `[local image: ${entry.path}]` : "[local image]";
-        case "skill":
-          return typeof entry.name === "string" ? `[skill: ${entry.name}]` : "[skill]";
-        case "mention":
-          return typeof entry.name === "string" ? `[mention: ${entry.name}]` : "[mention]";
-        default:
-          return "";
-      }
-    })
-    .filter(Boolean);
-
-  const text = normalizeOutput(parts.join("\n")).trim();
-  return text || null;
+  return typeof item.text === "string" && item.text.trim() ? item.text.trim() : null;
 }
 
-export function extractCodexThreadFollowIdFromStatusChanged(params: unknown): string | null {
-  if (!isRecord(params)) {
-    return null;
-  }
-
-  const threadId = getNotificationThreadId(params);
-  if (!threadId) {
-    return null;
-  }
-
-  const status = isRecord(params.status) ? params.status : null;
-  if (!status) {
-    return threadId;
-  }
-
-  const statusType = typeof status.type === "string" ? status.type : "";
-  if (statusType === "notLoaded") {
-    return null;
-  }
-
-  if (statusType === "active" || statusType === "idle" || statusType === "systemError") {
-    return threadId;
-  }
-
-  return threadId;
+export function buildCodexDynamicToolCallFailureResponse(): Record<string, unknown> {
+  return {
+    error: {
+      message: "Dynamic tool call unsupported.",
+    },
+  };
 }
 
-export function extractCodexThreadStartedThreadId(params: unknown): string | null {
-  if (!isRecord(params) || !isRecord(params.thread)) {
-    return null;
-  }
-
-  return typeof params.thread.id === "string" ? params.thread.id : null;
-}
-
-export function shouldIgnoreCodexSessionReplayEntry(
-  timestamp: unknown,
-  ignoreBeforeMs: number | null,
-): boolean {
-  if (ignoreBeforeMs === null) {
-    return false;
-  }
-  if (typeof timestamp !== "string") {
-    return true;
-  }
-
-  const parsedTimestampMs = Date.parse(timestamp);
-  if (!Number.isFinite(parsedTimestampMs)) {
-    return true;
-  }
-
-  return parsedTimestampMs < ignoreBeforeMs;
-}
-
-export function shouldRecoverCodexStaleBusyState(params: {
-  status: BridgeAdapterState["status"];
-  pendingTurnStart: boolean;
-  hasActiveTurn: boolean;
-  hasPendingApproval: boolean;
-  hasPendingUserInput: boolean;
-  activeTurnId?: string;
-}): boolean {
-  return (
-    params.status === "busy" &&
-    !params.pendingTurnStart &&
-    !params.hasActiveTurn &&
-    !params.hasPendingApproval &&
-    !params.hasPendingUserInput &&
-    !params.activeTurnId
-  );
+export function buildCodexMcpServerElicitationDeclineResponse(): Record<string, unknown> {
+  return {
+    action: "decline",
+  };
 }
 
 export function shouldAutoCompleteCodexWechatTurnAfterFinalReply(params: {
-  candidateTurnId: string | null;
-  activeTurnId?: string;
-  activeTurnOrigin?: BridgeTurnOrigin;
+  turnId: string;
+  activeTurnOrigin: BridgeTurnOrigin | undefined;
   pendingTurnStart: boolean;
   hasPendingApproval: boolean;
-  hasPendingUserInput: boolean;
+  hasPendingUserInput?: boolean;
   hasFinalOutput: boolean;
   hasCompletedTurn: boolean;
   lastActivityAtMs: number | null;
   nowMs: number;
-  settleDelayMs: number;
+  idleSettleMs?: number;
 }): boolean {
-  return (
-    typeof params.candidateTurnId === "string" &&
-    params.activeTurnId === params.candidateTurnId &&
-    params.activeTurnOrigin === "wechat" &&
-    !params.pendingTurnStart &&
-    !params.hasPendingApproval &&
-    !params.hasPendingUserInput &&
-    params.hasFinalOutput &&
-    !params.hasCompletedTurn &&
-    typeof params.lastActivityAtMs === "number" &&
-    Number.isFinite(params.lastActivityAtMs) &&
-    params.nowMs - params.lastActivityAtMs >= params.settleDelayMs
-  );
-}
-
-export function getEnvValue(
-  env: Record<string, string | undefined>,
-  key: string,
-): string | undefined {
-  const direct = env[key];
-  if (direct !== undefined) {
-    return direct;
-  }
-
-  const matchedKey = Object.keys(env).find(
-    (candidate) => candidate.toLowerCase() === key.toLowerCase(),
-  );
-  return matchedKey ? env[matchedKey] : undefined;
-}
-
-export function fileExists(filePath: string): boolean {
-  try {
-    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
-  } catch {
+  if (
+    params.activeTurnOrigin !== "wechat" ||
+    params.pendingTurnStart ||
+    params.hasPendingApproval ||
+    params.hasPendingUserInput ||
+    !params.hasFinalOutput ||
+    params.hasCompletedTurn ||
+    params.lastActivityAtMs === null
+  ) {
     return false;
   }
+
+  const idleSettleMs = params.idleSettleMs ?? 150;
+  return params.nowMs - params.lastActivityAtMs >= idleSettleMs;
 }
 
-export function isPathLikeCommand(command: string): boolean {
-  return (
-    path.isAbsolute(command) ||
-    command.startsWith(".") ||
-    command.includes("/") ||
-    command.includes("\\")
-  );
+export function isTrackedTurnTerminalEvent(params: Record<string, unknown>): boolean {
+  if (params.status === "completed" || params.status === "failed" || params.status === "cancelled") {
+    return true;
+  }
+
+  if (isRecord(params.turn)) {
+    const status = params.turn.status;
+    return status === "completed" || status === "failed" || status === "cancelled";
+  }
+
+  return false;
 }
 
-export function getWindowsCommandExtensions(
-  env: Record<string, string | undefined>,
-): string[] {
-  const configured = (getEnvValue(env, "PATHEXT") ?? "")
-    .split(";")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter(Boolean);
+export function parseCodexSessionMeta(line: string): CodexSessionMeta | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
 
-  const ordered = [...WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS, "", WINDOWS_POWERSHELL_EXTENSION];
-  for (const extension of configured) {
-    if (!ordered.includes(extension)) {
-      ordered.push(extension);
+  try {
+    const event = JSON.parse(trimmed) as {
+      type?: string;
+      payload?: Record<string, unknown>;
+    };
+    if (event.type !== "session_meta" || !isRecord(event.payload)) {
+      return null;
     }
-  }
-  return ordered;
-}
 
-export function expandCommandCandidates(
-  command: string,
-  platform: NodeJS.Platform,
-  env: Record<string, string | undefined>,
-): string[] {
-  if (platform !== "win32") {
-    return [command];
-  }
-
-  if (path.extname(command)) {
-    return [command];
-  }
-
-  return getWindowsCommandExtensions(env).map((extension) => `${command}${extension}`);
-}
-
-export function resolvePathLikeCommand(
-  command: string,
-  platform: NodeJS.Platform,
-  env: Record<string, string | undefined>,
-): string | undefined {
-  const absoluteCommand = path.resolve(command);
-  for (const candidate of expandCommandCandidates(absoluteCommand, platform, env)) {
-    if (fileExists(candidate)) {
-      return candidate;
+    const id = typeof event.payload.id === "string" ? event.payload.id : undefined;
+    if (!id) {
+      return null;
     }
+
+    return {
+      id,
+      cwd: typeof event.payload.cwd === "string" ? event.payload.cwd : undefined,
+      timestamp:
+        typeof event.payload.timestamp === "string" ? event.payload.timestamp : undefined,
+      source: typeof event.payload.source === "string" ? event.payload.source : undefined,
+      originator:
+        typeof event.payload.originator === "string" ? event.payload.originator : undefined,
+      model_provider:
+        typeof event.payload.model_provider === "string"
+          ? event.payload.model_provider
+          : undefined,
+      cli_version:
+        typeof event.payload.cli_version === "string" ? event.payload.cli_version : undefined,
+    };
+  } catch {
+    return null;
   }
-  return undefined;
 }
 
-export function findCommandOnPath(
-  command: string,
-  platform: NodeJS.Platform,
-  env: Record<string, string | undefined>,
-): string | undefined {
-  const pathEntries = (getEnvValue(env, "PATH") ?? "")
-    .split(path.delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+export function getCodexSessionSource(meta: CodexSessionMeta | null | undefined): string | null {
+  if (!meta) {
+    return null;
+  }
 
-  const candidates = expandCommandCandidates(command, platform, env);
-  for (const directory of pathEntries) {
-    for (const candidate of candidates) {
-      const candidatePath = path.join(directory, candidate);
-      if (fileExists(candidatePath)) {
-        return candidatePath;
+  if (typeof meta.source === "string" && meta.source.trim()) {
+    return meta.source.trim().toLowerCase();
+  }
+
+  if (typeof meta.originator === "string" && meta.originator.trim()) {
+    return meta.originator.trim().toLowerCase();
+  }
+
+  return null;
+}
+
+export function isTrustedCodexFallbackSession(meta: CodexSessionMeta | null | undefined): boolean {
+  const sessionSource = getCodexSessionSource(meta);
+  if (!sessionSource) {
+    return false;
+  }
+
+  if (sessionSource === "cli") {
+    return true;
+  }
+
+  const originator = normalizeOutput(meta?.originator ?? "").trim().toLowerCase();
+  return sessionSource === "vscode" && originator === "wechat-bridge";
+}
+
+export function parseCodexSessionUserMessage(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const event = JSON.parse(trimmed) as {
+      type?: string;
+      payload?: Record<string, unknown>;
+    };
+    if (event.type !== "user_message" || !isRecord(event.payload)) {
+      return null;
+    }
+
+    return typeof event.payload.message === "string" && event.payload.message.trim()
+      ? event.payload.message.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function readCodexSessionFileSummary(filePath: string): {
+  meta: CodexSessionMeta | null;
+  firstUserMessage: string | null;
+  lastActivityAt: string | null;
+} {
+  let meta: CodexSessionMeta | null = null;
+  let firstUserMessage: string | null = null;
+  let lastActivityAt: string | null = null;
+
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    for (const rawLine of content.split("\n")) {
+      const line = rawLine.trim();
+      if (!line) {
+        continue;
+      }
+
+      if (!meta) {
+        meta = parseCodexSessionMeta(line);
+      }
+
+      if (!firstUserMessage) {
+        firstUserMessage = parseCodexSessionUserMessage(line);
+      }
+
+      try {
+        const event = JSON.parse(line) as {
+          payload?: { timestamp?: unknown };
+        };
+        if (typeof event.payload?.timestamp === "string") {
+          lastActivityAt = event.payload.timestamp;
+        }
+      } catch {
+        // Best effort timestamp extraction.
       }
     }
+  } catch {
+    return { meta: null, firstUserMessage: null, lastActivityAt: null };
   }
 
-  return undefined;
+  return { meta, firstUserMessage, lastActivityAt };
 }
 
-export function resolveCommandPath(
-  command: string,
-  platform: NodeJS.Platform,
-  env: Record<string, string | undefined>,
-): string | undefined {
-  if (isPathLikeCommand(command)) {
-    return resolvePathLikeCommand(command, platform, env);
-  }
+export function collectCodexSessionFiles(sessionsDir: string): string[] {
+  const files: string[] = [];
 
-  return findCommandOnPath(command, platform, env);
-}
+  const visit = (currentDir: string): void => {
+    let entries: fs.Dirent[] = [];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
 
-export function resolveCmdExe(env: Record<string, string | undefined>): string {
-  const systemRoot = getEnvValue(env, "SystemRoot") ?? getEnvValue(env, "SYSTEMROOT");
-  const configured =
-    getEnvValue(env, "ComSpec") ??
-    getEnvValue(env, "COMSPEC") ??
-    (systemRoot ? `${systemRoot.replace(/[\\/]$/, "")}\\System32\\cmd.exe` : undefined);
-
-  return configured || "cmd.exe";
-}
-
-export function quoteForCmd(argument: string): string {
-  if (!argument) {
-    return '""';
-  }
-
-  if (!/[\s"]/u.test(argument)) {
-    return argument;
-  }
-
-  return `"${argument.replace(/"/g, '""')}"`;
-}
-
-export function wrapWithCmdExe(
-  scriptPath: string,
-  extraArgs: string[],
-  env: Record<string, string | undefined>,
-): SpawnTarget {
-  const commandLine = [quoteForCmd(scriptPath), ...extraArgs.map(quoteForCmd)].join(" ");
-  return {
-    file: resolveCmdExe(env),
-    args: ["/d", "/s", "/c", commandLine],
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        visit(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+        files.push(fullPath);
+      }
+    }
   };
+
+  visit(sessionsDir);
+  return files;
 }
 
-export function resolveBundledWindowsExe(
-  kind: Extract<BridgeAdapterKind, "codex" | "claude">,
-  launcherPath: string,
-): string | undefined {
-  const launcherDirectory = path.dirname(launcherPath);
-  const openAiDirectory = path.join(launcherDirectory, "node_modules", "@openai");
-  if (!fs.existsSync(openAiDirectory)) {
-    return undefined;
+export function listCodexResumeSessions(
+  cwd: string,
+  limit = 10,
+): BridgeResumeSessionCandidate[] {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (!home) {
+    return [];
   }
 
-  const vendorSegments = [
-    "vendor",
-    "x86_64-pc-windows-msvc",
-    kind,
-    `${kind}.exe`,
-  ];
-
-  const directCandidate = path.join(
-    openAiDirectory,
-    `${kind}-win32-x64`,
-    ...vendorSegments,
-  );
-  if (fileExists(directCandidate)) {
-    return directCandidate;
+  const sessionsDir = path.join(home, ".codex", "sessions");
+  if (!fs.existsSync(sessionsDir)) {
+    return [];
   }
 
-  const packageCandidate = path.join(
-    openAiDirectory,
-    kind,
-    "node_modules",
-    "@openai",
-    `${kind}-win32-x64`,
-    ...vendorSegments,
-  );
-  if (fileExists(packageCandidate)) {
-    return packageCandidate;
-  }
+  const candidates: Array<
+    BridgeResumeSessionCandidate & {
+      mtimeMs: number;
+    }
+  > = [];
 
-  const dirEntries = fs.readdirSync(openAiDirectory, { withFileTypes: true });
-  for (const entry of dirEntries) {
-    if (!entry.isDirectory() || !entry.name.startsWith(`.${kind}-`)) {
+  for (const filePath of collectCodexSessionFiles(sessionsDir)) {
+    const { meta, firstUserMessage, lastActivityAt } = readCodexSessionFileSummary(filePath);
+    if (!meta || !meta.id) {
       continue;
     }
 
-    const nestedCandidate = path.join(
-      openAiDirectory,
-      entry.name,
-      "node_modules",
-      "@openai",
-      `${kind}-win32-x64`,
-      ...vendorSegments,
-    );
-    if (fileExists(nestedCandidate)) {
-      return nestedCandidate;
+    if (meta.cwd && path.resolve(meta.cwd) !== path.resolve(cwd)) {
+      continue;
+    }
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+
+    candidates.push({
+      sessionId: meta.id,
+      threadId: meta.id,
+      preview: firstUserMessage ? truncatePreview(firstUserMessage, 120) : meta.id,
+      createdAt: meta.timestamp,
+      lastActivityAt: lastActivityAt ?? new Date(stats.mtimeMs).toISOString(),
+      mtimeMs: stats.mtimeMs,
+    });
+  }
+
+  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return candidates.slice(0, limit).map(({ mtimeMs: _mtimeMs, ...candidate }) => candidate);
+}
+
+export function findRecentCodexSessionFileForCwd(
+  cwd: string,
+  maxAgeMs = CODEX_SESSION_LOCAL_MIRROR_FALLBACK_WINDOW_MS,
+  options: { now?: number } = {},
+): CodexRecentSessionFile | null {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (!home) {
+    return null;
+  }
+
+  const sessionsDir = path.join(home, ".codex", "sessions");
+  if (!fs.existsSync(sessionsDir)) {
+    return null;
+  }
+
+  const targetCwd = path.resolve(cwd);
+  const now = options.now ?? Date.now();
+  let latestMatch: CodexRecentSessionFile | null = null;
+
+  for (const filePath of collectCodexSessionFiles(sessionsDir)) {
+    const { meta } = readCodexSessionFileSummary(filePath);
+    if (!meta || !meta.id || !meta.cwd) {
+      continue;
+    }
+
+    if (path.resolve(meta.cwd) !== targetCwd) {
+      continue;
+    }
+
+    if (!isTrustedCodexFallbackSession(meta)) {
+      continue;
+    }
+
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      continue;
+    }
+
+    if (now - stats.mtimeMs > maxAgeMs) {
+      continue;
+    }
+
+    if (!latestMatch || stats.mtimeMs > latestMatch.updatedAtMs) {
+      latestMatch = {
+        filePath,
+        threadId: meta.id,
+        updatedAtMs: stats.mtimeMs,
+      };
     }
   }
 
-  return undefined;
+  return latestMatch;
+}
+
+export function findCodexSessionFile(
+  threadId: string,
+  cwd?: string,
+): string | null {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  if (!home) {
+    return null;
+  }
+
+  const sessionsDir = path.join(home, ".codex", "sessions");
+  if (!fs.existsSync(sessionsDir)) {
+    return null;
+  }
+
+  const targetCwd = cwd ? path.resolve(cwd) : null;
+  let matchingFallbackPath: string | null = null;
+
+  for (const filePath of collectCodexSessionFiles(sessionsDir)) {
+    const { meta } = readCodexSessionFileSummary(filePath);
+    if (!meta || meta.id !== threadId) {
+      continue;
+    }
+
+    if (!targetCwd) {
+      return filePath;
+    }
+
+    if (meta.cwd && path.resolve(meta.cwd) === targetCwd) {
+      return filePath;
+    }
+
+    matchingFallbackPath = matchingFallbackPath ?? filePath;
+  }
+
+  return matchingFallbackPath;
 }
 
 export function copyDefinedEnv(
-  env: Record<string, string | undefined>,
+  source: Record<string, string | undefined>,
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const [key, value] of Object.entries(env)) {
-    if (typeof value === "string") {
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined) {
       result[key] = value;
     }
   }
@@ -1075,8 +1095,8 @@ function applyLoopbackNoProxy(env: Record<string, string>): Record<string, strin
 export function resolveDefaultAdapterCommand(
   kind: BridgeAdapterKind,
   options: {
-    env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
+    env?: Record<string, string | undefined>;
   } = {},
 ): string {
   const platform = options.platform ?? process.platform;
@@ -1084,27 +1104,14 @@ export function resolveDefaultAdapterCommand(
     return kind;
   }
 
-  if (platform === "win32") {
-    return "powershell.exe";
-  }
-
-  const env = options.env ?? (process.env as Record<string, string | undefined>);
-  for (const candidate of DEFAULT_UNIX_SHELL_CANDIDATES) {
-    if (resolveCommandPath(candidate, platform, env)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    `No default shell executable was found on ${platform}. Tried: ${DEFAULT_UNIX_SHELL_CANDIDATES.join(", ")}. Use --cmd <executable>.`,
-  );
+  return resolveDefaultShellCommand(platform, options.env);
 }
 
 export function buildCliEnvironment(
   kind: BridgeAdapterKind,
   options: {
-    env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
+    env?: Record<string, string | undefined>;
   } = {},
 ): Record<string, string> {
   const sourceEnv = options.env ?? (process.env as Record<string, string | undefined>);
@@ -1167,21 +1174,25 @@ export function buildPtySpawnOptions(params: {
   return options;
 }
 
-export function normalizeShellCommandName(command: string): string {
-  return path.parse(path.basename(command)).name.toLowerCase();
-}
-
 export function resolveShellRuntime(
   command: string,
   options: {
     platform?: NodeJS.Platform;
+    env?: Record<string, string | undefined>;
   } = {},
 ): ShellRuntime {
+  const trimmed = command.trim();
   const platform = options.platform ?? process.platform;
-  const name = normalizeShellCommandName(command);
+  const executable = resolveDefaultAdapterCommand("shell", {
+    platform,
+    env: options.env,
+  });
+  const target = trimmed || executable;
+  const baseName = path.basename(target).toLowerCase();
 
-  if (name === "powershell" || name === "pwsh") {
+  if (baseName.includes("powershell") || baseName.includes("pwsh")) {
     return {
+      executable: target,
       family: "powershell",
       launchArgs:
         platform === "win32"
@@ -1190,35 +1201,34 @@ export function resolveShellRuntime(
     };
   }
 
-  if (POSIX_SHELL_NAMES.has(name)) {
-    return {
-      family: "posix",
-      launchArgs: ["-i"],
-    };
-  }
-
-  throw new Error(
-    `Unsupported shell executable for shell adapter: ${command}. Supported shells: powershell, pwsh, bash, zsh, sh, dash, ksh.`,
-  );
+  return {
+    executable: target,
+    family: "posix",
+    launchArgs: ["-s"],
+  };
 }
 
 export function escapePowerShellString(text: string): string {
-  return text.replace(/`/g, "``").replace(/"/g, '`"');
+  return text.replace(/'/g, "''");
 }
 
 export function escapePosixShellString(text: string): string {
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
+  return `'${text.replace(/'/g, `'\"'\"'`)}'`;
 }
 
 export function buildShellProfileCommand(
-  profilePath: string,
-  family: ShellRuntimeFamily,
-): string {
-  const resolved = path.resolve(profilePath);
-  if (family === "powershell") {
-    return `. "${escapePowerShellString(resolved)}"`;
+  profilePath?: string,
+  family: ShellRuntimeFamily = "powershell",
+): string | null {
+  if (!profilePath) {
+    return null;
   }
-  return `. ${escapePosixShellString(resolved)}`;
+
+  if (family === "powershell") {
+    return `. '${escapePowerShellString(profilePath)}'`;
+  }
+
+  return `. ${escapePosixShellString(profilePath)}`;
 }
 
 export function buildShellInputPayload(
@@ -1262,7 +1272,7 @@ export async function reserveLocalPort(): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
-    server.on("error", reject);
+    server.once("error", (error) => reject(error));
     server.listen(0, CODEX_APP_SERVER_HOST, () => {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -1270,10 +1280,10 @@ export async function reserveLocalPort(): Promise<number> {
         return;
       }
 
-      const { port } = address;
-      server.close((closeError) => {
-        if (closeError) {
-          reject(closeError);
+      const port = address.port;
+      server.close((error) => {
+        if (error) {
+          reject(error);
           return;
         }
         resolve(port);
@@ -1288,20 +1298,17 @@ export async function waitForTcpPort(
   timeoutMs: number,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-
   while (Date.now() < deadline) {
     const connected = await new Promise<boolean>((resolve) => {
       const socket = net.connect({ host, port });
-      const finish = (value: boolean) => {
-        socket.removeAllListeners();
+      socket.once("connect", () => {
         socket.destroy();
-        resolve(value);
-      };
-
-      socket.once("connect", () => finish(true));
-      socket.once("timeout", () => finish(false));
-      socket.once("error", () => finish(false));
-      socket.setTimeout(500);
+        resolve(true);
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        resolve(false);
+      });
     });
 
     if (connected) {
@@ -1315,422 +1322,259 @@ export async function waitForTcpPort(
 }
 
 export async function delay(ms: number): Promise<void> {
-  if (ms <= 0) {
-    return;
-  }
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export function appendBoundedLog(existing: string, chunk: string): string {
-  const next = existing ? `${existing}${chunk}` : chunk;
-  if (next.length <= CODEX_APP_SERVER_LOG_LIMIT) {
-    return next;
-  }
-  return next.slice(next.length - CODEX_APP_SERVER_LOG_LIMIT);
+const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".com", ".ps1"] as const;
+const WINDOWS_DIRECT_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".com"] as const;
+const WINDOWS_POWERSHELL_EXTENSION = ".ps1";
+
+export function getEnvValue(
+  env: Record<string, string | undefined>,
+  key: string,
+): string | undefined {
+  const match = Object.entries(env).find(([k]) => k.toLowerCase() === key.toLowerCase());
+  return match?.[1];
 }
 
-export function normalizeComparablePath(filePath: string): string {
-  return path.resolve(filePath).replace(/\//g, "\\").toLowerCase();
-}
-
-export function buildCodexSessionDayPath(date: Date): string | null {
-  const homeDirectory = process.env.USERPROFILE ?? process.env.HOME;
-  if (!homeDirectory) {
-    return null;
+export function parseWindowsPathExt(env: Record<string, string | undefined>): string[] {
+  const configured = getEnvValue(env, "PATHEXT");
+  if (configured) {
+    const extensions = configured
+      .split(";")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+    if (extensions.length > 0) {
+      return extensions;
+    }
   }
 
-  return path.join(
-    homeDirectory,
-    ".codex",
-    "sessions",
-    String(date.getFullYear()),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
+  return [...WINDOWS_EXECUTABLE_EXTENSIONS];
+}
+
+export function isPathLikeCommand(command: string): boolean {
+  return (
+    command.includes("/") ||
+    command.includes("\\") ||
+    command.startsWith(".") ||
+    path.isAbsolute(command)
   );
 }
 
-export function buildCodexSessionsRoot(): string | null {
-  const homeDirectory = process.env.USERPROFILE ?? process.env.HOME;
-  if (!homeDirectory) {
-    return null;
-  }
-
-  return path.join(homeDirectory, ".codex", "sessions");
-}
-
-export function listCodexSessionFilesRecursively(rootDirectory: string): string[] {
-  if (!fs.existsSync(rootDirectory)) {
-    return [];
-  }
-
-  const files: string[] = [];
-  const pending = [rootDirectory];
-  while (pending.length > 0) {
-    const current = pending.pop();
-    if (!current) {
-      continue;
-    }
-
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(current, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      const entryPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(entryPath);
-        continue;
-      }
-      if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-        files.push(entryPath);
-      }
-    }
-  }
-
-  return files;
-}
-
-export function readCodexSessionMeta(filePath: string): CodexSessionMeta | null {
+function fileExists(filePath: string): boolean {
   try {
-    const firstLine = fs.readFileSync(filePath, "utf8").split(/\r?\n/, 1)[0]?.trim();
-    if (!firstLine) {
-      return null;
-    }
-
-    const parsed = JSON.parse(firstLine) as {
-      type?: string;
-      payload?: CodexSessionMeta;
-    };
-    if (parsed.type !== "session_meta" || !parsed.payload) {
-      return null;
-    }
-
-    return parsed.payload;
+    return fs.existsSync(filePath) && fs.statSync(filePath).isFile();
   } catch {
-    return null;
+    return false;
   }
 }
 
-export function getCodexSessionSource(meta: CodexSessionMeta | null | undefined): string | null {
-  if (!meta) {
-    return null;
+export function resolveWindowsCommandCandidates(
+  filePath: string,
+  env: Record<string, string | undefined>,
+): string[] {
+  const extension = path.extname(filePath);
+  if (extension) {
+    return [filePath];
   }
 
-  if (typeof meta.source === "string") {
-    return meta.source;
+  return parseWindowsPathExt(env).map((ext) => `${filePath}${ext}`);
+}
+
+export function resolvePathLikeCommand(
+  command: string,
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+): string | null {
+  const absolutePath = path.resolve(command);
+  if (platform !== "win32") {
+    return fileExists(absolutePath) ? absolutePath : null;
   }
 
-  if (isRecord(meta.source) && typeof meta.source.custom === "string") {
-    return meta.source.custom;
+  for (const candidate of resolveWindowsCommandCandidates(absolutePath, env)) {
+    if (fileExists(candidate)) {
+      return candidate;
+    }
   }
 
   return null;
 }
 
-export function isTrustedCodexFallbackSession(meta: CodexSessionMeta | null | undefined): boolean {
-  const sessionSource = getCodexSessionSource(meta);
-  if (!sessionSource) {
-    return false;
-  }
-
-  if (sessionSource === "cli") {
-    return true;
-  }
-
-  const originator = normalizeOutput(meta?.originator ?? "").trim().toLowerCase();
-  return sessionSource === "vscode" && originator === "wechat-bridge";
-}
-
-export function parseCodexSessionUserMessage(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed) {
+export function findCommandOnPath(
+  command: string,
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+): string | null {
+  const pathValue = getEnvValue(env, "PATH");
+  if (!pathValue) {
     return null;
   }
 
-  try {
-    const parsed = JSON.parse(trimmed) as {
-      type?: string;
-      payload?: {
-        type?: string;
-        message?: string;
-      };
-    };
-    if (parsed.type !== "event_msg" || parsed.payload?.type !== "user_message") {
-      return null;
-    }
+  const delimiter = platform === "win32" ? ";" : ":";
+  const directories = pathValue.split(delimiter).filter(Boolean);
 
-    const message =
-      typeof parsed.payload.message === "string"
-        ? normalizeOutput(parsed.payload.message).trim()
-        : "";
-    return message || null;
-  } catch {
-    return null;
-  }
-}
-
-export function summarizeCodexSessionFile(filePath: string): CodexSessionSummary | null {
-  let content: string;
-  try {
-    content = fs.readFileSync(filePath, "utf8");
-  } catch {
-    return null;
-  }
-
-  const lines = content.split(/\r?\n/).filter(Boolean);
-  const meta = readCodexSessionMeta(filePath);
-  if (!meta?.id || !meta.cwd) {
-    return null;
-  }
-
-  let lastTimestamp = meta.timestamp ?? null;
-  let lastUserMessage: string | null = null;
-  for (const line of lines) {
-    const parsedUserMessage = parseCodexSessionUserMessage(line);
-    if (parsedUserMessage) {
-      lastUserMessage = parsedUserMessage;
-    }
-
-    try {
-      const parsed = JSON.parse(line) as { timestamp?: string };
-      if (typeof parsed.timestamp === "string") {
-        lastTimestamp = parsed.timestamp;
+  for (const directory of directories) {
+    const candidatePath = path.join(directory, command);
+    if (platform !== "win32") {
+      if (fileExists(candidatePath)) {
+        return candidatePath;
       }
-    } catch {
-      // Ignore malformed lines while summarizing persisted sessions.
+      continue;
+    }
+
+    for (const candidate of resolveWindowsCommandCandidates(candidatePath, env)) {
+      if (fileExists(candidate)) {
+        return candidate;
+      }
     }
   }
 
-  const stats = fs.statSync(filePath);
-  const lastUpdatedAt =
-    lastTimestamp && Number.isFinite(Date.parse(lastTimestamp))
-      ? lastTimestamp
-      : new Date(stats.mtimeMs).toISOString();
+  return null;
+}
 
+export function resolveDefaultShellCommand(
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): string {
+  if (platform === "win32") {
+    const powershell =
+      findCommandOnPath("powershell.exe", platform, env) ??
+      findCommandOnPath("pwsh.exe", platform, env) ??
+      findCommandOnPath("powershell", platform, env) ??
+      findCommandOnPath("pwsh", platform, env);
+    if (powershell) {
+      return powershell;
+    }
+
+    const systemRoot = getEnvValue(env, "SystemRoot") ?? getEnvValue(env, "SYSTEMROOT");
+    if (systemRoot) {
+      const defaultPowerShell = path.join(
+        systemRoot,
+        "System32",
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+      );
+      if (fileExists(defaultPowerShell)) {
+        return defaultPowerShell;
+      }
+    }
+
+    return "powershell.exe";
+  }
+
+  for (const candidate of DEFAULT_UNIX_SHELL_CANDIDATES) {
+    const resolved = findCommandOnPath(candidate, platform, env);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  throw new Error(
+    `No default shell executable was found on ${platform}. Tried: ${DEFAULT_UNIX_SHELL_CANDIDATES.join(", ")}. Use --cmd <executable>.`,
+  );
+}
+
+export function resolveCommandPath(
+  command: string,
+  platform: NodeJS.Platform,
+  env: Record<string, string | undefined>,
+): string | null {
+  if (isPathLikeCommand(command)) {
+    return resolvePathLikeCommand(command, platform, env);
+  }
+
+  return findCommandOnPath(command, platform, env);
+}
+
+export function resolveCmdExe(env: Record<string, string | undefined>): string {
+  const systemRoot = getEnvValue(env, "SystemRoot") ?? getEnvValue(env, "SYSTEMROOT");
+  const configured =
+    getEnvValue(env, "ComSpec") ??
+    getEnvValue(env, "COMSPEC") ??
+    (systemRoot ? `${systemRoot.replace(/[\\/]$/, "")}\\System32\\cmd.exe` : undefined);
+
+  return configured || "cmd.exe";
+}
+
+export function quoteForCmd(argument: string): string {
+  if (!argument) {
+    return '""';
+  }
+
+  if (!/[ \t\n\v"]/.test(argument)) {
+    return argument;
+  }
+
+  return `"${argument.replace(/"/g, '""')}"`;
+}
+
+export function wrapWithCmdExe(
+  scriptPath: string,
+  extraArgs: string[],
+  env: Record<string, string | undefined>,
+): SpawnTarget {
+  const commandLine = [quoteForCmd(scriptPath), ...extraArgs.map(quoteForCmd)].join(" ");
   return {
-    threadId: meta.id,
-    title: truncatePreview(lastUserMessage ?? meta.id, 120),
-    lastUpdatedAt,
-    source: getCodexSessionSource(meta) ?? undefined,
-    filePath,
+    file: resolveCmdExe(env),
+    args: ["/d", "/s", "/c", commandLine],
   };
 }
 
-export function matchesCodexSessionMeta(
-  meta: CodexSessionMeta | null | undefined,
-  options: {
-    cwd: string;
-    startedAtMs: number;
-    threadId?: string;
-    sessionSource?: string;
-  },
-): boolean {
-  if (!meta?.cwd || !meta.id) {
-    return false;
-  }
+export function resolveBundledWindowsExe(
+  kind: Extract<BridgeAdapterKind, "codex" | "claude" | "opencode">,
+  launcherPath: string,
+): string | undefined {
+  const launcherDirectory = path.dirname(launcherPath);
 
-  if (normalizeComparablePath(meta.cwd) !== normalizeComparablePath(options.cwd)) {
-    return false;
-  }
-
-  if (options.threadId && meta.id !== options.threadId) {
-    return false;
-  }
-
-  const sessionSource = getCodexSessionSource(meta);
-  if (options.sessionSource && sessionSource !== options.sessionSource) {
-    return false;
-  }
-
-  if (options.threadId) {
-    return true;
-  }
-
-  const sessionStartedAtMs = meta.timestamp ? Date.parse(meta.timestamp) : Number.NaN;
-  if (
-    Number.isFinite(sessionStartedAtMs) &&
-    sessionStartedAtMs < options.startedAtMs - CODEX_SESSION_MATCH_WINDOW_MS
-  ) {
-    return false;
-  }
-
-  return true;
-}
-
-export function findCodexSessionFile(
-  cwd: string,
-  startedAtMs: number,
-  options: {
-    threadId?: string;
-    sessionSource?: string;
-  } = {},
-): string | null {
-  if (options.threadId) {
-    const sessionsRoot = buildCodexSessionsRoot();
-    if (!sessionsRoot) {
-      return null;
-    }
-
-    const candidates = listCodexSessionFilesRecursively(sessionsRoot)
-      .map((filePath) => {
-        const meta = readCodexSessionMeta(filePath);
-        if (!matchesCodexSessionMeta(meta, { cwd, startedAtMs, ...options })) {
-          return null;
-        }
-
-        const stats = fs.statSync(filePath);
-        return {
-          filePath,
-          modifiedAtMs: stats.mtimeMs,
-        };
-      })
-      .filter((candidate): candidate is { filePath: string; modifiedAtMs: number } => Boolean(candidate))
-      .sort((left, right) => right.modifiedAtMs - left.modifiedAtMs);
-
-    return candidates[0]?.filePath ?? null;
-  }
-
-  const dayDirectories = [new Date(), new Date(startedAtMs), new Date(startedAtMs - 86_400_000)]
-    .map(buildCodexSessionDayPath)
-    .filter((value): value is string => Boolean(value))
-    .filter((value, index, values) => values.indexOf(value) === index)
-    .filter((directory) => fs.existsSync(directory));
-
-  const candidates: Array<{
-    filePath: string;
-    modifiedAtMs: number;
-    sessionStartedAtMs: number;
-  }> = [];
-
-  for (const directory of dayDirectories) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
-        continue;
+  if (kind === "opencode") {
+    const opencodeCandidates = [
+      path.join(launcherDirectory, "node_modules", "opencode-ai", "bin", "opencode.exe"),
+      path.join(launcherDirectory, "node_modules", "opencode", "bin", "opencode.exe"),
+      path.join(launcherDirectory, "node_modules", "@opencode-ai", "sdk", "bin", "opencode.exe"),
+    ];
+    for (const candidate of opencodeCandidates) {
+      if (fileExists(candidate)) {
+        return candidate;
       }
-
-      const filePath = path.join(directory, entry.name);
-      const stats = fs.statSync(filePath);
-      if (stats.mtimeMs < startedAtMs - CODEX_SESSION_MATCH_WINDOW_MS) {
-        continue;
-      }
-
-      const meta = readCodexSessionMeta(filePath);
-      if (!matchesCodexSessionMeta(meta, { cwd, startedAtMs, ...options })) {
-        continue;
-      }
-
-      const sessionStartedAtMs = meta?.timestamp ? Date.parse(meta.timestamp) : Number.NaN;
-      candidates.push({
-        filePath,
-        modifiedAtMs: stats.mtimeMs,
-        sessionStartedAtMs,
-      });
     }
+    return undefined;
   }
 
-  candidates.sort((left, right) => {
-    const leftDistance = Number.isFinite(left.sessionStartedAtMs)
-      ? Math.abs(left.sessionStartedAtMs - startedAtMs)
-      : Number.POSITIVE_INFINITY;
-    const rightDistance = Number.isFinite(right.sessionStartedAtMs)
-      ? Math.abs(right.sessionStartedAtMs - startedAtMs)
-      : Number.POSITIVE_INFINITY;
-
-    if (leftDistance !== rightDistance) {
-      return leftDistance - rightDistance;
-    }
-    return right.modifiedAtMs - left.modifiedAtMs;
-  });
-
-  return candidates[0]?.filePath ?? null;
-}
-
-export function findRecentCodexSessionFileForCwd(
-  cwd: string,
-  startedAtMs: number,
-): CodexRecentSessionFile | null {
-  const sessionsRoot = buildCodexSessionsRoot();
-  if (!sessionsRoot) {
-    return null;
+  const openAiDirectory = path.join(launcherDirectory, "node_modules", "@openai");
+  if (!fs.existsSync(openAiDirectory)) {
+    return undefined;
   }
 
-  const currentCwd = normalizeComparablePath(cwd);
-  let bestCandidate: CodexRecentSessionFile | null = null;
+  const vendorSegments = [
+    "vendor",
+    "x86_64-pc-windows-msvc",
+    kind,
+    `${kind}.exe`,
+  ];
 
-  for (const filePath of listCodexSessionFilesRecursively(sessionsRoot)) {
-    const meta = readCodexSessionMeta(filePath);
-    if (!meta?.id || !meta.cwd || normalizeComparablePath(meta.cwd) !== currentCwd) {
-      continue;
-    }
-
-    if (!isTrustedCodexFallbackSession(meta)) {
-      continue;
-    }
-
-    let stats: fs.Stats;
-    try {
-      stats = fs.statSync(filePath);
-    } catch {
-      continue;
-    }
-
-    if (stats.mtimeMs < startedAtMs - CODEX_SESSION_MATCH_WINDOW_MS) {
-      continue;
-    }
-
-    if (!bestCandidate || stats.mtimeMs > bestCandidate.modifiedAtMs) {
-      bestCandidate = {
-        threadId: meta.id,
-        filePath,
-        modifiedAtMs: stats.mtimeMs,
-      };
-    }
+  const directCandidate = path.join(
+    openAiDirectory,
+    `${kind}-win32-x64`,
+    ...vendorSegments,
+  );
+  if (fileExists(directCandidate)) {
+    return directCandidate;
   }
 
-  return bestCandidate;
-}
-
-export function listCodexResumeSessions(
-  cwd: string,
-  limit = 10,
-): BridgeResumeSessionCandidate[] {
-  const sessionsRoot = buildCodexSessionsRoot();
-  if (!sessionsRoot) {
-    return [];
+  const packageCandidate = path.join(
+    openAiDirectory,
+    kind,
+    "node_modules",
+    "@openai",
+    `${kind}-win32-x64`,
+    ...vendorSegments,
+  );
+  if (fileExists(packageCandidate)) {
+    return packageCandidate;
   }
 
-  const currentCwd = normalizeComparablePath(cwd);
-  const newestByThreadId = new Map<string, CodexSessionSummary>();
-  for (const filePath of listCodexSessionFilesRecursively(sessionsRoot)) {
-    const summary = summarizeCodexSessionFile(filePath);
-    if (!summary) {
-      continue;
-    }
-
-    const meta = readCodexSessionMeta(filePath);
-    if (!meta?.cwd || normalizeComparablePath(meta.cwd) !== currentCwd) {
-      continue;
-    }
-
-    const previous = newestByThreadId.get(summary.threadId);
-    if (!previous || Date.parse(summary.lastUpdatedAt) > Date.parse(previous.lastUpdatedAt)) {
-      newestByThreadId.set(summary.threadId, summary);
-    }
-  }
-
-  return Array.from(newestByThreadId.values())
-    .sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt))
-    .slice(0, Math.max(1, limit))
-    .map((summary) => ({
-      sessionId: summary.threadId,
-      threadId: summary.threadId,
-      title: summary.title,
-      lastUpdatedAt: summary.lastUpdatedAt,
-      source: summary.source,
-    }));
+  return undefined;
 }
 
 export function listCodexResumeThreads(
@@ -1760,7 +1604,7 @@ export function resolveSpawnTarget(
   }
 
   const bundledExe =
-    kind === "codex" || kind === "claude"
+    kind === "codex" || kind === "claude" || kind === "opencode"
       ? resolveBundledWindowsExe(kind, resolved)
       : undefined;
   if (bundledExe) {
