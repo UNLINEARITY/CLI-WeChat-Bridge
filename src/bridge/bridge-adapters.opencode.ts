@@ -8,6 +8,9 @@ import {
   OPENCODE_SSE_RECONNECT_DELAY_MS,
   OPENCODE_SESSION_IDLE_SETTLE_MS,
   OPENCODE_WECHAT_WORKING_NOTICE_DELAY_MS,
+  OPENCODE_HTTP_READY_TIMEOUT_MS,
+  OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS,
+  OPENCODE_HTTP_READY_PROBE_INTERVAL_MS,
   buildCliEnvironment,
   isRecord,
   describeUnknownError,
@@ -716,10 +719,31 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async checkHealth(): Promise<void> {
     const baseUrl = `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`;
-    const response = await fetch(`${baseUrl}/session/status`);
-    if (!response.ok) {
-      throw new Error(`OpenCode health check failed (HTTP ${response.status}).`);
+    // `opencode serve` binds its TCP port before the HTTP layer is ready,
+    // so a fetch fired the instant `waitForTcpPort` returns can be accepted
+    // into the listen backlog but never answered, hanging until undici's
+    // ~300s `headersTimeout` and surfacing as `fetch failed` after ~5min.
+    // Retry with a short per-attempt timeout so the startup race
+    // self-heals once the server finishes booting.
+    const deadline = Date.now() + OPENCODE_HTTP_READY_TIMEOUT_MS;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${baseUrl}/session/status`, {
+          signal: AbortSignal.timeout(OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS),
+        });
+        if (response.ok) {
+          return;
+        }
+        lastError = new Error(
+          `OpenCode health check failed (HTTP ${response.status}).`,
+        );
+      } catch (err) {
+        lastError = err;
+      }
+      await delay(OPENCODE_HTTP_READY_PROBE_INTERVAL_MS);
     }
+    throw lastError ?? new Error("OpenCode health check timed out.");
   }
 
   private async initializeSessions(): Promise<void> {
