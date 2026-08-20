@@ -201,6 +201,55 @@ describe("OpenCodeServerAdapter initial state", () => {
   });
 });
 
+describe("OpenCode health compatibility", () => {
+  test("probes /global/health and accepts the supported 1.18 release line", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      serverPort: number;
+      checkHealth(): Promise<void>;
+    };
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    internal.serverPort = 8123;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ healthy: true, version: "1.18.4" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await internal.checkHealth();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(urls).toEqual(["http://127.0.0.1:8123/global/health"]);
+  });
+
+  test("rejects OpenCode versions outside >=1.18.0 <2.0.0", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      isSupportedOpenCodeVersion(version: string): boolean;
+    };
+
+    expect(internal.isSupportedOpenCodeVersion("1.18.0")).toBe(true);
+    expect(internal.isSupportedOpenCodeVersion("1.99.3")).toBe(true);
+    expect(internal.isSupportedOpenCodeVersion("1.17.9")).toBe(false);
+    expect(internal.isSupportedOpenCodeVersion("2.0.0")).toBe(false);
+    expect(internal.isSupportedOpenCodeVersion("dev")).toBe(false);
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /*  startup session restore                                            */
 /* ------------------------------------------------------------------ */
@@ -432,7 +481,7 @@ describe("OpenCode SSE event dispatch", () => {
     expect(events).toHaveLength(0);
   });
 
-  test("starts local, global, and legacy global sync SSE loops", async () => {
+  test("starts only the current local and global SSE loops", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
       command: "opencode",
@@ -450,35 +499,6 @@ describe("OpenCode SSE event dispatch", () => {
     internal.client = {
       event: {},
       global: { syncEvent: { subscribe: async () => ({ stream: [] }) } },
-    };
-    internal.runSseLoop = async (streamName: string) => {
-      subscribedStreams.push(streamName);
-    };
-
-    internal.startSseListener();
-    await internal.sseLoopPromise;
-
-    expect(subscribedStreams).toEqual(["event", "global-event", "global-sync"]);
-  });
-
-  test("skips the legacy global sync SSE loop when the SDK no longer exposes it", async () => {
-    const adapter = new OpenCodeServerAdapter({
-      kind: "opencode",
-      command: "opencode",
-      cwd: process.cwd(),
-    });
-    const internal = adapter as unknown as {
-      client: Record<string, unknown> | null;
-      sseLoopPromise: Promise<void> | null;
-      shuttingDown: boolean;
-      startSseListener(): void;
-      runSseLoop(streamName: string): Promise<void>;
-    };
-    const subscribedStreams: string[] = [];
-
-    internal.client = {
-      event: {},
-      global: {},
     };
     internal.runSseLoop = async (streamName: string) => {
       subscribedStreams.push(streamName);
@@ -1317,7 +1337,7 @@ describe("OpenCode permission.updated handling", () => {
     const responses: Array<Record<string, unknown>> = [];
     internal.client = {
       permission: {
-        respond: async (parameters: Record<string, unknown>) => {
+        reply: async (parameters: Record<string, unknown>) => {
           responses.push(parameters);
           return {
             data: true,
@@ -1346,9 +1366,8 @@ describe("OpenCode permission.updated handling", () => {
 
     expect(responses).toEqual([
       expect.objectContaining({
-        sessionID: "session_perm_1",
-        permissionID: "perm_outbound_1",
-        response: "reject",
+        requestID: "perm_outbound_1",
+        reply: "reject",
       }),
     ]);
     expect(events.filter((e) => e.type === "approval_required")).toHaveLength(0);
@@ -1361,7 +1380,7 @@ describe("OpenCode permission.updated handling", () => {
     const responses: Array<Record<string, unknown>> = [];
     internal.client = {
       permission: {
-        respond: async (parameters: Record<string, unknown>) => {
+        reply: async (parameters: Record<string, unknown>) => {
           responses.push(parameters);
           return {
             data: true,
@@ -1393,9 +1412,8 @@ describe("OpenCode permission.updated handling", () => {
 
     expect(responses).toEqual([
       expect.objectContaining({
-        sessionID: "session_perm_1",
-        permissionID: "perm_outbound_dir",
-        response: "reject",
+        requestID: "perm_outbound_dir",
+        reply: "reject",
       }),
     ]);
     expect(events.filter((e) => e.type === "approval_required")).toHaveLength(0);
@@ -1422,6 +1440,180 @@ describe("OpenCode permission.updated handling", () => {
     const approvalEvents = events.filter((e) => e.type === "approval_required");
     expect(approvalEvents).toHaveLength(1);
     expect(internal.pendingPermission?.permissionId).toBe("perm_external_ok");
+  });
+});
+
+describe("OpenCode question handling", () => {
+  function createQuestionAdapter() {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as unknown as Record<string, unknown>);
+    });
+    const internal = adapter as unknown as {
+      client: Record<string, unknown>;
+      state: {
+        status: string;
+        activeTurnOrigin?: string;
+        pendingUserInput?: unknown;
+        pendingUserInputOrigin?: string;
+      };
+      activeSessionId: string | null;
+      activeWorkspaceId: string | null;
+      pendingQuestion: {
+        sessionId: string;
+        requestId: string;
+        request: { questions: Array<{ id: string }> };
+      } | null;
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+    internal.client = {};
+    internal.state.status = "busy";
+    internal.state.activeTurnOrigin = "wechat";
+    internal.activeSessionId = "session_question_1";
+    internal.activeWorkspaceId = "workspace_1";
+    return { adapter, events, internal };
+  }
+
+  function askQuestions(internal: ReturnType<typeof createQuestionAdapter>["internal"]): void {
+    internal.handleSseEvent({
+      type: "question.asked",
+      properties: {
+        id: "question_request_1",
+        sessionID: "session_question_1",
+        questions: [
+          {
+            header: "Targets",
+            question: "Which targets should be updated?",
+            multiple: true,
+            custom: true,
+            options: [
+              { label: "CLI", description: "Update the CLI." },
+              { label: "Docs", description: "Update documentation." },
+            ],
+          },
+          {
+            header: "Mode",
+            question: "Which mode should be used?",
+            options: [
+              { label: "Safe", description: "Use conservative behavior." },
+              { label: "Fast", description: "Prefer speed." },
+            ],
+          },
+        ],
+      },
+    });
+  }
+
+  test("maps question.asked into ordered generic user input", () => {
+    const { events, internal } = createQuestionAdapter();
+
+    askQuestions(internal);
+
+    expect(internal.state.status).toBe("awaiting_input");
+    expect(internal.state.pendingUserInputOrigin).toBe("wechat");
+    expect(internal.pendingQuestion).toMatchObject({
+      sessionId: "session_question_1",
+      requestId: "question_request_1",
+      request: {
+        questions: [
+          {
+            id: "question_1",
+            multiple: true,
+            isOther: true,
+            customAnswerMode: "value",
+          },
+          {
+            id: "question_2",
+            multiple: false,
+            isOther: false,
+            customAnswerMode: "value",
+          },
+        ],
+      },
+    });
+    expect(events.filter((event) => event.type === "user_input_required")).toHaveLength(1);
+  });
+
+  test("submits OpenCode answers in the original question order", async () => {
+    const { adapter, internal } = createQuestionAdapter();
+    const replies: Array<Record<string, unknown>> = [];
+    internal.client = {
+      question: {
+        reply: async (parameters: Record<string, unknown>) => {
+          replies.push(parameters);
+          return { data: true, error: undefined, request: {}, response: {} };
+        },
+      },
+    };
+    askQuestions(internal);
+
+    await expect(
+      adapter.submitUserInput({
+        question_2: ["Safe"],
+        question_1: ["CLI", "custom-target"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(replies).toEqual([
+      {
+        requestID: "question_request_1",
+        directory: process.cwd(),
+        workspace: "workspace_1",
+        answers: [["CLI", "custom-target"], ["Safe"]],
+      },
+    ]);
+    expect(internal.pendingQuestion).toBeNull();
+    expect(internal.state.pendingUserInput).toBeNull();
+    expect(internal.state.status).toBe("busy");
+  });
+
+  test("rejects a pending OpenCode question before aborting on /stop", async () => {
+    const { adapter, internal } = createQuestionAdapter();
+    const calls: string[] = [];
+    internal.client = {
+      question: {
+        reject: async () => {
+          calls.push("reject");
+          return { data: true, error: undefined, request: {}, response: {} };
+        },
+      },
+      session: {
+        abort: async () => {
+          calls.push("abort");
+          return { data: true, error: undefined, request: {}, response: {} };
+        },
+      },
+    };
+    askQuestions(internal);
+
+    await expect(adapter.interrupt()).resolves.toBe(true);
+
+    expect(calls).toEqual(["reject", "abort"]);
+    expect(internal.pendingQuestion).toBeNull();
+    expect(internal.state.pendingUserInput).toBeNull();
+  });
+
+  test("clears pending input when OpenCode reports a local reply", () => {
+    const { internal } = createQuestionAdapter();
+    askQuestions(internal);
+
+    internal.handleSseEvent({
+      type: "question.replied",
+      properties: {
+        sessionID: "session_question_1",
+        requestID: "question_request_1",
+        answers: [["CLI"], ["Safe"]],
+      },
+    });
+
+    expect(internal.pendingQuestion).toBeNull();
+    expect(internal.state.pendingUserInput).toBeNull();
+    expect(internal.state.status).toBe("busy");
   });
 });
 
@@ -2223,7 +2415,7 @@ describe("OpenCode local TUI tracking", () => {
     });
 
     expect(syncEvent).not.toBeNull();
-    expect(internal.shouldHandleSseEvent(syncEvent!, "global-sync")).toBe(true);
+    expect(internal.shouldHandleSseEvent(syncEvent!, "global-event")).toBe(true);
     internal.handleSseEvent(syncEvent!);
 
     expect(internal.activeSessionId).toBe("session_old_local");

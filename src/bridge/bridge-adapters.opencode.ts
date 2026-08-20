@@ -29,6 +29,7 @@ import type {
   BridgeTurnOrigin,
   BridgeEvent,
   PendingApproval,
+  UserInputRequest,
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import {
@@ -109,12 +110,24 @@ type OpenCodeSdkClient = {
     }): Promise<SdkResult<SdkMessageRecord[]>>;
   };
   permission: {
-    respond(parameters: {
-      sessionID: string;
-      permissionID: string;
+    reply(parameters: {
+      requestID: string;
       directory?: string;
       workspace?: string;
-      response: string;
+      reply: "once" | "always" | "reject";
+    }): Promise<SdkResult<boolean>>;
+  };
+  question: {
+    reply(parameters: {
+      requestID: string;
+      directory?: string;
+      workspace?: string;
+      answers: string[][];
+    }): Promise<SdkResult<boolean>>;
+    reject(parameters: {
+      requestID: string;
+      directory?: string;
+      workspace?: string;
     }): Promise<SdkResult<boolean>>;
   };
   tui: {
@@ -136,11 +149,6 @@ type OpenCodeSdkClient = {
     event(options?: Record<string, unknown>): Promise<{
       stream: AsyncIterable<unknown>;
     }>;
-    syncEvent?: {
-      subscribe(options?: Record<string, unknown>): Promise<{
-        stream: AsyncIterable<unknown>;
-      }>;
-    };
   };
 };
 
@@ -151,7 +159,7 @@ type SdkEvent = {
   payload?: unknown;
 };
 
-type SdkEventStreamName = "event" | "global-event" | "global-sync";
+type SdkEventStreamName = "event" | "global-event";
 
 type SdkEventSubscription = {
   stream: AsyncIterable<unknown>;
@@ -170,6 +178,12 @@ type OpenCodePendingPermission = {
   code: string;
   createdAt: string;
   request: ApprovalRequest;
+};
+
+type OpenCodePendingQuestion = {
+  sessionId: string;
+  requestId: string;
+  request: UserInputRequest;
 };
 
 type ObservedOpenCodeMessage = {
@@ -200,6 +214,8 @@ const OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS = 30_000;
 const OPENCODE_RECENT_LOCAL_PROMPT_TTL_MS = 10_000;
 const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
 const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
+const OPENCODE_MINIMUM_SUPPORTED_VERSION = "1.18.0";
+const OPENCODE_MAXIMUM_SUPPORTED_MAJOR = 2;
 
 /* ------------------------------------------------------------------ */
 /*  Adapter                                                            */
@@ -252,6 +268,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private pendingLocalSessionCreateFollowUntilMs = 0;
 
   private pendingPermission: OpenCodePendingPermission | null = null;
+  private pendingQuestion: OpenCodePendingQuestion | null = null;
 
   constructor(options: AdapterOptions) {
     this.options = options;
@@ -331,6 +348,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (this.pendingPermission) {
       throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
     }
+    if (this.pendingQuestion) {
+      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+    }
 
     const normalized = normalizeOutput(text).trim();
     if (!normalized) {
@@ -394,6 +414,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (this.pendingPermission) {
       throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
     }
+    if (this.pendingQuestion) {
+      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+    }
 
     this.outputBatcher.clear();
     this.clearStreamedPartState();
@@ -419,11 +442,20 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (!this.client || !this.activeSessionId) {
       return false;
     }
-    if (this.state.status !== "busy" && this.state.status !== "awaiting_approval") {
+    if (
+      this.state.status !== "busy" &&
+      this.state.status !== "awaiting_approval" &&
+      this.state.status !== "awaiting_input"
+    ) {
       return false;
     }
 
     this.clearWechatWorkingNotice(true);
+
+    if (this.pendingQuestion) {
+      await this.rejectPendingQuestion(this.pendingQuestion);
+      this.clearPendingQuestionState();
+    }
 
     try {
       await this.client.session.abort({
@@ -446,6 +478,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.clearObservedMessageTracking();
     this.recentSdkEventObservations.clear();
     this.clearPendingPermissionState();
+    this.clearPendingQuestionState();
     this.activeSessionId = null;
     this.state.sharedSessionId = undefined;
     this.state.sharedThreadId = undefined;
@@ -466,16 +499,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return false;
     }
 
-    const { sessionId, permissionId } = this.pendingPermission;
+    const { permissionId } = this.pendingPermission;
     const response = action === "confirm" ? "once" : "reject";
 
     try {
-      const result = await this.client.permission.respond({
-        sessionID: sessionId,
-        permissionID: permissionId,
+      const result = await this.client.permission.reply({
+        requestID: permissionId,
         directory: this.options.cwd,
         workspace: this.activeWorkspaceId ?? undefined,
-        response,
+        reply: response,
       });
       if (result.error !== undefined) {
         throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
@@ -500,8 +532,38 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return ok ? 1 : 0;
   }
 
-  async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
-    return false;
+  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+    if (!this.pendingQuestion || !this.client) {
+      return false;
+    }
+
+    const pending = this.pendingQuestion;
+    const orderedAnswers = pending.request.questions.map(
+      (question) => answers[question.id] ?? [],
+    );
+
+    try {
+      const result = await this.client.question.reply({
+        requestID: pending.requestId,
+        directory: this.options.cwd,
+        workspace: this.activeWorkspaceId ?? undefined,
+        answers: orderedAnswers,
+      });
+      if (result.error !== undefined) {
+        throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
+      }
+    } catch (err) {
+      this.emit({
+        type: "stderr",
+        text: `Failed to submit OpenCode user input: ${describeUnknownError(err)}`,
+        timestamp: nowIso(),
+      });
+      return false;
+    }
+
+    this.clearPendingQuestionState();
+    this.setStatus("busy", "OpenCode user input submitted.");
+    return true;
   }
 
   async dispose(): Promise<void> {
@@ -516,6 +578,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.clearStreamedPartState();
 
     this.clearPendingPermissionState();
+    this.clearPendingQuestionState();
 
     // Stop SSE listener
     if (this.sseAbortController) {
@@ -729,21 +792,48 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(`${baseUrl}/session/status`, {
+        const response = await fetch(`${baseUrl}/global/health`, {
           signal: AbortSignal.timeout(OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS),
         });
         if (response.ok) {
-          return;
+          const health = await response.json() as unknown;
+          if (!isRecord(health) || health.healthy !== true || typeof health.version !== "string") {
+            lastError = new Error("OpenCode health check returned an invalid response.");
+          } else if (!this.isSupportedOpenCodeVersion(health.version)) {
+            throw new Error(
+              `Unsupported OpenCode version ${health.version}. Install OpenCode >=${OPENCODE_MINIMUM_SUPPORTED_VERSION} <${OPENCODE_MAXIMUM_SUPPORTED_MAJOR}.0.0.`,
+            );
+          } else {
+            return;
+          }
+        } else {
+          lastError = new Error(
+            `OpenCode health check failed (HTTP ${response.status}).`,
+          );
         }
-        lastError = new Error(
-          `OpenCode health check failed (HTTP ${response.status}).`,
-        );
       } catch (err) {
+        if (
+          err instanceof Error &&
+          err.message.startsWith("Unsupported OpenCode version ")
+        ) {
+          throw err;
+        }
         lastError = err;
       }
       await delay(OPENCODE_HTTP_READY_PROBE_INTERVAL_MS);
     }
     throw lastError ?? new Error("OpenCode health check timed out.");
+  }
+
+  private isSupportedOpenCodeVersion(version: string): boolean {
+    const match = /^v?(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version.trim());
+    if (!match) {
+      return false;
+    }
+
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return major === 1 && minor >= 18;
   }
 
   private async initializeSessions(): Promise<void> {
@@ -875,13 +965,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.runSseLoop("event"),
       this.runSseLoop("global-event"),
     ];
-    if (this.hasGlobalSyncEventStream()) {
-      sseLoops.push(this.runSseLoop("global-sync"));
-    } else {
-      this.logDebug(
-        "[opencode-adapter:global-sync] syncEvent stream unavailable; using global-event sync payloads.",
-      );
-    }
     this.sseLoopPromise = Promise.all(sseLoops).then(() => undefined);
   }
 
@@ -923,13 +1006,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private subscribeToSseStream(streamName: SdkEventStreamName): Promise<SdkEventSubscription> {
     const signal = this.sseAbortController?.signal;
-    if (streamName === "global-sync") {
-      const syncEvent = this.client!.global.syncEvent;
-      if (!syncEvent?.subscribe) {
-        throw new Error("OpenCode SDK global syncEvent stream is unavailable.");
-      }
-      return syncEvent.subscribe({ signal });
-    }
     if (streamName === "global-event") {
       return this.client!.global.event({ signal });
     }
@@ -940,10 +1016,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       },
       { signal },
     );
-  }
-
-  private hasGlobalSyncEventStream(): boolean {
-    return typeof this.client?.global.syncEvent?.subscribe === "function";
   }
 
   private normalizeSdkEvent(rawEvent: unknown): NormalizedSdkEvent | null {
@@ -1006,7 +1078,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         type !== "command.executed" &&
         type !== "session.created" &&
         type !== "session.updated" &&
-        type !== "session.deleted"
+        type !== "session.deleted" &&
+        type !== "question.asked" &&
+        type !== "question.replied" &&
+        type !== "question.rejected"
       ) {
         return false;
       }
@@ -1016,18 +1091,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return (
         this.matchesCurrentDirectoryEvent(event) ||
         this.shouldAcceptUnscopedLocalSessionCreatedEvent(event)
-      );
-    }
-
-    if (
-      type === "session.created" ||
-      type === "session.updated" ||
-      type === "session.deleted"
-    ) {
-      return (
-        this.matchesCurrentDirectoryEvent(event) ||
-        (type === "session.created" &&
-          this.shouldAcceptUnscopedLocalSessionCreatedEvent(event))
       );
     }
 
@@ -1078,6 +1141,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       case "permission.updated":
       case "permission.asked": {
         this.handlePermissionRequest(payload);
+        return;
+      }
+
+      case "question.asked": {
+        this.handleQuestionAsked(payload);
+        return;
+      }
+
+      case "question.replied":
+      case "question.rejected": {
+        this.handleQuestionSettled(payload);
         return;
       }
 
@@ -1156,20 +1230,29 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    if (this.state.status !== "busy" && this.state.status !== "awaiting_approval") {
+    if (
+      this.state.status !== "busy" &&
+      this.state.status !== "awaiting_approval" &&
+      this.state.status !== "awaiting_input"
+    ) {
       return;
     }
 
     // Wait a short settle time before emitting task_complete,
     // in case more events follow the idle signal.
     setTimeout(() => {
-      if (this.state.status !== "busy" && this.state.status !== "awaiting_approval") {
+      if (
+        this.state.status !== "busy" &&
+        this.state.status !== "awaiting_approval" &&
+        this.state.status !== "awaiting_input"
+      ) {
         return;
       }
 
       this.clearWechatWorkingNotice(true);
       this.pendingLocalPrompt = "";
       this.clearPendingPermissionState();
+      this.clearPendingQuestionState();
       this.state.activeTurnOrigin = undefined;
       this.hasAcceptedInput = false;
       const completedPreview = this.currentPreview;
@@ -1290,6 +1373,126 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.state.pendingApprovalOrigin = undefined;
   }
 
+  private handleQuestionAsked(properties: unknown): void {
+    if (!isRecord(properties) || !this.client) {
+      return;
+    }
+
+    const sessionId = this.extractSessionId(properties);
+    if (!sessionId || !this.syncTrackedSessionFromEvent(sessionId)) {
+      return;
+    }
+
+    const requestId = typeof properties.id === "string" ? properties.id : null;
+    if (!requestId || !Array.isArray(properties.questions)) {
+      return;
+    }
+
+    const questions = properties.questions.flatMap((candidate, index) => {
+      if (!isRecord(candidate)) {
+        return [];
+      }
+      const header = typeof candidate.header === "string" ? candidate.header.trim() : "";
+      const question = typeof candidate.question === "string" ? candidate.question.trim() : "";
+      if (!header || !question) {
+        return [];
+      }
+      const options = Array.isArray(candidate.options)
+        ? candidate.options.flatMap((option) => {
+            if (!isRecord(option) || typeof option.label !== "string") {
+              return [];
+            }
+            return [{
+              label: option.label,
+              description: typeof option.description === "string" ? option.description : "",
+            }];
+          })
+        : [];
+      return [{
+        id: `question_${index + 1}`,
+        header,
+        question,
+        isOther: candidate.custom === true,
+        isSecret: false,
+        multiple: candidate.multiple === true,
+        customAnswerMode: "value" as const,
+        options,
+      }];
+    });
+    if (questions.length !== properties.questions.length || questions.length === 0) {
+      return;
+    }
+
+    const request: UserInputRequest = {
+      summary: `OpenCode requested answers to ${questions.length} question${questions.length === 1 ? "" : "s"}.`,
+      questions,
+    };
+    this.pendingQuestion = {
+      sessionId,
+      requestId,
+      request,
+    };
+    this.state.pendingUserInput = request;
+    this.state.pendingUserInputOrigin = this.state.activeTurnOrigin;
+    this.clearWechatWorkingNotice();
+    this.setStatus("awaiting_input", "OpenCode is waiting for user input.");
+    this.emit({
+      type: "user_input_required",
+      request,
+      timestamp: nowIso(),
+    });
+  }
+
+  private handleQuestionSettled(properties: unknown): void {
+    if (!isRecord(properties) || !this.pendingQuestion) {
+      return;
+    }
+
+    const sessionId = this.extractSessionId(properties);
+    const requestId = typeof properties.requestID === "string" ? properties.requestID : null;
+    if (
+      sessionId !== this.pendingQuestion.sessionId ||
+      requestId !== this.pendingQuestion.requestId
+    ) {
+      return;
+    }
+
+    this.clearPendingQuestionState();
+    if (this.state.status === "awaiting_input") {
+      this.setStatus("busy", "OpenCode user input resolved.");
+    }
+  }
+
+  private clearPendingQuestionState(): void {
+    this.pendingQuestion = null;
+    this.state.pendingUserInput = null;
+    this.state.pendingUserInputOrigin = undefined;
+  }
+
+  private async rejectPendingQuestion(pending: OpenCodePendingQuestion): Promise<void> {
+    const client = this.client;
+    if (!client) {
+      return;
+    }
+
+    try {
+      const result = await client.question.reject({
+        requestID: pending.requestId,
+        directory: this.options.cwd,
+        workspace: this.activeWorkspaceId ?? undefined,
+      });
+      if (result.error !== undefined) {
+        throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
+      }
+    } catch (err) {
+      this.emit({
+        type: "stderr",
+        text: `Failed to reject OpenCode user input: ${describeUnknownError(err)}`,
+        timestamp: nowIso(),
+      });
+    }
+  }
+
   private getWechatOutboundAttachmentPermissionDenyMessage(
     properties: Record<string, unknown>,
     pendingPermission: OpenCodePendingPermission,
@@ -1334,12 +1537,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     void (async () => {
       try {
-        const result = await client.permission.respond({
-          sessionID: pendingPermission.sessionId,
-          permissionID: pendingPermission.permissionId,
+        const result = await client.permission.reply({
+          requestID: pendingPermission.permissionId,
           directory: this.options.cwd,
           workspace: this.activeWorkspaceId ?? undefined,
-          response: "reject",
+          reply: "reject",
         });
         if (result.error !== undefined) {
           throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
@@ -2304,8 +2506,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return (
       this.state.status === "busy" ||
       this.state.status === "awaiting_approval" ||
+      this.state.status === "awaiting_input" ||
       this.hasAcceptedInput ||
       this.pendingPermission !== null ||
+      this.pendingQuestion !== null ||
       this.state.activeTurnOrigin !== undefined ||
       this.currentPreview !== "(idle)"
     );
@@ -2316,6 +2520,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
     this.clearPendingPermissionState();
+    this.clearPendingQuestionState();
     this.state.activeTurnOrigin = undefined;
     this.hasAcceptedInput = false;
     this.currentPreview = "(idle)";
@@ -3069,6 +3274,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       case "session.deleted": {
         const sessionId = this.extractSessionId(payload);
         return sessionId ? `${type}:${sessionId}` : null;
+      }
+      case "question.asked": {
+        const requestId = typeof payload.id === "string" ? payload.id : undefined;
+        return requestId ? `${type}:${requestId}` : null;
+      }
+      case "question.replied":
+      case "question.rejected": {
+        const requestId = typeof payload.requestID === "string" ? payload.requestID : undefined;
+        return requestId ? `${type}:${requestId}` : null;
       }
       default:
         return null;

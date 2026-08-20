@@ -51,7 +51,7 @@
 - 已安装以下任意一种本地 CLI，并尽量保持最新版本：
   - [Codex](https://github.com/openai/codex)
   - [Claude Code](https://code.claude.com/docs/en/overview)
-  - [OpenCode](https://github.com/anomalyco/opencode)
+  - [OpenCode](https://github.com/anomalyco/opencode) `>= 1.18.0 < 2.0.0`
 
 ### 2. 安装
 

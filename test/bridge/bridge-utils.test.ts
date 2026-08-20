@@ -5,6 +5,7 @@ import path from "node:path";
 import type {
   BridgeAdapterState,
   BridgeState,
+  PendingUserInputRequest,
 } from "../../src/bridge/bridge-types.ts";
 import {
   buildWechatInboundPrompt,
@@ -16,6 +17,7 @@ import {
   formatFinalReplyMessage,
   formatMirroredUserInputMessage,
   formatPendingApprovalReminder,
+  formatUserInputRequestMessage,
   formatResumeSessionList,
   formatResumeThreadList,
   formatStatusReport,
@@ -28,6 +30,7 @@ import {
   MESSAGE_START_GRACE_MS,
   OutputBatcher,
   parseCodexSessionAgentMessage,
+  parsePendingUserInputAnswerCommand,
   parseWechatFinalReply,
   parseSystemCommand,
   parseWechatControlCommand,
@@ -35,6 +38,69 @@ import {
   splitWechatTextIntoChunks,
   WECHAT_TEXT_CHUNK_MAX_CHARS,
 } from "../../src/bridge/bridge-utils.ts";
+
+describe("user input request helpers", () => {
+  const pending: PendingUserInputRequest = {
+    createdAt: new Date(0).toISOString(),
+    summary: "OpenCode needs two answers.",
+    questions: [
+      {
+        id: "question_1",
+        header: "Targets",
+        question: "Which targets should be updated?",
+        isOther: true,
+        isSecret: false,
+        multiple: true,
+        customAnswerMode: "value",
+        options: [
+          { label: "CLI", description: "Update the CLI." },
+          { label: "Docs", description: "Update documentation." },
+        ],
+      },
+      {
+        id: "question_2",
+        header: "Mode",
+        question: "Which mode should be used?",
+        isOther: false,
+        isSecret: false,
+        customAnswerMode: "value",
+        options: [
+          { label: "Safe", description: "Use conservative behavior." },
+          { label: "Fast", description: "Prefer speed." },
+        ],
+      },
+    ],
+  };
+
+  test("parses multi-select and raw custom OpenCode answers", () => {
+    expect(
+      parsePendingUserInputAnswerCommand(
+        "question_1=1, Docs, custom-target; question_2=Safe",
+        pending,
+      ),
+    ).toEqual({
+      answers: {
+        question_1: ["CLI", "Docs", "custom-target"],
+        question_2: ["Safe"],
+      },
+      preview: "question_1=CLI, Docs, custom-target; question_2=Safe",
+    });
+  });
+
+  test("formats multi-select and custom answer guidance", () => {
+    const message = formatUserInputRequestMessage(pending, {
+      kind: "opencode",
+      status: "awaiting_input",
+      cwd: process.cwd(),
+      command: "opencode",
+    });
+
+    expect(message).toContain("multiple selections: allowed");
+    expect(message).toContain("custom answer: allowed");
+    expect(message).toContain("separate option values with commas");
+    expect(message).not.toContain("user_note");
+  });
+});
 
 describe("splitWechatTextIntoChunks", () => {
   test("keeps short text as a single chunk", () => {
