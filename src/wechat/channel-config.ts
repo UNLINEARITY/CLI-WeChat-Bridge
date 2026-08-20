@@ -83,7 +83,7 @@ export type WorkspaceChannelPaths = {
   endpointFile: string;
 };
 
-export type WorkspaceEndpointAdapter = "codex" | "claude" | "opencode" | "shell";
+export type WorkspaceEndpointAdapter = "codex" | "claude" | "opencode" | "pi" | "shell";
 
 type LegacyChannelSource = {
   dataDir: string;

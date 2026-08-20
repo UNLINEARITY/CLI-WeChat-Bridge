@@ -12,8 +12,8 @@ export const messages: Record<string, string> = {
   "bridge.backlogIgnored": "已忽略 {count} 条桥接启动前的积压消息（不会自动处理）。\n如果你是在桥接启动后才发送的消息却看到此提示，说明本机系统时钟可能不准（偏差超过 {graceSeconds} 秒），请校准时间后重启桥接。",
 
   // === Daemon 欢迎 & 控制 ===
-  "daemon.welcome": "微信 Daemon 就绪。\n工作目录: {cwd}\n当前: {adapter}\n\n命令: /claude, /codex, /opencode, /stop, /confirm, /deny, /status\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
-  "daemon.noActiveAdapter": "未选择活跃终端。发送 /codex、/claude 或 /opencode 启动一个。",
+  "daemon.welcome": "微信 Daemon 就绪。\n工作目录: {cwd}\n当前: {adapter}\n\n命令: /claude, /codex, /opencode, /pi, /stop, /confirm, /deny, /status\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
+  "daemon.noActiveAdapter": "未选择活跃终端。发送 /codex、/claude、/opencode 或 /pi 启动一个。",
   "daemon.switchResult.new": "已启动新的可见 CLI。",
   "daemon.switchResult.reused": "已复用现有的可见 CLI。",
 

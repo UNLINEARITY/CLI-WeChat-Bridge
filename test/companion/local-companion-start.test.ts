@@ -57,6 +57,19 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
+  test("parseCliArgs accepts Pi and forwards model options", () => {
+    const options = parseCliArgs([
+      "--adapter",
+      "pi",
+      "--model",
+      "openai/gpt-5.6-sol",
+    ]);
+
+    expect(options.adapter).toBe("pi");
+    expect(options.sessionStartMode).toBe("restore");
+    expect(options.cliArgs).toEqual(["--model", "openai/gpt-5.6-sol"]);
+  });
+
   test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
     const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
       adapter: "codex",
@@ -345,6 +358,38 @@ describe("local-companion-start helpers", () => {
         cwd: path.resolve("./tmp/project"),
         sessionStartMode: "new",
         cliArgs: ["--mode", "build"],
+      },
+    ]);
+  });
+
+  test("runVisibleClient routes Pi through the shared in-process companion", async () => {
+    const calls: Array<{ adapter: string; cwd: string }> = [];
+    const exitCode = await runVisibleClient(
+      {
+        adapter: "pi",
+        cwd: path.resolve("./tmp/project"),
+        timeoutMs: 15000,
+        sessionStartMode: "restore",
+        cliArgs: ["--model", "openai/gpt-5.6-sol"],
+      },
+      {
+        codexRemoteClient: async () => {
+          throw new Error("codex remote client should not be used for pi");
+        },
+        localCompanion: async (options) => {
+          calls.push(options);
+          return 7;
+        },
+      },
+    );
+
+    expect(exitCode).toBe(7);
+    expect(calls).toEqual([
+      {
+        adapter: "pi",
+        cwd: path.resolve("./tmp/project"),
+        sessionStartMode: "restore",
+        cliArgs: ["--model", "openai/gpt-5.6-sol"],
       },
     ]);
   });

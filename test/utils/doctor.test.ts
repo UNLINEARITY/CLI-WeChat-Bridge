@@ -327,9 +327,10 @@ describe("doctor report", () => {
     expect(output).toContain("Codex CLI");
     expect(output).toContain("Claude CLI");
     expect(output).toContain("OpenCode");
+    expect(output).toContain("Pi");
   });
 
-  test("shell bridge doctor skips Codex, Claude, and OpenCode CLI checks", async () => {
+  test("shell bridge doctor skips agent CLI checks", async () => {
     const lines = await buildDoctorReport(
       {
         argv: ["--doctor", "--adapter", "shell"],
@@ -344,6 +345,7 @@ describe("doctor report", () => {
     expect(output).not.toContain("Codex CLI");
     expect(output).not.toContain("Claude CLI");
     expect(output).not.toContain("OpenCode");
+    expect(output).not.toContain("Pi");
   });
 
   test("English locale uses English-only doctor labels", async () => {

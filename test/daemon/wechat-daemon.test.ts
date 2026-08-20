@@ -57,6 +57,7 @@ describe("wechat-daemon helpers", () => {
     expect(parseDaemonSwitchCommand("/codex")).toBe("codex");
     expect(parseDaemonSwitchCommand("/claude")).toBe("claude");
     expect(parseDaemonSwitchCommand("/opencode")).toBe("opencode");
+    expect(parseDaemonSwitchCommand("/pi")).toBe("pi");
     expect(parseDaemonSwitchCommand("/status")).toBeNull();
   });
 
@@ -93,15 +94,17 @@ describe("wechat-daemon helpers", () => {
     expect(args).not.toContain("--adapter");
   });
 
-  test("buildVisibleClientLaunchArgs routes Claude and OpenCode through local companion", () => {
-    const args = buildVisibleClientLaunchArgs({
-      adapter: "opencode",
-      cwd: path.resolve("./tmp/project"),
-    });
+  test("buildVisibleClientLaunchArgs routes Claude, OpenCode, and Pi through local companion", () => {
+    for (const adapter of ["claude", "opencode", "pi"] as const) {
+      const args = buildVisibleClientLaunchArgs({
+        adapter,
+        cwd: path.resolve("./tmp/project"),
+      });
 
-    expect(args.some((arg) => arg.endsWith("local-companion.ts"))).toBe(true);
-    expect(args).toContain("--adapter");
-    expect(args).toContain("opencode");
+      expect(args.some((arg) => arg.endsWith("local-companion.ts"))).toBe(true);
+      expect(args).toContain("--adapter");
+      expect(args).toContain(adapter);
+    }
   });
 
   test("buildVisibleClientLaunchArgs can request a fresh local companion session", () => {
@@ -117,10 +120,11 @@ describe("wechat-daemon helpers", () => {
     }
   });
 
-  test("defaultDaemonSessionStartMode starts Claude and OpenCode fresh", () => {
+  test("defaultDaemonSessionStartMode restores Codex and Pi while starting Claude and OpenCode fresh", () => {
     expect(defaultDaemonSessionStartMode("codex")).toBe("restore");
     expect(defaultDaemonSessionStartMode("claude")).toBe("new");
     expect(defaultDaemonSessionStartMode("opencode")).toBe("new");
+    expect(defaultDaemonSessionStartMode("pi")).toBe("restore");
   });
 
   test("resolveDaemonSessionStartMode avoids restoring stale OpenCode sessions", () => {
@@ -188,6 +192,16 @@ describe("wechat-daemon helpers", () => {
     ).toBe("restore");
   });
 
+  test("resolveDaemonSessionStartMode restores Pi when opening its first visible companion", () => {
+    expect(
+      resolveDaemonSessionStartMode({
+        adapter: "pi",
+        slotCreated: true,
+        visibleConnected: false,
+      }),
+    ).toBe("restore");
+  });
+
   test("buildWindowsVisibleClientLaunchCommand opens a titled console window", () => {
     const command = buildWindowsVisibleClientLaunchCommand({
       adapter: "claude",
@@ -226,6 +240,14 @@ describe("wechat-daemon helpers", () => {
         ],
       }),
     ).toContain("active: codex");
+    expect(
+      formatDaemonStatus({
+        cwd: "D:/work/project",
+        activeAdapter: "pi",
+        startedAt: "2026-05-22T00:00:00.000Z",
+        slots: [],
+      }),
+    ).toContain("pi: not started");
   });
 
   test("formatDaemonSwitchResultDetail reports automatic visible CLI outcomes", () => {

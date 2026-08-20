@@ -90,7 +90,11 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
 
   const record = value as Record<string, unknown>;
   const kind =
-    record.kind === "codex" || record.kind === "claude" || record.kind === "opencode" || record.kind === "shell"
+    record.kind === "codex" ||
+    record.kind === "claude" ||
+    record.kind === "opencode" ||
+    record.kind === "pi" ||
+    record.kind === "shell"
       ? record.kind
       : "codex";
   const sharedSessionId =
@@ -241,6 +245,7 @@ export function clearLocalCompanionEndpoint(
           getWorkspaceAdapterEndpointFile(cwd, "codex"),
           getWorkspaceAdapterEndpointFile(cwd, "claude"),
           getWorkspaceAdapterEndpointFile(cwd, "opencode"),
+          getWorkspaceAdapterEndpointFile(cwd, "pi"),
           getWorkspaceAdapterEndpointFile(cwd, "shell"),
         ];
 

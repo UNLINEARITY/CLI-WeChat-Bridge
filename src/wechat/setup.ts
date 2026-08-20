@@ -243,12 +243,14 @@ function printPostLoginHelp(log: (message: string) => void): void {
   log("  wechat-codex-start");
   log("  wechat-claude-start");
   log("  wechat-opencode-start");
+  log("  wechat-pi-start");
   log("  wechat-bridge-shell");
   log("");
   log("Manual two-terminal mode is also available:");
   log("  wechat-bridge-codex  +  wechat-codex");
   log("  wechat-bridge-claude +  wechat-claude");
   log("  wechat-bridge-opencode + wechat-opencode");
+  log("  wechat-bridge-pi + wechat-pi");
   log("");
   log("Run wechat-setup again any time you need to refresh the login.");
 }

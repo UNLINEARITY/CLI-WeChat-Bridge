@@ -151,7 +151,7 @@ export function shouldForwardBridgeEventToWechat(
     text?: string;
   } = {},
 ): boolean {
-  if (adapter !== "opencode") {
+  if (adapter !== "opencode" && adapter !== "pi") {
     return true;
   }
 
@@ -161,7 +161,7 @@ export function shouldForwardBridgeEventToWechat(
     case "thread_switched":
       return false;
     case "notice":
-      return /^OpenCode local draft:\s*/i.test(options.text ?? "");
+      return adapter === "pi" || /^OpenCode local draft:\s*/i.test(options.text ?? "");
     case "mirrored_user_input":
       return true;
     default:
@@ -335,7 +335,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
 
     switch (arg) {
       case "--adapter":
-        if (!next || !["codex", "claude", "opencode", "shell"].includes(next)) {
+        if (!next || !["codex", "claude", "opencode", "pi", "shell"].includes(next)) {
           throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
         }
         adapter = next as BridgeAdapterKind;
@@ -389,7 +389,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
   }
 
   if (!adapter) {
-    throw new Error("Missing required --adapter <codex|claude|opencode|shell>");
+    throw new Error("Missing required --adapter <codex|claude|opencode|pi|shell>");
   }
 
   const defaultCommand = resolveDefaultAdapterCommand(adapter);
@@ -406,12 +406,13 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
 function printUsageAndExit(): never {
   process.stdout.write(
     [
-      "Usage: wechat-bridge --adapter <codex|claude|opencode|shell> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>] [--session-start-mode <restore|new>]",
+      "Usage: wechat-bridge --adapter <codex|claude|opencode|pi|shell> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>] [--session-start-mode <restore|new>]",
       "",
       "Examples:",
       "  wechat-bridge-codex",
       "  wechat-bridge-claude --cwd ~/work/my-project",
       "  wechat-bridge-opencode --cwd ~/work/my-project",
+      "  wechat-bridge-pi --cwd ~/work/my-project",
       "  wechat-bridge-shell --cmd pwsh   # headless shell executor for non-interactive commands/scripts",
       "  wechat-bridge-shell --cmd bash   # headless shell executor for non-interactive commands/scripts",
       "  wechat-bridge-codex --lifecycle companion_bound",
@@ -1608,13 +1609,13 @@ async function handleInboundMessage(params: {
 
   if (adapterState.status === "busy") {
     if (
-      (options.adapter === "codex" || options.adapter === "opencode") &&
+      (options.adapter === "codex" || options.adapter === "opencode" || options.adapter === "pi") &&
       adapterState.activeTurnOrigin === "local"
     ) {
       await queueWechatMessage(
         message.senderId,
         `${
-          options.adapter === "opencode" ? "OpenCode" : "codex"
+          options.adapter === "opencode" ? "OpenCode" : options.adapter === "pi" ? "Pi" : "codex"
         } is currently busy with a local terminal turn. Wait for it to finish or use /stop.`,
       );
       return null;

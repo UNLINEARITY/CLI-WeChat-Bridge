@@ -1117,7 +1117,7 @@ export function buildCliEnvironment(
   const sourceEnv = options.env ?? (process.env as Record<string, string | undefined>);
   const platform = options.platform ?? process.platform;
 
-  if (kind === "codex" || kind === "claude" || kind === "opencode") {
+  if (kind === "codex" || kind === "claude" || kind === "opencode" || kind === "pi") {
     // Pass the full environment through on every platform. A previous
     // Windows-only allowlist silently dropped user-configured variables such
     // as ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY, which
@@ -1762,7 +1762,10 @@ export function resolveSpawnTarget(
   }
 
   const resolved = resolveCommandPath(trimmed, platform, env) ?? trimmed;
-  if (platform !== "win32" || (kind !== "codex" && kind !== "claude" && kind !== "opencode")) {
+  if (
+    platform !== "win32" ||
+    (kind !== "codex" && kind !== "claude" && kind !== "opencode" && kind !== "pi")
+  ) {
     return { file: resolved, args: [...forwardArgs] };
   }
 

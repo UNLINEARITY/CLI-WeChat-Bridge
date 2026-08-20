@@ -39,7 +39,7 @@
 
 如果微信没有收到回复，优先确认 `bridge.log` 中是否出现 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT`、`context_token`、`endpoint`、`final_reply` 或 adapter 相关错误。
 
-## `wechat-codex` / `wechat-claude` / `wechat-opencode` 提示找不到 bridge
+## `wechat-codex` / `wechat-claude` / `wechat-opencode` / `wechat-pi` 提示找不到 bridge
 
 通常原因是：
 
@@ -47,7 +47,7 @@
 - bridge 与 companion 不在同一个工作目录；
 - 当前工作区 endpoint 文件来自旧进程或已经失效。
 
-建议先确认两个终端在同一目录。如果不想手动分两个终端，可以改用 `wechat-codex-start`、`wechat-claude-start` 或 `wechat-opencode-start`。这些启动器会自动复用同目录 daemon，或在没有 daemon 时启动 / 切换独立 bridge。
+建议先确认两个终端在同一目录。如果不想手动分两个终端，可以改用 `wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 或 `wechat-pi-start`。这些启动器会自动复用同目录 daemon，或在没有 daemon 时启动 / 切换独立 bridge。
 
 ## 全局命令不存在
 
@@ -69,7 +69,20 @@ npm install -g cli-wechat-bridge@latest
 
 说明 `node-pty` 原生模块未能加载，bridge 已自动切换到 `child_process` 回退模式。
 
-**注意**：Claude Code 适配器当前通过 PTY 交互模式工作，在回退模式下可能无法正常桥接。Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响。OpenCode 适配器完全不依赖 node-pty。
+**注意**：Claude Code 适配器当前通过 PTY 交互模式工作，在回退模式下可能无法正常桥接。Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响。OpenCode 和 Pi 适配器不依赖 node-pty。
+
+## Pi companion 启动或会话异常
+
+先确认本机可执行 `pi`，并检查环境：
+
+```bash
+pi --help
+wechat-bridge-pi --doctor
+```
+
+`wechat-pi` 会启动并托管唯一的原生 `pi --approve --extension <bridge-extension>` TUI。当前窗口里显示的就是用户平时使用的 Pi，微信通过注入的本地 extension 接管同一 session。不要再运行第二个 Pi 进程写入同一 session 文件，否则会造成会话竞争或 transcript 状态不一致。需要新会话时，在 Pi TUI 或微信使用 `/new` / `/new-session`；需要中断当前任务时使用 `/stop`。
+
+Pi 使用启动 `wechat-pi` 的本地用户权限，bridge 不增加工具审批层。`--approve` 表示信任当前项目的 Pi 本地配置和资源，不是按工具逐项授权。原生 Pi 的主题、快捷键、模型选择和 extension 交互界面都会保留；如果看到的只是简单 `pi>` 文本提示符，请确认已重新安装包含原生 TUI 接管实现的 bridge 版本。
 
 ### 修复方法
 
@@ -212,7 +225,7 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 请优先确认 `wechat-bridge-codex` 与 `wechat-codex` 是否都已重启到同一版本。
 
-微信侧 `/resume` 当前仍保持禁用。需要切换 Codex / Claude Code / OpenCode 会话时，优先在本地 companion 中使用原生 `/resume`、`/new` 或对应 CLI 命令，bridge 会跟随本地活动会话。
+微信侧 `/resume` 当前仍保持禁用。需要切换 Codex / Claude Code / OpenCode / Pi 会话时，优先在本地 companion 中使用 `/new` 或对应 CLI 的会话命令，bridge 会跟随本地活动会话。
 
 部分设备可能存在第一次本地输入不同步到微信的情况，可以先从微信发送一条普通消息来建立连接。
 

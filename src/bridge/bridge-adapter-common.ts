@@ -83,6 +83,8 @@ export function getLocalCompanionCommandName(kind: BridgeAdapterKind): string {
       return "wechat-claude";
     case "opencode":
       return "wechat-opencode";
+    case "pi":
+      return "wechat-pi";
     default:
       return "local companion";
   }

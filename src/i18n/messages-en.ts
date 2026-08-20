@@ -12,8 +12,8 @@ export const messages: Record<string, string> = {
   "bridge.backlogIgnored": "Ignored {count} backlog message(s) sent before the bridge started (they will not be processed).\nIf you actually sent them after the bridge started, your system clock is likely skewed by more than {graceSeconds}s — sync the clock and restart the bridge.",
 
   // === Daemon welcome & control ===
-  "daemon.welcome": "WeChat Daemon ready.\nCWD: {cwd}\nActive: {adapter}\n\nCommands: /claude, /codex, /opencode, /stop, /confirm, /deny, /status\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
-  "daemon.noActiveAdapter": "No active terminal is selected. Send /codex, /claude, or /opencode to start one.",
+  "daemon.welcome": "WeChat Daemon ready.\nCWD: {cwd}\nActive: {adapter}\n\nCommands: /claude, /codex, /opencode, /pi, /stop, /confirm, /deny, /status\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
+  "daemon.noActiveAdapter": "No active terminal is selected. Send /codex, /claude, /opencode, or /pi to start one.",
   "daemon.switchResult.new": "Started a new visible CLI.",
   "daemon.switchResult.reused": "Reused the existing visible CLI.",
 

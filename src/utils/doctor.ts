@@ -261,6 +261,7 @@ function isBridgeAdapterKind(value: string | undefined): value is BridgeAdapterK
     value === "codex" ||
     value === "claude" ||
     value === "opencode" ||
+    value === "pi" ||
     value === "shell"
   );
 }
@@ -568,7 +569,7 @@ function chooseEndpointAdapters(
     return [lock.adapter];
   }
   return options.mode === "daemon"
-    ? ["codex", "claude", "opencode"]
+    ? ["codex", "claude", "opencode", "pi"]
     : ["codex"];
 }
 
@@ -585,6 +586,8 @@ function chooseCliChecks(options: DoctorCliOptions): Array<{
         return [{ name: "claude", label: "Claude CLI", optional: false }];
       case "opencode":
         return [{ name: "opencode", label: "OpenCode", optional: false }];
+      case "pi":
+        return [{ name: "pi", label: "Pi", optional: false }];
       case "shell":
         return [];
       default:
@@ -596,6 +599,7 @@ function chooseCliChecks(options: DoctorCliOptions): Array<{
     { name: "codex", label: "Codex CLI", optional: true },
     { name: "claude", label: "Claude CLI", optional: true },
     { name: "opencode", label: "OpenCode", optional: true },
+    { name: "pi", label: "Pi", optional: true },
   ];
 }
 

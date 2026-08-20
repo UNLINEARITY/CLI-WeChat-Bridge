@@ -1082,6 +1082,8 @@ export function formatMirroredUserInputMessage(
         ? "Local Claude input"
         : adapter === "opencode"
           ? "Local OpenCode input"
+          : adapter === "pi"
+            ? "Local Pi input"
           : "Local input";
   return `${label}:\n${truncatePreview(text, 500)}`;
 }
@@ -1090,11 +1092,20 @@ export function formatFinalReplyMessage(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  if (adapter === "claude" || adapter === "codex" || adapter === "opencode") {
+  if (adapter === "claude" || adapter === "codex" || adapter === "opencode" || adapter === "pi") {
     return text;
   }
   // After the early return above, only "shell" remains.
-  const label = (adapter as string) === "codex" ? "Codex" : (adapter as string) === "claude" ? "Claude" : (adapter as string) === "opencode" ? "OpenCode" : adapter;
+  const label =
+    (adapter as string) === "codex"
+      ? "Codex"
+      : (adapter as string) === "claude"
+        ? "Claude"
+        : (adapter as string) === "opencode"
+          ? "OpenCode"
+          : (adapter as string) === "pi"
+            ? "Pi"
+            : adapter;
   return `${label} final reply:\n${text}`;
 }
 
@@ -1357,7 +1368,16 @@ export function formatTaskFailedMessage(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  const label = adapter === "codex" ? "Codex" : adapter === "claude" ? "Claude" : adapter === "opencode" ? "OpenCode" : adapter;
+  const label =
+    adapter === "codex"
+      ? "Codex"
+      : adapter === "claude"
+        ? "Claude"
+        : adapter === "opencode"
+          ? "OpenCode"
+          : adapter === "pi"
+            ? "Pi"
+            : adapter;
   return `${label} task failed:\n${text}`;
 }
 

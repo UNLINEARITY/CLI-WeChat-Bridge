@@ -126,7 +126,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           ? initialSharedSessionId
           : undefined,
       activeRuntimeSessionId:
-        options.kind === "claude" || options.kind === "opencode"
+        options.kind === "claude" || options.kind === "opencode" || options.kind === "pi"
           ? initialSharedSessionId
           : undefined,
       resumeConversationId:

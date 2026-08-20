@@ -9,7 +9,7 @@ import {
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
-export type DaemonAdapterKind = "codex" | "claude" | "opencode";
+export type DaemonAdapterKind = "codex" | "claude" | "opencode" | "pi";
 
 export type DaemonEndpoint = {
   protocolVersion: number;

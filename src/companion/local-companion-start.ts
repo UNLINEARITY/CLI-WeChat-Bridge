@@ -213,7 +213,8 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
           "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...codex args]",
           "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...claude args]",
           "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...opencode args]",
-          "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
+          "       wechat-pi-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...pi args]",
+          "       local-companion-start [--adapter <codex|claude|opencode|pi>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
           "",
           "Starts a bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
           "Claude and OpenCode launchers start a fresh CLI session by default.",
@@ -226,7 +227,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     }
 
     if (arg === "--adapter") {
-      if (!next || !["codex", "claude", "opencode"].includes(next)) {
+      if (!next || !["codex", "claude", "opencode", "pi"].includes(next)) {
         throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
       }
       adapter = next as LocalCompanionLaunchAdapter;
@@ -324,7 +325,12 @@ async function stopExistingBridge(
     throw new Error(`Timed out waiting for existing bridge pid=${pid} to exit.`);
   }
 
-  if (lock.adapter === "codex" || lock.adapter === "claude" || lock.adapter === "opencode") {
+  if (
+    lock.adapter === "codex" ||
+    lock.adapter === "claude" ||
+    lock.adapter === "opencode" ||
+    lock.adapter === "pi"
+  ) {
     clearLocalCompanionEndpoint(cwd, undefined, { adapter: lock.adapter });
   } else {
     clearLocalCompanionEndpoint(cwd);

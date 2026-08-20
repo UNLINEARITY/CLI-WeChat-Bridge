@@ -26,14 +26,14 @@ function log(adapter: string, message: string): void {
 }
 
 export type LocalCompanionCliOptions = {
-  adapter: "codex" | "claude" | "opencode";
+  adapter: "codex" | "claude" | "opencode" | "pi";
   cwd: string;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs: string[];
 };
 
 function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
-  let adapter: "codex" | "claude" | "opencode" | null = null;
+  let adapter: "codex" | "claude" | "opencode" | "pi" | null = null;
   let cwd = process.cwd();
   let sessionStartMode: BridgeSessionStartMode = "restore";
   const cliArgs: string[] = [];
@@ -48,7 +48,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: local-companion --adapter <codex|claude|opencode> [--cwd <path>] [...cli args]",
+          "Usage: local-companion --adapter <codex|claude|opencode|pi> [--cwd <path>] [...cli args]",
           "",
           'Starts the visible local companion and connects it to the matching running bridge for the current directory.',
           "Unknown arguments are forwarded to the visible CLI client.",
@@ -59,10 +59,10 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     }
 
     if (arg === "--adapter") {
-      if (!next || !["codex", "claude", "opencode"].includes(next)) {
+      if (!next || !["codex", "claude", "opencode", "pi"].includes(next)) {
         throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
       }
-      adapter = next as "codex" | "claude" | "opencode";
+      adapter = next as "codex" | "claude" | "opencode" | "pi";
       i += 1;
       continue;
     }
@@ -89,7 +89,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
   }
 
   if (!adapter) {
-    throw new Error("Missing required --adapter <codex|claude|opencode>");
+    throw new Error("Missing required --adapter <codex|claude|opencode|pi>");
   }
 
   return { adapter, cwd, sessionStartMode, cliArgs };

@@ -8,7 +8,7 @@
 
 - [Node.js](https://nodejs.org/en/download) `>= 24.0.0`
 - [Bun](https://bun.sh/docs/installation) `>= 1.0.0`
-- 至少一个本地 CLI：Codex、Claude Code 或 OpenCode
+- 至少一个本地 CLI：Codex、Claude Code、OpenCode 或 Pi
 
 克隆并安装依赖：
 
@@ -35,6 +35,9 @@ bun install
 | OpenCode bridge | `npm run bridge:opencode` |
 | OpenCode companion | `npm run opencode:panel` |
 | OpenCode 单命令启动器 | `npm run opencode:start` |
+| Pi bridge | `npm run bridge:pi` |
+| Pi companion | `npm run pi:companion` |
+| Pi 单命令启动器 | `npm run pi:start` |
 | Shell bridge | `npm run bridge:shell` |
 | 通用 bridge 入口 | `npm run bridge:bun -- --adapter codex` |
 
@@ -44,6 +47,7 @@ bun install
 npm run daemon -- --adapter codex
 npm run bridge:bun -- --adapter claude --cwd D:\work\my-project
 npm run opencode:start -- --cwd D:\work\my-project
+npm run pi:start -- --cwd D:\work\my-project --model openai/gpt-5.6-sol
 ```
 
 ## Shell / PowerShell 调试适配器
@@ -63,7 +67,13 @@ wechat-bridge-shell
 wechat-bridge-shell --cmd pwsh.exe
 ```
 
-默认会使用持久 `powershell.exe` 会话；需要执行高风险命令时，bridge 会走审批流程。相关能力更适合用来排查 bridge 管线，而不是替代 Codex、Claude Code 或 OpenCode 的日常适配器。
+默认会使用持久 `powershell.exe` 会话；需要执行高风险命令时，bridge 会走审批流程。相关能力更适合用来排查 bridge 管线，而不是替代 Codex、Claude Code、OpenCode 或 Pi 的日常适配器。
+
+## Pi 原生 TUI 接管说明
+
+Pi companion 启动一个长期运行的 `pi --approve --extension <bridge-extension>` 子进程，并使用 `stdio: "inherit"` 把当前可见终端直接交给 Pi。本地键盘和微信输入共享这一原生 TUI 进程及其当前 session；微信输入由 extension 调用 `pi.sendUserMessage()`，`/stop` 调用 extension context 的 `abort()`，`/new` 和 `/new-session` 通过 command context 新建 session。
+
+adapter 与 extension 之间只通过 localhost TCP JSONL 同步命令、session 状态和最终回复；Pi 的终端输出不经过该协议，因此主题、快捷键、模型选择和 extension UI 都保持原生行为，也不需要 `node-pty`。该适配器按启动用户权限执行，不增加 bridge 工具审批层。测试或调试时不要再启动第二个 Pi 进程写入同一 session；companion 是当前 session 的唯一进程 owner。
 
 ## Windows 启动器说明
 
@@ -168,11 +178,13 @@ npm pack --dry-run --json
 | `src/bridge/wechat-bridge.ts` | bridge 主事件循环 |
 | `src/daemon/wechat-daemon.ts` | 常驻 WeChat daemon 与多 CLI slot 管理 |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |
-| `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `shell` 适配器入口 |
+| `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `pi` / `shell` 适配器入口 |
 | `src/bridge/bridge-adapters.opencode.ts` | OpenCode 适配器实现 |
-| `src/companion/local-companion.ts` | `wechat-claude` / `wechat-opencode` 本地 companion 入口 |
+| `src/bridge/bridge-adapters.pi.ts` | Pi 原生 TUI adapter、extension IPC、session 跟随与最终回复实现 |
+| `src/companion/pi-tui-bridge-extension.ts` | 注入 Pi TUI 的本地 bridge extension |
+| `src/companion/local-companion.ts` | `wechat-claude` / `wechat-opencode` / `wechat-pi` 本地 companion 入口 |
 | `src/companion/codex-remote-client.ts` | `wechat-codex` 本地客户端入口 |
-| `src/companion/local-companion-start.ts` | `wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 单命令启动入口 |
+| `src/companion/local-companion-start.ts` | `wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 单命令启动入口 |
 | `src/wechat/wechat-transport.ts` | iLink 消息收发 |
 | `src/bridge/bridge-state.ts` | bridge 状态、锁与日志 |
 | `src/wechat/setup.ts` | 登录与凭据初始化 |

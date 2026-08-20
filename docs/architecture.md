@@ -1,6 +1,6 @@
 # 通信架构
 
-本文档介绍 CLI WeChat Bridge 三个适配器（Codex、Claude Code、OpenCode）的通信架构，解释各 CLI 原生提供的 API 支持，以及为什么它们对 `node-pty` 的依赖程度不同。
+本文档介绍 CLI WeChat Bridge 四个主要适配器（Codex、Claude Code、OpenCode、Pi）的通信架构，解释各 CLI 原生提供的 API 支持，以及为什么它们对 `node-pty` 的依赖程度不同。
 
 ## 概述
 
@@ -10,6 +10,7 @@
 |--------|----------|----------|----------|
 | `CodexPtyAdapter` | Codex | WebSocket JSON-RPC | 不需要（Headless/Panel 模式） |
 | `OpenCodeServerAdapter` | OpenCode | HTTP REST + SSE | 不需要 |
+| `PiTuiAdapter` | Pi | 原生 TUI + extension TCP IPC | 不需要（继承真实终端） |
 | `ClaudeCompanionAdapter` | Claude Code | PTY 写入 + Hook TCP 回调 | **需要** |
 
 ## 架构总览
@@ -29,22 +30,14 @@
 ┌─────────────────────────────────────────────────────────────────┐
 │                   Bridge Controller                               │
 │           (路由、状态机、审批流、输出格式化)                          │
-└───────┬──────────────────┼──────────────────┬───────────────────┘
-        │                  │                  │
-        ▼                  ▼                  ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
-│    Codex     │  │  Claude Code │  │     OpenCode     │
-│   Adapter    │  │   Adapter    │  │     Adapter      │
-├──────────────┤  ├──────────────┤  ├──────────────────┤
-│ WebSocket    │  │ PTY stdin    │  │ HTTP SDK         │
-│ JSON-RPC     │  │ + Hook TCP   │  │ + SSE streams    │
-└──────┬───────┘  └──────┬───────┘  └────────┬─────────┘
-       │                 │                    │
-       ▼                 ▼                    ▼
-┌──────────────┐  ┌──────────────┐  ┌──────────────────┐
-│ codex        │  │ claude       │  │ opencode serve   │
-│ app-server   │  │ (交互式 CLI) │  │ (HTTP server)    │
-└──────────────┘  └──────────────┘  └──────────────────┘
+└───────┬──────────────┬──────────────┬──────────────┬───────┘
+        │              │              │              │
+        ▼              ▼              ▼              ▼
+   Codex Adapter  Claude Adapter  OpenCode Adapter  Pi Adapter
+   WebSocket RPC  PTY + Hook TCP  HTTP + SSE        Extension TCP
+        │              │              │              │
+        ▼              ▼              ▼              ▼
+   codex app-server   claude      opencode serve   pi 原生 TUI
 ```
 
 <!-- PLACEHOLDER_SECTION_3 -->
@@ -138,6 +131,42 @@ opencode serve --port <port> --hostname 127.0.0.1
 OpenCode 的 server 模式提供了完整的结构化 API：输入通过 HTTP 发送，输出通过 SSE 接收，审批通过 HTTP 响应。整个通信链路不涉及终端模拟。
 
 <!-- PLACEHOLDER_SECTION_5 -->
+
+## Pi 适配器（原生 TUI + extension TCP IPC）
+
+### CLI 原生支持
+
+Pi 支持通过 CLI 参数加载 extension：
+
+```bash
+pi --approve --extension <bridge-extension>
+```
+
+`wechat-pi` 在可见 companion 进程中启动这条命令，并让 Pi 子进程直接继承 companion 的 stdin、stdout 和 stderr。用户看到和操作的因此是完整原生 Pi TUI，而不是 bridge 自己绘制的终端壳。它不需要 `node-pty`，因为这里没有模拟终端：Pi 直接使用启动窗口提供的真实 TTY。
+
+### 通信流程
+
+```
+微信输入:
+  Bridge → localhost TCP → extension → pi.sendUserMessage()
+
+本地输入:
+  用户键盘 → 原生 Pi TUI → extension input event → Bridge 镜像状态
+
+最终回复:
+  Pi message_end / agent_settled → extension → Bridge → 微信
+
+会话控制:
+  session_start 同步当前 session
+  /stop → extension context.abort()
+  /new / resume → extension command context.newSession() / switchSession()
+```
+
+可见 companion 托管唯一 Pi TUI 子进程，本地键盘和微信输入共享同一 session。微信 turn 才会生成微信 `final_reply`；本地 turn 保持在原生 TUI 中，并只向 bridge 镜像必要的输入和会话状态，避免把本地回答误发给微信。
+
+### 权限与交互
+
+Pi 适配器不增加 bridge 工具审批层，文件与命令工具直接继承启动用户的本地权限。`--approve` 用于信任当前项目的 Pi 配置与资源。因为运行的是原生 TUI，Pi 自己的主题、快捷键、模型选择以及其他 extension 的交互式 UI 都会正常保留。
 
 ## Claude Code 适配器（PTY + Hook TCP）
 
@@ -239,17 +268,17 @@ Claude Code 确实提供了 `--print --output-format stream-json --input-format 
 
 ## 对比总结
 
-| 维度 | Codex | OpenCode | Claude Code |
-|------|-------|----------|-------------|
-| **CLI 原生 API** | `app-server` (WebSocket RPC) | `serve` (HTTP + SSE) | 无持久 API |
-| **通信协议** | WebSocket JSON-RPC | HTTP REST + SSE | PTY stdin + Hook TCP |
-| **PTY 依赖** | 不需要（Headless/Panel） | 不需要 | **需要** |
-| **输入方式** | `turn/start` RPC 调用 | `session.promptAsync` HTTP | PTY 写入 (bracketed paste) |
-| **输出方式** | WebSocket notifications | SSE 事件流 | Hook 回调 + transcript 轮询 |
-| **审批机制** | Server-initiated RPC request | SSE event + HTTP respond | Hook TCP socket 保持 |
-| **会话管理** | `thread/start` / `thread/resume` | `session.create` / SDK | `--resume` CLI 参数 |
-| **中断** | `turn/interrupt` RPC | `session.abort` HTTP | PTY 写入 Ctrl+C (`\x03`) |
-| **node-pty 不可用时** | 正常工作 | 正常工作 | 可能无法正常桥接 |
+| 维度 | Codex | OpenCode | Pi | Claude Code |
+|------|-------|----------|----|-------------|
+| **CLI 原生 API** | `app-server` (WebSocket RPC) | `serve` (HTTP + SSE) | Extension API | 无持久 API |
+| **通信协议** | WebSocket JSON-RPC | HTTP REST + SSE | 原生 TUI + localhost TCP JSONL | PTY stdin + Hook TCP |
+| **PTY 依赖** | 不需要（Headless/Panel） | 不需要 | 不需要 | **需要** |
+| **输入方式** | `turn/start` RPC 调用 | `session.promptAsync` HTTP | `pi.sendUserMessage()` | PTY 写入 (bracketed paste) |
+| **输出方式** | WebSocket notifications | SSE 事件流 | `message_end` / `agent_settled` extension events | Hook 回调 + transcript 轮询 |
+| **审批机制** | Server-initiated RPC request | SSE event + HTTP respond | 无 bridge 工具审批层 | Hook TCP socket 保持 |
+| **会话管理** | `thread/start` / `thread/resume` | `session.create` / SDK | `newSession()` / `switchSession()` | `--resume` CLI 参数 |
+| **中断** | `turn/interrupt` RPC | `session.abort` HTTP | extension context `abort()` | PTY 写入 Ctrl+C (`\x03`) |
+| **node-pty 不可用时** | 正常工作 | 正常工作 | 正常工作 | 可能无法正常桥接 |
 
 ## 未来方向
 
@@ -278,4 +307,4 @@ Claude Code 近期新增了 `--remote-control` 选项，可能提供了一种新
 
 ---
 
-*本文档基于 v1.1.0 源码撰写。随着上游 CLI 工具的演进，通信架构可能会调整。*
+*本文档基于当前源码撰写。随着上游 CLI 工具的演进，通信架构可能会调整。*

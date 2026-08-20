@@ -13,7 +13,7 @@ export type LocalClientEndpoint = {
   protocolVersion: number;
   runtimeKind: RuntimeKind;
   instanceId: string;
-  kind: "codex" | "claude" | "opencode" | "shell";
+  kind: "codex" | "claude" | "opencode" | "pi" | "shell";
   port: number;
   token: string;
   renderMode?: RuntimeRenderMode;

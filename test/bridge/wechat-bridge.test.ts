@@ -180,6 +180,14 @@ describe("wechat-bridge cli helpers", () => {
     expect(shouldForwardBridgeEventToWechat("opencode", "fatal_error")).toBe(true);
   });
 
+  test("suppresses Pi terminal streams while forwarding structured notices", () => {
+    expect(shouldForwardBridgeEventToWechat("pi", "stdout")).toBe(false);
+    expect(shouldForwardBridgeEventToWechat("pi", "stderr")).toBe(false);
+    expect(shouldForwardBridgeEventToWechat("pi", "notice")).toBe(true);
+    expect(shouldForwardBridgeEventToWechat("pi", "mirrored_user_input")).toBe(true);
+    expect(shouldForwardBridgeEventToWechat("pi", "final_reply")).toBe(true);
+  });
+
   test("keeps non-OpenCode adapters forwarding bridge events", () => {
     expect(shouldForwardBridgeEventToWechat("codex", "stdout")).toBe(true);
     expect(shouldForwardBridgeEventToWechat("claude", "notice")).toBe(true);

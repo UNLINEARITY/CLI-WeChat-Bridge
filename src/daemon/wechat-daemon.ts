@@ -170,7 +170,7 @@ const DAEMON_TAKEOVER_FORCE_STOP_TIMEOUT_MS = 3_000;
 const DAEMON_TAKEOVER_STOP_POLL_MS = 250;
 const VISIBLE_CLIENT_CONNECT_TIMEOUT_MS = 15_000;
 const VISIBLE_CLIENT_CONNECT_POLL_MS = 250;
-const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode"];
+const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode", "pi"];
 
 function log(message: string): void {
   process.stderr.write(`[wechat-daemon] ${message}\n`);
@@ -199,7 +199,7 @@ function computeWechatSendRetryDelayMs(attempt: number): number {
 }
 
 function isDaemonAdapterKind(value: string | undefined): value is DaemonAdapterKind {
-  return value === "codex" || value === "claude" || value === "opencode";
+  return value === "codex" || value === "claude" || value === "opencode" || value === "pi";
 }
 
 function isSameWorkspaceCwd(left: string, right: string): boolean {
@@ -233,10 +233,10 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: wechat-daemon [--cwd <path>] [--adapter <codex|claude|opencode>] [--profile <name-or-path>] [--no-open]",
+          "Usage: wechat-daemon [--cwd <path>] [--adapter <codex|claude|opencode|pi>] [--profile <name-or-path>] [--no-open]",
           "",
-          "Keeps one WeChat connection alive and switches between Codex, Claude Code, and OpenCode from WeChat.",
-          "Send /codex, /claude, or /opencode in WeChat to switch the active terminal.",
+          "Keeps one WeChat connection alive and switches between Codex, Claude Code, OpenCode, and Pi from WeChat.",
+          "Send /codex, /claude, /opencode, or /pi in WeChat to switch the active terminal.",
           "",
         ].join("\n"),
       );
@@ -290,6 +290,8 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
       return "claude";
     case "/opencode":
       return "opencode";
+    case "/pi":
+      return "pi";
     default:
       return null;
   }
@@ -315,7 +317,7 @@ export function resolveDaemonSessionStartMode(params: {
   if (params.explicitSessionStartMode) {
     return params.explicitSessionStartMode;
   }
-  if (params.adapter === "codex") {
+  if (params.adapter === "codex" || params.adapter === "pi") {
     return "restore";
   }
   if (params.slotCreated) {
@@ -629,7 +631,7 @@ function formatInboundMessagePreview(message: InboundWechatMessage): string {
 function formatNoActiveAdapterMessage(): string {
   return [
     "No active terminal is selected.",
-    "Send /codex, /claude, or /opencode to choose one.",
+    "Send /codex, /claude, /opencode, or /pi to choose one.",
   ].join("\n");
 }
 
@@ -820,7 +822,7 @@ class WechatDaemon {
     let consecutivePollFailures = 0;
     log("WeChat daemon is ready.");
     log(`Working directory: ${this.cwd}`);
-    log("Switch from WeChat with /codex, /claude, or /opencode.");
+    log("Switch from WeChat with /codex, /claude, /opencode, or /pi.");
     appendDaemonLog(`started: cwd=${this.cwd}`);
 
     const activeSlot = this.getActiveSlot();
@@ -1031,7 +1033,7 @@ class WechatDaemon {
       !created &&
       options.reuseExistingVisible === false &&
       sessionStartMode === "new" &&
-      (adapter === "claude" || adapter === "opencode") &&
+      (adapter === "claude" || adapter === "opencode" || adapter === "pi") &&
       visibleConnected
     ) {
       await this.startFreshSlotSession(slot);
@@ -1141,9 +1143,9 @@ class WechatDaemon {
 
     if (slot.adapter === "claude") {
       await slot.runtime.reset();
-    } else if (slot.adapter === "opencode") {
+    } else if (slot.adapter === "opencode" || slot.adapter === "pi") {
       if (!slot.runtime.createSession) {
-        throw new Error("/new is not available in opencode mode.");
+        throw new Error(`/new is not available in ${slot.adapter} mode.`);
       }
       await slot.runtime.createSession();
     }
