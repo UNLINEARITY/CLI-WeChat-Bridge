@@ -66,8 +66,20 @@ describe("local-companion-start helpers", () => {
     ]);
 
     expect(options.adapter).toBe("pi");
-    expect(options.sessionStartMode).toBe("restore");
+    expect(options.sessionStartMode).toBe("new");
     expect(options.cliArgs).toEqual(["--model", "openai/gpt-5.6-sol"]);
+  });
+
+  test("parseCliArgs allows Pi to explicitly restore the previous session", () => {
+    const options = parseCliArgs([
+      "--adapter",
+      "pi",
+      "--session-start-mode",
+      "restore",
+    ]);
+
+    expect(options.sessionStartMode).toBe("restore");
+    expect(options.cliArgs).toEqual([]);
   });
 
   test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
@@ -269,6 +281,46 @@ describe("local-companion-start helpers", () => {
         reuseExistingVisible: true,
       },
     ]);
+  });
+
+  test("tryDelegateToDaemon requests a fresh Pi session even when its TUI is visible", async () => {
+    const cwd = path.resolve("./tmp/project");
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd,
+      startedAt: "2026-05-22T00:00:00.000Z",
+    };
+    const requests: DaemonRequest[] = [];
+
+    const delegated = await tryDelegateToDaemon(
+      {
+        adapter: "pi",
+        cwd,
+        timeoutMs: 15000,
+        sessionStartMode: "new",
+        cliArgs: [],
+      },
+      {
+        readEndpoint: () => endpoint,
+        isEndpointAlive: async () => true,
+        sendRequest: async (_endpoint, request) => {
+          requests.push(request);
+          return { ok: true };
+        },
+      },
+    );
+
+    expect(delegated).toBe(true);
+    expect(requests[0]).toEqual(
+      expect.objectContaining({
+        adapter: "pi",
+        sessionStartMode: "new",
+        reuseExistingVisible: false,
+      }),
+    );
   });
 
   test("tryDelegateToDaemon rejects daemon cwd mismatches", async () => {
@@ -698,6 +750,46 @@ describe("local-companion-start helpers", () => {
     expect(decision).toEqual({
       kind: "start_bridge",
       message: "Starting a fresh claude session for D:/work/project...",
+    });
+  });
+
+  test("same workspace start request replaces Pi when a fresh session is requested", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "pi",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "pi",
+        command: "pi",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "companion_bound",
+      },
+      lockShouldAutoReclaim: false,
+      endpoint: {
+        protocolVersion: 2,
+        runtimeKind: "legacy_adapter",
+        instanceId: "bridge-1",
+        kind: "pi",
+        port: 8123,
+        token: "token",
+        cwd: "D:/work/project",
+        command: "pi",
+        startedAt: "2026-03-28T00:01:00.000Z",
+        companionPid: 456,
+        companionConnectedAt: "2026-03-28T00:02:00.000Z",
+        companionStatus: "idle",
+      },
+      endpointIsReachable: true,
+      companionIsAlive: true,
+      sessionStartMode: "new",
+    });
+
+    expect(decision).toEqual({
+      kind: "start_bridge",
+      message: "Starting a fresh pi session for D:/work/project...",
     });
   });
 });

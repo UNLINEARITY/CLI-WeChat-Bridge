@@ -300,7 +300,7 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
 export function defaultDaemonSessionStartMode(
   adapter: DaemonAdapterKind,
 ): BridgeSessionStartMode {
-  return adapter === "claude" || adapter === "opencode" ? "new" : "restore";
+  return adapter === "codex" ? "restore" : "new";
 }
 
 export function resolveDaemonSessionStartMode(params: {
@@ -317,7 +317,7 @@ export function resolveDaemonSessionStartMode(params: {
   if (params.explicitSessionStartMode) {
     return params.explicitSessionStartMode;
   }
-  if (params.adapter === "codex" || params.adapter === "pi") {
+  if (params.adapter === "codex") {
     return "restore";
   }
   if (params.slotCreated) {

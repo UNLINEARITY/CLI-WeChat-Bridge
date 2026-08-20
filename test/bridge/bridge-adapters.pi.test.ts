@@ -30,6 +30,17 @@ function waitForTurn(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 20));
 }
 
+async function waitForCondition(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await waitForTurn();
+  }
+  throw new Error("Timed out waiting for Pi adapter test state.");
+}
+
 class FakePiProcess extends EventEmitter {
   readonly pid = 4242;
 }
@@ -189,6 +200,36 @@ describe("Pi sessions", () => {
 });
 
 describe("Pi TUI lifecycle", () => {
+  test("keeps a slow native TUI alive while its extension is still loading", async () => {
+    const child = new FakePiProcess();
+    const killedPids: number[] = [];
+    const adapter = new PiTuiAdapter(
+      {
+        kind: "pi",
+        command: "pi",
+        cwd: process.cwd(),
+        renderMode: "companion",
+      },
+      {
+        spawnProcess: (() => child) as never,
+        killProcessTree: (pid) => killedPids.push(pid),
+      },
+    );
+
+    await adapter.start();
+
+    expect(adapter.getState()).toEqual(
+      expect.objectContaining({
+        pid: 4242,
+        status: "starting",
+      }),
+    );
+    expect(killedPids).toEqual([]);
+
+    await adapter.dispose();
+    expect(killedPids).toEqual([4242]);
+  });
+
   test("inherits the visible terminal and forwards only WeChat-owned final replies", async () => {
     const child = new FakePiProcess();
     const events: BridgeEvent[] = [];
@@ -220,12 +261,7 @@ describe("Pi TUI lifecycle", () => {
           socket.setEncoding("utf8");
           socket.once("connect", () => {
             socket.write(
-              `${JSON.stringify({ type: "hello", token: env.CLI_BRIDGE_PI_TUI_TOKEN })}\n` +
-                `${JSON.stringify({
-                  type: "session_state",
-                  sessionId: "pi-session-live",
-                  sessionFile: "C:\\pi\\session.jsonl",
-                })}\n`,
+              `${JSON.stringify({ type: "hello", token: env.CLI_BRIDGE_PI_TUI_TOKEN })}\n`,
             );
           });
           attachPiTuiJsonlReader(
@@ -250,6 +286,24 @@ describe("Pi TUI lifecycle", () => {
     adapter.setEventSink((event) => events.push(event));
 
     await adapter.start();
+    await waitForCondition(() => adapter.getState().status === "idle");
+    const eventCountBeforeSessionState = events.length;
+    expect(adapter.getState()).toEqual(
+      expect.objectContaining({
+        kind: "pi",
+        status: "idle",
+      }),
+    );
+    expect(adapter.getState().sharedSessionId).toBeUndefined();
+    extensionSocket?.write(
+      `${JSON.stringify({
+        type: "session_state",
+        sessionId: "pi-session-live",
+        sessionFile: "C:\\pi\\session.jsonl",
+      })}\n`,
+    );
+    await waitForTurn();
+    expect(events.length).toBeGreaterThan(eventCountBeforeSessionState);
     await adapter.sendInput("Check the workspace");
     extensionSocket?.write(
       `${JSON.stringify({

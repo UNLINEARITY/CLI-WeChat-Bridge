@@ -49,8 +49,6 @@ type BridgeCommand = {
 };
 
 const BRIDGE_HOST = "127.0.0.1";
-const BRIDGE_PORT = Number(process.env.CLI_BRIDGE_PI_TUI_PORT ?? "");
-const BRIDGE_TOKEN = process.env.CLI_BRIDGE_PI_TUI_TOKEN ?? "";
 const INTERNAL_NEW_COMMAND = "__cli_bridge_new";
 const INTERNAL_SWITCH_COMMAND = "__cli_bridge_switch";
 const MAX_BUFFER_SIZE = 8 * 1024 * 1024;
@@ -93,14 +91,17 @@ function parseControlArgs(args: string): { id: string; value?: string } | null {
 }
 
 export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
-  if (!Number.isInteger(BRIDGE_PORT) || BRIDGE_PORT <= 0 || !BRIDGE_TOKEN) {
+  const bridgePort = Number(process.env.CLI_BRIDGE_PI_TUI_PORT ?? "");
+  const bridgeToken = process.env.CLI_BRIDGE_PI_TUI_TOKEN ?? "";
+  if (!Number.isInteger(bridgePort) || bridgePort <= 0 || !bridgeToken) {
     return;
   }
 
-  const socket = net.connect({ host: BRIDGE_HOST, port: BRIDGE_PORT });
+  const socket = net.connect({ host: BRIDGE_HOST, port: bridgePort });
   let buffer = "";
   let connected = false;
   const queuedFrames: Record<string, unknown>[] = [];
+  const queuedCommands: BridgeCommand[] = [];
   let latestContext: PiExtensionContext | null = null;
 
   const writeFrame = (frame: Record<string, unknown>) => {
@@ -196,10 +197,53 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
     },
   });
 
+  const executeCommand = (command: BridgeCommand) => {
+    try {
+      if (command.type === "prompt" && typeof command.text === "string") {
+        if (!latestContext?.isIdle()) {
+          throw new Error("Pi TUI is already processing a turn.");
+        }
+        pi.sendUserMessage(command.text);
+        writeFrame({ type: "response", id: command.id, success: true });
+      } else if (command.type === "abort") {
+        latestContext?.abort();
+        writeFrame({ type: "response", id: command.id, success: true });
+      } else if (command.type === "new_session" && typeof command.id === "string") {
+        pi.sendUserMessage(`/${INTERNAL_NEW_COMMAND} ${command.id}`, {
+          expandPromptTemplates: true,
+        });
+      } else if (
+        command.type === "switch_session" &&
+        typeof command.id === "string" &&
+        typeof command.sessionPath === "string"
+      ) {
+        pi.sendUserMessage(
+          `/${INTERNAL_SWITCH_COMMAND} ${command.id} ${command.sessionPath}`,
+          { expandPromptTemplates: true },
+        );
+      }
+    } catch (error) {
+      writeFrame({
+        type: "response",
+        id: command.id,
+        success: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const dispatchCommand = (command: BridgeCommand) => {
+    if (!latestContext) {
+      queuedCommands.push(command);
+      return;
+    }
+    executeCommand(command);
+  };
+
   socket.setEncoding("utf8");
   socket.on("connect", () => {
     socket.setNoDelay(true);
-    socket.write(`${JSON.stringify({ type: "hello", token: BRIDGE_TOKEN })}\n`);
+    socket.write(`${JSON.stringify({ type: "hello", token: bridgeToken })}\n`);
     connected = true;
     for (const frame of queuedFrames.splice(0)) {
       writeFrame(frame);
@@ -222,48 +266,13 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
       if (!line.trim()) {
         continue;
       }
-      let command: BridgeCommand;
       try {
         const parsed = JSON.parse(line) as unknown;
-        if (!isRecord(parsed)) {
-          continue;
+        if (isRecord(parsed)) {
+          dispatchCommand(parsed);
         }
-        command = parsed;
       } catch {
-        continue;
-      }
-
-      try {
-        if (command.type === "prompt" && typeof command.text === "string") {
-          if (!latestContext?.isIdle()) {
-            throw new Error("Pi TUI is already processing a turn.");
-          }
-          pi.sendUserMessage(command.text);
-          writeFrame({ type: "response", id: command.id, success: true });
-        } else if (command.type === "abort") {
-          latestContext?.abort();
-          writeFrame({ type: "response", id: command.id, success: true });
-        } else if (command.type === "new_session" && typeof command.id === "string") {
-          pi.sendUserMessage(`/${INTERNAL_NEW_COMMAND} ${command.id}`, {
-            expandPromptTemplates: true,
-          });
-        } else if (
-          command.type === "switch_session" &&
-          typeof command.id === "string" &&
-          typeof command.sessionPath === "string"
-        ) {
-          pi.sendUserMessage(
-            `/${INTERNAL_SWITCH_COMMAND} ${command.id} ${command.sessionPath}`,
-            { expandPromptTemplates: true },
-          );
-        }
-      } catch (error) {
-        writeFrame({
-          type: "response",
-          id: command.id,
-          success: false,
-          error: error instanceof Error ? error.message : String(error),
-        });
+        // Ignore malformed bridge commands and keep the native TUI alive.
       }
     }
   });
@@ -277,6 +286,9 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
       context,
       typeof event.reason === "string" ? event.reason : "startup",
     );
+    for (const command of queuedCommands.splice(0)) {
+      executeCommand(command);
+    }
   });
   pi.on("input", (event, context) => {
     latestContext = context;

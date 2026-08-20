@@ -151,7 +151,8 @@ cd D:\work\your-project
 没有 daemon 时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 仍按**单活工作区切换器**工作：
 
 - 同一时间只有一个项目与微信对话；
-- 在当前目录重复执行是幂等的；
+- Codex 在当前目录重复执行时会复用已有会话；Claude Code、OpenCode 和 Pi 启动器默认新建会话；
+- Pi 如需显式恢复上一次会话，可使用 `wechat-pi-start --session-start-mode restore`；
 - 如果当前目录已经有可见 companion / panel 在运行，则不会重复打开第二个窗口；
 - 如果检测到可见端仍在运行但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
 - 在其他目录执行会显式切换活动工作区。
@@ -196,6 +197,8 @@ wechat-daemon --adapter claude --profile work
 ```
 
 当同一工作目录已有 `wechat-daemon` 在运行时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 会自动委托给 daemon：请求 daemon 切到对应 CLI，并在需要时打开可见终端，不会停止 daemon 或关闭其他 CLI。
+
+其中 `wechat-pi-start` 仍表示启动一个新的 Pi session；如果 Pi TUI 已经可见，daemon 会在现有窗口中创建新 session。微信中的 `/pi` 仅用于切换适配器，仍会复用已经连接的 Pi TUI。
 
 ### 7. 手动双终端模式（高级调试）
 
@@ -323,6 +326,7 @@ wechat-pi-start --cwd D:\work\my-project --model openai/gpt-5.6-sol
 - `--cwd <path>`：显式指定 bridge / companion 对应的工作目录；
 - `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-codex` / `wechat-bridge-claude` / `wechat-bridge-opencode` / `wechat-bridge-pi`；
 - `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`。
+- `--session-start-mode <restore|new>`：显式选择恢复或新建会话；Pi 启动器默认 `new`。
 
 高级用法：除上述启动器参数外，未知参数会继续透传给可见的底层 CLI。这样既能保留微信登录、工作区切换与 bridge 生命周期管理，也能启用 Codex / Claude Code / OpenCode / Pi 自己的高级启动模式。
 

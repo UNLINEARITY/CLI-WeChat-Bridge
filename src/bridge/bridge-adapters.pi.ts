@@ -27,7 +27,7 @@ import {
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import { normalizeOutput, nowIso } from "./bridge-utils.ts";
 
-const PI_TUI_CONNECT_TIMEOUT_MS = 30_000;
+const PI_TUI_CONNECT_WARNING_MS = 30_000;
 const PI_TUI_REQUEST_TIMEOUT_MS = 30_000;
 const PI_TUI_RECONNECT_TIMEOUT_MS = 10_000;
 const PI_TUI_MAX_BUFFER_SIZE = 8 * 1024 * 1024;
@@ -285,11 +285,10 @@ export class PiTuiAdapter implements BridgeAdapter {
   private socket: net.Socket | null = null;
   private readonly socketReaders = new Map<net.Socket, () => void>();
   private readonly retiringSockets = new Set<net.Socket>();
+  private connectWarningTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private requestCounter = 0;
   private readonly pendingRequests = new Map<string, PiTuiPendingRequest>();
-  private resolveReady: (() => void) | null = null;
-  private rejectReady: ((error: Error) => void) | null = null;
   private extensionReady = false;
   private disposing = false;
   private authenticated = new WeakSet<net.Socket>();
@@ -363,7 +362,7 @@ export class PiTuiAdapter implements BridgeAdapter {
     this.state.pid = child.pid;
     this.state.startedAt = nowIso();
     child.once("error", (error) => {
-      this.rejectReady?.(error);
+      this.clearConnectWarningTimer();
       this.rejectPendingRequests(error);
       if (!this.disposing) {
         this.emit({
@@ -374,14 +373,7 @@ export class PiTuiAdapter implements BridgeAdapter {
       }
     });
     child.once("exit", (code, signal) => this.handleProcessExit(code, signal));
-
-    try {
-      await this.waitForReady();
-      this.setStatus("idle", "Native Pi TUI connected with full local permissions.");
-    } catch (error) {
-      await this.dispose();
-      throw error;
-    }
+    this.scheduleConnectWarning();
   }
 
   async sendInput(text: string): Promise<void> {
@@ -471,10 +463,8 @@ export class PiTuiAdapter implements BridgeAdapter {
 
   async dispose(): Promise<void> {
     this.disposing = true;
+    this.clearConnectWarningTimer();
     this.clearReconnectTimer();
-    this.rejectReady?.(new Error("Pi TUI adapter is shutting down."));
-    this.resolveReady = null;
-    this.rejectReady = null;
     this.rejectPendingRequests(new Error("Pi TUI adapter is shutting down."));
     for (const [socket, detach] of this.socketReaders) {
       detach();
@@ -532,31 +522,6 @@ export class PiTuiAdapter implements BridgeAdapter {
     });
   }
 
-  private waitForReady(): Promise<void> {
-    if (this.extensionReady) {
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.resolveReady = null;
-        this.rejectReady = null;
-        reject(new Error("Timed out waiting for the native Pi TUI bridge extension."));
-      }, PI_TUI_CONNECT_TIMEOUT_MS);
-      this.resolveReady = () => {
-        clearTimeout(timer);
-        this.resolveReady = null;
-        this.rejectReady = null;
-        resolve();
-      };
-      this.rejectReady = (error) => {
-        clearTimeout(timer);
-        this.resolveReady = null;
-        this.rejectReady = null;
-        reject(error);
-      };
-    });
-  }
-
   private acceptSocket(socket: net.Socket): void {
     socket.setEncoding("utf8");
     socket.setNoDelay(true);
@@ -572,6 +537,11 @@ export class PiTuiAdapter implements BridgeAdapter {
           this.clearReconnectTimer();
           const previousSocket = this.socket;
           this.socket = socket;
+          this.extensionReady = true;
+          this.clearConnectWarningTimer();
+          if (this.state.status === "starting") {
+            this.setStatus("idle", "Native Pi TUI connected with full local permissions.");
+          }
           if (previousSocket && previousSocket !== socket) {
             if (this.hasPendingSessionCommand()) {
               this.retiringSockets.add(previousSocket);
@@ -617,8 +587,7 @@ export class PiTuiAdapter implements BridgeAdapter {
           pending?.reason ?? "local_follow",
           Boolean(this.state.sharedSessionId),
         );
-        this.extensionReady = true;
-        this.resolveReady?.();
+        this.setStatus(this.state.status);
         break;
       }
       case "local_input":
@@ -806,6 +775,27 @@ export class PiTuiAdapter implements BridgeAdapter {
     }
   }
 
+  private scheduleConnectWarning(): void {
+    this.clearConnectWarningTimer();
+    this.connectWarningTimer = setTimeout(() => {
+      this.connectWarningTimer = null;
+      if (!this.extensionReady && !this.disposing && this.child) {
+        this.setStatus(
+          "starting",
+          "Native Pi TUI is still loading; waiting for the bridge extension to connect.",
+        );
+      }
+    }, PI_TUI_CONNECT_WARNING_MS);
+    this.connectWarningTimer.unref?.();
+  }
+
+  private clearConnectWarningTimer(): void {
+    if (this.connectWarningTimer) {
+      clearTimeout(this.connectWarningTimer);
+      this.connectWarningTimer = null;
+    }
+  }
+
   private handleProtocolError(error: Error): void {
     if (!this.disposing) {
       this.emit({ type: "fatal_error", message: error.message, timestamp: nowIso() });
@@ -813,9 +803,7 @@ export class PiTuiAdapter implements BridgeAdapter {
   }
 
   private handleProcessExit(code: number | null, signal: NodeJS.Signals | null): void {
-    this.rejectReady?.(
-      new Error(`Pi TUI exited before connecting (code=${code ?? "none"}, signal=${signal ?? "none"}).`),
-    );
+    this.clearConnectWarningTimer();
     this.rejectPendingRequests(
       new Error(`Pi TUI exited (code=${code ?? "none"}, signal=${signal ?? "none"}).`),
     );
