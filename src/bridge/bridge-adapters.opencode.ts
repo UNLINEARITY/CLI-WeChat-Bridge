@@ -8,6 +8,9 @@ import {
   OPENCODE_SSE_RECONNECT_DELAY_MS,
   OPENCODE_SESSION_IDLE_SETTLE_MS,
   OPENCODE_WECHAT_WORKING_NOTICE_DELAY_MS,
+  OPENCODE_HTTP_READY_TIMEOUT_MS,
+  OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS,
+  OPENCODE_HTTP_READY_PROBE_INTERVAL_MS,
   buildCliEnvironment,
   isRecord,
   describeUnknownError,
@@ -133,7 +136,7 @@ type OpenCodeSdkClient = {
     event(options?: Record<string, unknown>): Promise<{
       stream: AsyncIterable<unknown>;
     }>;
-    syncEvent: {
+    syncEvent?: {
       subscribe(options?: Record<string, unknown>): Promise<{
         stream: AsyncIterable<unknown>;
       }>;
@@ -716,10 +719,31 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async checkHealth(): Promise<void> {
     const baseUrl = `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`;
-    const response = await fetch(`${baseUrl}/session/status`);
-    if (!response.ok) {
-      throw new Error(`OpenCode health check failed (HTTP ${response.status}).`);
+    // `opencode serve` binds its TCP port before the HTTP layer is ready,
+    // so a fetch fired the instant `waitForTcpPort` returns can be accepted
+    // into the listen backlog but never answered, hanging until undici's
+    // ~300s `headersTimeout` and surfacing as `fetch failed` after ~5min.
+    // Retry with a short per-attempt timeout so the startup race
+    // self-heals once the server finishes booting.
+    const deadline = Date.now() + OPENCODE_HTTP_READY_TIMEOUT_MS;
+    let lastError: unknown;
+    while (Date.now() < deadline) {
+      try {
+        const response = await fetch(`${baseUrl}/session/status`, {
+          signal: AbortSignal.timeout(OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS),
+        });
+        if (response.ok) {
+          return;
+        }
+        lastError = new Error(
+          `OpenCode health check failed (HTTP ${response.status}).`,
+        );
+      } catch (err) {
+        lastError = err;
+      }
+      await delay(OPENCODE_HTTP_READY_PROBE_INTERVAL_MS);
     }
+    throw lastError ?? new Error("OpenCode health check timed out.");
   }
 
   private async initializeSessions(): Promise<void> {
@@ -847,11 +871,18 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.sseAbortController = new AbortController();
-    this.sseLoopPromise = Promise.all([
+    const sseLoops: Array<Promise<void>> = [
       this.runSseLoop("event"),
       this.runSseLoop("global-event"),
-      this.runSseLoop("global-sync"),
-    ]).then(() => undefined);
+    ];
+    if (this.hasGlobalSyncEventStream()) {
+      sseLoops.push(this.runSseLoop("global-sync"));
+    } else {
+      this.logDebug(
+        "[opencode-adapter:global-sync] syncEvent stream unavailable; using global-event sync payloads.",
+      );
+    }
+    this.sseLoopPromise = Promise.all(sseLoops).then(() => undefined);
   }
 
   private async runSseLoop(streamName: SdkEventStreamName): Promise<void> {
@@ -893,7 +924,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private subscribeToSseStream(streamName: SdkEventStreamName): Promise<SdkEventSubscription> {
     const signal = this.sseAbortController?.signal;
     if (streamName === "global-sync") {
-      return this.client!.global.syncEvent.subscribe({ signal });
+      const syncEvent = this.client!.global.syncEvent;
+      if (!syncEvent?.subscribe) {
+        throw new Error("OpenCode SDK global syncEvent stream is unavailable.");
+      }
+      return syncEvent.subscribe({ signal });
     }
     if (streamName === "global-event") {
       return this.client!.global.event({ signal });
@@ -907,17 +942,27 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     );
   }
 
+  private hasGlobalSyncEventStream(): boolean {
+    return typeof this.client?.global.syncEvent?.subscribe === "function";
+  }
+
   private normalizeSdkEvent(rawEvent: unknown): NormalizedSdkEvent | null {
     if (!isRecord(rawEvent)) {
       return null;
     }
 
     if (typeof rawEvent.type === "string") {
+      if (rawEvent.type === "sync") {
+        return this.normalizeGlobalSyncPayload(rawEvent, rawEvent);
+      }
       return rawEvent as NormalizedSdkEvent;
     }
 
     const payload = rawEvent.payload;
     if (isRecord(payload) && typeof payload.type === "string") {
+      if (payload.type === "sync") {
+        return this.normalizeGlobalSyncPayload(payload, rawEvent);
+      }
       const normalized = { ...payload } as NormalizedSdkEvent;
       if (typeof rawEvent.directory === "string") {
         normalized.directory = rawEvent.directory;
@@ -926,6 +971,22 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     return null;
+  }
+
+  private normalizeGlobalSyncPayload(
+    payload: Record<string, unknown>,
+    envelope: Record<string, unknown>,
+  ): NormalizedSdkEvent | null {
+    const syncEvent = isRecord(payload.syncEvent) ? payload.syncEvent : undefined;
+    if (!syncEvent || typeof syncEvent.type !== "string") {
+      return null;
+    }
+
+    const normalized = { ...syncEvent } as NormalizedSdkEvent;
+    if (typeof envelope.directory === "string") {
+      normalized.directory = envelope.directory;
+    }
+    return normalized;
   }
 
   private shouldHandleSseEvent(
