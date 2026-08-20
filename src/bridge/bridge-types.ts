@@ -53,6 +53,8 @@ export type UserInputRequestQuestion = {
   question: string;
   isOther: boolean;
   isSecret: boolean;
+  multiple?: boolean;
+  customAnswerMode?: "note" | "value";
   options?: UserInputRequestOption[] | null;
 };
 

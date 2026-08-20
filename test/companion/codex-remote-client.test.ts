@@ -54,8 +54,6 @@ describe("codex remote client helpers", () => {
     expect(buildRemoteCodexClientArgs(buildEndpoint())).toEqual([
       "resume",
       "thread_123",
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--profile",
@@ -73,8 +71,6 @@ describe("codex remote client helpers", () => {
     ).toEqual([
       "resume",
       "thread_123",
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--profile",

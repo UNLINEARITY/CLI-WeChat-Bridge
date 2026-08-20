@@ -110,6 +110,7 @@ export type CodexPendingUserInputRequest = {
   threadId: string;
   turnId: string;
   origin: BridgeTurnOrigin;
+  isBlocking: boolean;
 };
 
 export type CodexApprovalAutoResponse = {
@@ -216,7 +217,7 @@ export function buildCodexCliArgs(
     args.push("resume", options.resumeThreadId);
   }
 
-  args.push("--enable", "tui_app_server", "--remote", remoteUrl);
+  args.push("--remote", remoteUrl);
 
   if (options.inlineMode) {
     args.push("--no-alt-screen");

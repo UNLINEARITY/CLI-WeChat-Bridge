@@ -94,6 +94,7 @@ const {
 } = shared;
 
 const CODEX_LOCAL_THREAD_ANNOUNCE_SETTLE_MS = 150;
+const CODEX_NON_BLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
 
 export class CodexPtyAdapter extends AbstractPtyAdapter {
   readonly runtimeKind = "codex_runtime_host" as const;
@@ -124,6 +125,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private pendingThreadFollowId: string | null = null;
   private pendingApprovalRequests: CodexPendingApprovalRequest[] = [];
   private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
+  private pendingUserInputTimer: ReturnType<typeof setTimeout> | null = null;
+  private userInputAutoResolutionDelayMs = CODEX_NON_BLOCKING_USER_INPUT_TIMEOUT_MS;
   private queuedTurnNotifications: CodexQueuedNotification[] = [];
   private queuedTurnServerRequests: Array<{
     requestId: CodexRpcRequestId;
@@ -1508,6 +1511,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       },
       capabilities: {
         experimentalApi: true,
+        requestAttestation: false,
       },
     });
   }
@@ -1544,8 +1548,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       approvalsReviewer: "user",
       sandbox: "workspace-write",
       serviceName: "wechat-bridge",
-      experimentalRawEvents: false,
-      persistExtendedHistory: true,
     });
 
     const threadId = this.extractThreadIdFromResponse(response);
@@ -2020,6 +2022,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private clearPendingUserInputState(): void {
+    if (this.pendingUserInputTimer) {
+      clearTimeout(this.pendingUserInputTimer);
+      this.pendingUserInputTimer = null;
+    }
     this.pendingUserInputRequest = null;
     this.state.pendingUserInput = null;
     this.state.pendingUserInputOrigin = undefined;
@@ -2379,6 +2385,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     method: string,
     params: unknown,
   ): void {
+    if (method === "currentTime/read") {
+      this.sendRpcMessage({
+        id: requestId,
+        result: {
+          currentTimeAt: Math.floor(Date.now() / 1_000),
+        },
+      });
+      return;
+    }
+
     if (method === "mcpServer/elicitation/request") {
       this.sendRpcMessage({
         id: requestId,
@@ -2569,6 +2585,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       threadId: trackedTurn.threadId,
       turnId: trackedTurn.turnId,
       origin: trackedTurn.origin,
+      isBlocking: params.isBlocking !== false,
     };
     this.state.pendingUserInput = request;
     this.state.pendingUserInputOrigin = trackedTurn.origin;
@@ -2579,6 +2596,28 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       request,
       timestamp: nowIso(),
     });
+
+    if (this.pendingUserInputRequest.isBlocking) {
+      return;
+    }
+
+    const pendingRequest = this.pendingUserInputRequest;
+    this.pendingUserInputTimer = setTimeout(() => {
+      if (this.pendingUserInputRequest !== pendingRequest) {
+        return;
+      }
+      this.sendRpcMessage({
+        id: pendingRequest.requestId,
+        result: {
+          answers: {},
+        },
+      });
+      this.clearPendingUserInputState();
+      if (this.state.status === "awaiting_input") {
+        this.setStatus("busy", "Codex non-blocking user input timed out.");
+      }
+    }, this.userInputAutoResolutionDelayMs);
+    this.pendingUserInputTimer.unref?.();
   }
 
   private handleThreadStatusChanged(params: Record<string, unknown>): void {

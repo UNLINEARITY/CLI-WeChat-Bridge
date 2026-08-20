@@ -1465,21 +1465,33 @@ function parseSingleUserInputAnswer(
     };
   }
 
-  const separatorIndex = trimmed.indexOf("|");
+  const customAnswerMode = question.customAnswerMode ?? "note";
+  const separatorIndex = customAnswerMode === "note" ? trimmed.indexOf("|") : -1;
   const selection = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
   let note = separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1).trim() : "";
   const answers: string[] = [];
 
   if (selection) {
-    const selectedLabel = resolveUserInputOptionLabel(question, selection);
-    if (selectedLabel) {
-      answers.push(selectedLabel);
-    } else if (question.isOther) {
-      note = note ? `${selection}; ${note}` : selection;
-    } else {
-      return {
-        error: `Question "${question.header}" expects an option number or label.`,
-      };
+    const selections = question.multiple
+      ? selection.split(",").map((value) => value.trim()).filter(Boolean)
+      : [selection];
+    for (const value of selections) {
+      const selectedLabel = resolveUserInputOptionLabel(question, value);
+      if (selectedLabel) {
+        if (!answers.includes(selectedLabel)) {
+          answers.push(selectedLabel);
+        }
+      } else if (question.isOther && customAnswerMode === "value") {
+        if (!answers.includes(value)) {
+          answers.push(value);
+        }
+      } else if (question.isOther) {
+        note = note ? `${value}; ${note}` : value;
+      } else {
+        return {
+          error: `Question "${question.header}" expects an option number or label.`,
+        };
+      }
     }
   }
 
@@ -1606,8 +1618,15 @@ export function formatUserInputRequestMessage(
         lines.push(`  ${optionIndex + 1}. ${option.label} - ${truncatePreview(option.description, 160)}`);
       });
     }
+    if (question.multiple) {
+      lines.push("multiple selections: allowed (separate values with commas)");
+    }
     if (question.isOther) {
-      lines.push("custom note: allowed");
+      lines.push(
+        question.customAnswerMode === "value"
+          ? "custom answer: allowed"
+          : "custom note: allowed",
+      );
     }
   });
 
@@ -1618,8 +1637,14 @@ export function formatUserInputRequestMessage(
       return lines.join("\n");
     }
     if (question.options?.length) {
-      lines.push("Reply with /answer <option number or exact label>.");
-      if (question.isOther) {
+      lines.push(
+        question.multiple
+          ? "Reply with /answer <option numbers or exact labels separated by commas>."
+          : "Reply with /answer <option number or exact label>.",
+      );
+      if (question.isOther && question.customAnswerMode === "value") {
+        lines.push("You may enter a custom answer instead of an option.");
+      } else if (question.isOther) {
         lines.push('Add "| your note" to include extra context.');
       }
     } else {
@@ -1629,7 +1654,10 @@ export function formatUserInputRequestMessage(
     lines.push("Reply with /answer questionId=value; questionId2=value.");
     lines.push("You can use question numbers instead of ids.");
     lines.push("For option questions, value can be the option number or exact label.");
-    lines.push('Add "| your note" after an option answer to include extra context.');
+    lines.push("For multi-select questions, separate option values with commas.");
+    if (pending.questions.some((question) => question.customAnswerMode !== "value")) {
+      lines.push('Add "| your note" after an option answer to include extra context.');
+    }
   }
   lines.push("Use /stop to interrupt the active turn instead.");
 
@@ -1642,12 +1670,12 @@ export function formatPendingUserInputReminder(
   if (pending.questions.length === 1) {
     const question = pending.questions[0];
     if (!question) {
-      return "Codex is waiting for user input. Reply with /answer and your response, or use /stop to interrupt.";
+      return "The active CLI is waiting for user input. Reply with /answer and your response, or use /stop to interrupt.";
     }
-    return `Codex is waiting for user input for ${question.header}. Reply with /answer and your response, or use /stop to interrupt.`;
+    return `The active CLI is waiting for user input for ${question.header}. Reply with /answer and your response, or use /stop to interrupt.`;
   }
 
-  return `Codex is waiting for answers to ${pending.questions.length} questions. Reply with /answer questionId=value; questionId2=value, or use /stop to interrupt.`;
+  return `The active CLI is waiting for answers to ${pending.questions.length} questions. Reply with /answer questionId=value; questionId2=value, or use /stop to interrupt.`;
 }
 
 export class OutputBatcher {

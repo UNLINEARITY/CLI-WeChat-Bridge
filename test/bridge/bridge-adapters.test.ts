@@ -1033,8 +1033,6 @@ describe("buildCodexCliArgs", () => {
         inlineMode: false,
       }),
     ).toEqual([
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--profile",
@@ -1051,8 +1049,6 @@ describe("buildCodexCliArgs", () => {
     ).toEqual([
       "resume",
       "thread_123",
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--profile",
@@ -1066,8 +1062,6 @@ describe("buildCodexCliArgs", () => {
         inlineMode: true,
       }),
     ).toEqual([
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--no-alt-screen",
@@ -1081,8 +1075,6 @@ describe("buildCodexCliArgs", () => {
         extraCliArgs: ["--yolo", "--model", "gpt-5.2"],
       }),
     ).toEqual([
-      "--enable",
-      "tui_app_server",
       "--remote",
       "ws://127.0.0.1:8123",
       "--profile",
@@ -3014,6 +3006,69 @@ describe("Codex panel completion recovery", () => {
     ]);
   });
 
+  test("answers Codex currentTime/read requests with whole Unix seconds", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    const before = Math.floor(Date.now() / 1_000);
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+
+    adapter.handleRpcServerRequest(12, "currentTime/read", {
+      threadId: "thread_1",
+    });
+
+    const after = Math.floor(Date.now() / 1_000);
+    expect(rpcMessages).toHaveLength(1);
+    expect(rpcMessages[0]?.id).toBe(12);
+    const currentTimeAt = (rpcMessages[0]?.result as { currentTimeAt: number }).currentTimeAt;
+    expect(Number.isInteger(currentTimeAt)).toBe(true);
+    expect(currentTimeAt).toBeGreaterThanOrEqual(before);
+    expect(currentTimeAt).toBeLessThanOrEqual(after);
+  });
+
+  test("uses current Codex initialize and thread-start fields", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      return method === "thread/start" ? { thread: { id: "thread_current" } } : {};
+    };
+
+    await adapter.initializeRpcClient();
+    await expect(adapter.ensureThreadStarted()).resolves.toBe("thread_current");
+
+    expect(requests[0]).toMatchObject({
+      method: "initialize",
+      params: {
+        capabilities: {
+          experimentalApi: true,
+          requestAttestation: false,
+        },
+      },
+    });
+    expect(requests[1]).toEqual({
+      method: "thread/start",
+      params: {
+        cwd: process.cwd(),
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: "workspace-write",
+        serviceName: "wechat-bridge",
+      },
+    });
+  });
+
   test("emits Codex user input requests and submits answers back to app-server", async () => {
     const adapter = createBridgeAdapter({
       kind: "codex",
@@ -3069,6 +3124,7 @@ describe("Codex panel completion recovery", () => {
       threadId: "thread_1",
       turnId: "turn_1",
       origin: "wechat",
+      isBlocking: true,
     });
     expect(adapter.state.status).toBe("awaiting_input");
     expect(adapter.state.pendingUserInputOrigin).toBe("wechat");
@@ -3149,6 +3205,58 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.state.pendingUserInputOrigin).toBeUndefined();
     expect(adapter.state.status).toBe("busy");
     expect(events.map((event) => event.type)).toEqual(["status"]);
+  });
+
+  test("auto-resolves non-blocking Codex user input after the compatibility timeout", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.userInputAutoResolutionDelayMs = 10;
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+
+    adapter.handleRpcServerRequest(13, "item/tool/requestUserInput", {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      itemId: "call_1",
+      isBlocking: false,
+      questions: [
+        {
+          id: "optional_context",
+          header: "Context",
+          question: "Add optional context?",
+          options: null,
+        },
+      ],
+    });
+
+    expect(adapter.pendingUserInputRequest?.isBlocking).toBe(false);
+    await wait(30);
+
+    expect(rpcMessages).toEqual([
+      {
+        id: 13,
+        result: {
+          answers: {},
+        },
+      },
+    ]);
+    expect(adapter.pendingUserInputRequest).toBeNull();
+    expect(adapter.state.pendingUserInput).toBeNull();
+    expect(adapter.state.status).toBe("busy");
   });
 
   test("mirrors the first local turn after /resume before shared thread follow catches up", () => {
