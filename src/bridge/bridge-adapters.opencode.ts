@@ -136,7 +136,7 @@ type OpenCodeSdkClient = {
     event(options?: Record<string, unknown>): Promise<{
       stream: AsyncIterable<unknown>;
     }>;
-    syncEvent: {
+    syncEvent?: {
       subscribe(options?: Record<string, unknown>): Promise<{
         stream: AsyncIterable<unknown>;
       }>;
@@ -871,11 +871,18 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.sseAbortController = new AbortController();
-    this.sseLoopPromise = Promise.all([
+    const sseLoops: Array<Promise<void>> = [
       this.runSseLoop("event"),
       this.runSseLoop("global-event"),
-      this.runSseLoop("global-sync"),
-    ]).then(() => undefined);
+    ];
+    if (this.hasGlobalSyncEventStream()) {
+      sseLoops.push(this.runSseLoop("global-sync"));
+    } else {
+      this.logDebug(
+        "[opencode-adapter:global-sync] syncEvent stream unavailable; using global-event sync payloads.",
+      );
+    }
+    this.sseLoopPromise = Promise.all(sseLoops).then(() => undefined);
   }
 
   private async runSseLoop(streamName: SdkEventStreamName): Promise<void> {
@@ -917,7 +924,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private subscribeToSseStream(streamName: SdkEventStreamName): Promise<SdkEventSubscription> {
     const signal = this.sseAbortController?.signal;
     if (streamName === "global-sync") {
-      return this.client!.global.syncEvent.subscribe({ signal });
+      const syncEvent = this.client!.global.syncEvent;
+      if (!syncEvent?.subscribe) {
+        throw new Error("OpenCode SDK global syncEvent stream is unavailable.");
+      }
+      return syncEvent.subscribe({ signal });
     }
     if (streamName === "global-event") {
       return this.client!.global.event({ signal });
@@ -931,17 +942,27 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     );
   }
 
+  private hasGlobalSyncEventStream(): boolean {
+    return typeof this.client?.global.syncEvent?.subscribe === "function";
+  }
+
   private normalizeSdkEvent(rawEvent: unknown): NormalizedSdkEvent | null {
     if (!isRecord(rawEvent)) {
       return null;
     }
 
     if (typeof rawEvent.type === "string") {
+      if (rawEvent.type === "sync") {
+        return this.normalizeGlobalSyncPayload(rawEvent, rawEvent);
+      }
       return rawEvent as NormalizedSdkEvent;
     }
 
     const payload = rawEvent.payload;
     if (isRecord(payload) && typeof payload.type === "string") {
+      if (payload.type === "sync") {
+        return this.normalizeGlobalSyncPayload(payload, rawEvent);
+      }
       const normalized = { ...payload } as NormalizedSdkEvent;
       if (typeof rawEvent.directory === "string") {
         normalized.directory = rawEvent.directory;
@@ -950,6 +971,22 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     return null;
+  }
+
+  private normalizeGlobalSyncPayload(
+    payload: Record<string, unknown>,
+    envelope: Record<string, unknown>,
+  ): NormalizedSdkEvent | null {
+    const syncEvent = isRecord(payload.syncEvent) ? payload.syncEvent : undefined;
+    if (!syncEvent || typeof syncEvent.type !== "string") {
+      return null;
+    }
+
+    const normalized = { ...syncEvent } as NormalizedSdkEvent;
+    if (typeof envelope.directory === "string") {
+      normalized.directory = envelope.directory;
+    }
+    return normalized;
   }
 
   private shouldHandleSseEvent(
