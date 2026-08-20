@@ -471,5 +471,5 @@ npm install -g cli-wechat-bridge@latest
 - GitHub: [@UNLINEARITY](https://github.com/UNLINEARITY)
 
 <p align="center">
-  <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=UNLINEARITY/CLI-WeChat-Bridge&type=timeline&legend=top-left">
+  <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=UNLINEARITY/CLI-WeChat-Bridge&type=timeline&legend=top-left">
 </p>
