@@ -10,10 +10,6 @@ const catalogs: Record<Locale, Record<string, string>> = {
 
 let currentLocale: Locale = "zh";
 
-export function getLocale(): Locale {
-  return currentLocale;
-}
-
 export function setLocale(locale: Locale): void {
   currentLocale = locale;
 }

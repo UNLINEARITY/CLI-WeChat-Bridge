@@ -9,6 +9,18 @@ import { delay } from "./bridge-adapters.shared.ts";
 import { t } from "../i18n/index.ts";
 import { BridgeController } from "./bridge-controller.ts";
 import { forwardWechatFinalReply } from "./bridge-final-reply.ts";
+import {
+  WECHAT_SEND_MAX_ATTEMPTS,
+  computeWechatSendRetryDelayMs,
+  formatUserFacingBridgeFatalError,
+  formatUserFacingInboundError,
+  formatWechatContextTokenStaleLogEntry,
+  formatWechatSendFailureLogEntry,
+  formatWechatSendRetryLogEntry,
+  isRetryableWechatSendError,
+  shouldForwardBridgeEventToWechat,
+  type WechatSendContext,
+} from "./wechat-forwarding.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { BridgeStateStore } from "./bridge-state.ts";
 import { reapOrphanedOpencodeProcesses, reapPeerBridgeProcesses } from "./bridge-process-reaper.ts";
@@ -17,7 +29,6 @@ import type {
   ApprovalRequest,
   BridgeAdapter,
   BridgeAdapterKind,
-  BridgeEvent,
   BridgeLifecycleMode,
   BridgeSessionStartMode,
   BridgeTurnOrigin,
@@ -93,25 +104,9 @@ type DeferredInboundMessage = {
   message: InboundWechatMessage;
 };
 
-type WechatSendContext =
-  | "final_reply"
-  | "message"
-  | "notice"
-  | "approval_required"
-  | "user_input_required"
-  | "mirrored_user_input"
-  | "session_switched"
-  | "thread_switched"
-  | "task_failed"
-  | "fatal_error"
-  | "inbound_error"
-  | "thinking";
-
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 const PARENT_PROCESS_POLL_MS = 5_000;
-const WECHAT_SEND_MAX_ATTEMPTS = 3;
-const WECHAT_SEND_RETRY_BASE_MS = 750;
 
 function log(message: string): void {
   process.stderr.write(`[wechat-bridge] ${message}\n`);
@@ -138,103 +133,6 @@ function isPidAlive(pid: number): boolean {
   } catch {
     return false;
   }
-}
-
-export function formatUserFacingBridgeFatalError(message: string): string {
-  return `Bridge error: ${message.replace(/\s+Recent app-server log:.*$/s, "").trim()}`;
-}
-
-export function shouldForwardBridgeEventToWechat(
-  adapter: BridgeAdapterKind,
-  eventType: BridgeEvent["type"],
-  options: {
-    text?: string;
-  } = {},
-): boolean {
-  if (adapter !== "opencode" && adapter !== "pi") {
-    return true;
-  }
-
-  switch (eventType) {
-    case "stdout":
-    case "stderr":
-    case "thread_switched":
-      return false;
-    case "notice":
-      return adapter === "pi" || /^OpenCode local draft:\s*/i.test(options.text ?? "");
-    case "mirrored_user_input":
-      return true;
-    default:
-      return true;
-  }
-}
-
-export function formatUserFacingInboundError(params: {
-  adapter: BridgeAdapterKind;
-  cwd?: string;
-  errorText: string;
-  isUserFacingShellRejection: boolean;
-}): string {
-  const { adapter, cwd, errorText, isUserFacingShellRejection } = params;
-  if (isUserFacingShellRejection) {
-    return errorText;
-  }
-
-  if (
-    adapter === "opencode" &&
-    /opencode companion is not connected/i.test(errorText)
-  ) {
-    return cwd
-      ? `OpenCode companion is not connected for bridge workspace:\n${cwd}\nRun "wechat-opencode" in that directory to reconnect the current local terminal, or run "wechat-bridge-opencode" and then "wechat-opencode" in your target project to replace this bridge.`
-      : 'OpenCode companion is not connected. Start "wechat-opencode" in this directory to reconnect it, then retry.';
-  }
-
-  return `Bridge error: ${errorText}`;
-}
-
-export function formatWechatSendFailureLogEntry(params: {
-  context: WechatSendContext;
-  recipientId: string;
-  error: unknown;
-}): string {
-  return `wechat_send_failed: context=${params.context} recipient=${params.recipientId} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
-}
-
-export function formatWechatContextTokenStaleLogEntry(params: {
-  context: WechatSendContext;
-  recipientId: string;
-  error: unknown;
-}): string {
-  return `wechat_context_token_stale: context=${params.context} recipient=${params.recipientId} action=wechat_message_required error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
-}
-
-function formatWechatSendRetryLogEntry(params: {
-  context: WechatSendContext;
-  recipientId: string;
-  attempt: number;
-  delayMs: number;
-  error: unknown;
-}): string {
-  return `wechat_send_retry: context=${params.context} recipient=${params.recipientId} attempt=${params.attempt} delay_ms=${params.delayMs} error=${truncatePreview(describeWechatTransportError(params.error), 400)}`;
-}
-
-export function isRetryableWechatSendError(error: unknown): boolean {
-  if (isWechatContextTokenStaleError(error)) {
-    return false;
-  }
-
-  const classification = classifyWechatTransportError(error);
-  if (classification.retryable) {
-    return true;
-  }
-
-  const details = describeWechatTransportError(error);
-  return /^(?:Error|WechatApiResponseError): sendmessage failed:/i.test(details) &&
-    !/errcode=-14\b.*session timeout/i.test(details);
-}
-
-function computeWechatSendRetryDelayMs(attempt: number): number {
-  return WECHAT_SEND_RETRY_BASE_MS * attempt;
 }
 
 export function shouldWatchParentProcess(options: {

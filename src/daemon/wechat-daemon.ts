@@ -57,13 +57,16 @@ import {
   truncatePreview,
 } from "../bridge/bridge-utils.ts";
 import {
+  WECHAT_SEND_MAX_ATTEMPTS,
+  computeWechatSendRetryDelayMs,
   formatUserFacingBridgeFatalError,
   formatUserFacingInboundError,
   formatWechatContextTokenStaleLogEntry,
   formatWechatSendFailureLogEntry,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
-} from "../bridge/wechat-bridge.ts";
+  type WechatSendContext,
+} from "../bridge/wechat-forwarding.ts";
 import {
   BRIDGE_LOCK_FILE,
   BRIDGE_LOG_FILE,
@@ -130,19 +133,6 @@ type ActiveTask = {
   inputPreview: string;
 };
 
-type WechatSendContext =
-  | "final_reply"
-  | "message"
-  | "notice"
-  | "approval_required"
-  | "user_input_required"
-  | "mirrored_user_input"
-  | "session_switched"
-  | "thread_switched"
-  | "task_failed"
-  | "fatal_error"
-  | "inbound_error";
-
 type DaemonSlot = {
   adapter: DaemonAdapterKind;
   runtime: BridgeAdapter;
@@ -160,8 +150,6 @@ const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".
 const DAEMON_HOST = "127.0.0.1";
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
-const WECHAT_SEND_MAX_ATTEMPTS = 3;
-const WECHAT_SEND_RETRY_BASE_MS = 750;
 const SINGLE_BRIDGE_STOP_TIMEOUT_MS = 10_000;
 const SINGLE_BRIDGE_FORCE_STOP_TIMEOUT_MS = 3_000;
 const SINGLE_BRIDGE_STOP_POLL_MS = 250;
@@ -192,10 +180,6 @@ function computePollRetryDelayMs(consecutiveFailures: number): number {
   const normalizedFailures = Math.max(1, consecutiveFailures);
   const exponent = Math.min(normalizedFailures - 1, 5);
   return Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * 2 ** exponent);
-}
-
-function computeWechatSendRetryDelayMs(attempt: number): number {
-  return WECHAT_SEND_RETRY_BASE_MS * attempt;
 }
 
 function isDaemonAdapterKind(value: string | undefined): value is DaemonAdapterKind {
@@ -1889,14 +1873,6 @@ class WechatDaemon {
         (slot) => slot.pendingConfirmations.length > 0,
       ) ?? null
     );
-  }
-
-  private countPendingApprovals(): number {
-    let count = 0;
-    for (const slot of this.slots.values()) {
-      count += slot.pendingConfirmations.length;
-    }
-    return count;
   }
 
   private getActiveSlot(): DaemonSlot | null {
