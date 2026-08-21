@@ -2436,6 +2436,64 @@ describe("Codex panel completion recovery", () => {
     ]);
   });
 
+  test("flushes a complete final session line without a trailing newline", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    adapter.activeTurn = {
+      threadId: "thread_1",
+      turnId: "turn_1",
+      origin: "wechat",
+    };
+    adapter.state.status = "busy";
+    adapter.state.activeTurnId = "turn_1";
+    adapter.state.activeTurnOrigin = "wechat";
+    adapter.sessionFinalText = "done";
+    adapter.sessionPartialLine = JSON.stringify({
+      timestamp: "2026-08-22T00:00:00.000Z",
+      payload: {
+        type: "task_complete",
+        turn_id: "turn_1",
+        last_agent_message: "done",
+      },
+    });
+
+    adapter.flushCompleteSessionPartialLine();
+
+    expect(adapter.sessionPartialLine).toBe("");
+    expect(adapter.activeTurn).toBeNull();
+    expect(adapter.state.status).toBe("idle");
+    expect(adapter.hasCompletedTurn("turn_1")).toBe(true);
+  });
+
+  test("ignores late RPC notifications from an already completed turn", () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const events: Array<{ type: string }> = [];
+    adapter.setEventSink((event: { type: string }) => events.push(event));
+    adapter.sharedThreadId = "thread_1";
+    adapter.state.sharedSessionId = "thread_1";
+    adapter.state.sharedThreadId = "thread_1";
+    adapter.state.status = "idle";
+    adapter.rememberCompletedTurn("turn_done");
+
+    adapter.handleRpcNotification("turn/started", {
+      threadId: "thread_1",
+      turnId: "turn_done",
+    });
+
+    expect(adapter.activeTurn).toBeNull();
+    expect(adapter.state.status).toBe("idle");
+    expect(events).toEqual([]);
+  });
+
   test("sendInput recovers a stale hidden active turn before starting the next WeChat turn", async () => {
     const adapter = createBridgeAdapter({
       kind: "codex",

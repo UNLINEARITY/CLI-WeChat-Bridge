@@ -585,6 +585,20 @@ function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean 
   return false;
 }
 
+export function shouldRestartDeadCodexVisibleRuntime(params: {
+  adapter: DaemonAdapterKind;
+  slotCreated: boolean;
+  hadVisibleClient: boolean;
+  visibleConnected: boolean;
+}): boolean {
+  return (
+    params.adapter === "codex" &&
+    !params.slotCreated &&
+    params.hadVisibleClient &&
+    !params.visibleConnected
+  );
+}
+
 function cleanupVisibleClientLauncher(launch: VisibleClientLaunch): boolean {
   if (!launch.pid || !isPidAlive(launch.pid)) {
     return false;
@@ -632,6 +646,38 @@ export async function waitForVisibleClientConnection(
   }
 }
 
+export async function waitForCodexVisibleThread(
+  params: {
+    getThreadId: () => string | undefined;
+    timeoutMs?: number;
+    pollMs?: number;
+  },
+  deps: {
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  } = {},
+): Promise<string | null> {
+  const timeoutMs = params.timeoutMs ?? VISIBLE_CLIENT_CONNECT_TIMEOUT_MS;
+  const pollMs = params.pollMs ?? VISIBLE_CLIENT_CONNECT_POLL_MS;
+  const sleepFn = deps.sleep ?? sleep;
+  const now = deps.now ?? (() => Date.now());
+  const deadline = now() + timeoutMs;
+
+  while (true) {
+    const threadId = params.getThreadId();
+    if (threadId) {
+      return threadId;
+    }
+
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      return null;
+    }
+
+    await sleepFn(Math.min(pollMs, remainingMs));
+  }
+}
+
 function formatInboundMessagePreview(message: InboundWechatMessage): string {
   if (message.text.trim()) {
     return message.text;
@@ -657,6 +703,7 @@ export function formatDaemonSwitchResultDetail(result: {
   created: boolean;
   openedVisible: boolean;
   visibleConnected: boolean;
+  visibleReady?: boolean;
   activated?: boolean;
   previousActiveAdapter?: DaemonAdapterKind;
 }): string {
@@ -664,6 +711,9 @@ export function formatDaemonSwitchResultDetail(result: {
     const previous = result.previousActiveAdapter
       ? ` Active terminal remains ${result.previousActiveAdapter}.`
       : " No terminal is active yet.";
+    if (result.visibleConnected && result.visibleReady === false) {
+      return `The visible Codex CLI connected, but its active thread is not ready yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
+    }
     if (result.openedVisible) {
       return result.created
         ? `Started the bridge slot and tried to open the visible CLI, but it has not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`
@@ -1016,6 +1066,7 @@ class WechatDaemon {
     created: boolean;
     openedVisible: boolean;
     visibleConnected: boolean;
+    visibleReady: boolean;
     activated: boolean;
     previousActiveAdapter?: DaemonAdapterKind;
   }> {
@@ -1038,7 +1089,32 @@ class WechatDaemon {
     }
 
     let openedVisible = false;
+    const visibleEndpointBeforeProbe = readLocalCompanionEndpoint(this.cwd, {
+      adapter,
+    });
+    const hadVisibleClient = Boolean(
+      visibleEndpointBeforeProbe?.companionPid ||
+        visibleEndpointBeforeProbe?.companionConnectedAt ||
+        visibleEndpointBeforeProbe?.sharedThreadId ||
+        visibleEndpointBeforeProbe?.sharedSessionId,
+    );
     let visibleConnected = isVisibleClientAlive(this.cwd, adapter);
+    if (
+      shouldRestartDeadCodexVisibleRuntime({
+        adapter,
+        slotCreated: created,
+        hadVisibleClient,
+        visibleConnected,
+      })
+    ) {
+      await this.startFreshSlotSession(slot);
+      appendDaemonLog(
+        `dead_visible_codex_runtime_restarted: cwd=${this.cwd}`,
+      );
+    }
+    const sharedSessionBeforeVisible = getSharedSessionIdFromAdapterState(
+      slot.runtime.getState(),
+    );
     const sessionStartMode = resolveDaemonSessionStartMode({
       adapter,
       explicitSessionStartMode: options.sessionStartMode,
@@ -1092,19 +1168,43 @@ class WechatDaemon {
       }
     }
 
-    const activated = options.openVisible === false || visibleConnected;
+    let visibleReady = visibleConnected;
+    if (adapter === "codex" && visibleConnected && !sharedSessionBeforeVisible) {
+      const visibleThreadId = await waitForCodexVisibleThread({
+        getThreadId: () => {
+          const state = slot.runtime.getState();
+          if (state.lastThreadSwitchSource !== "local") {
+            return undefined;
+          }
+          return state.sharedThreadId ?? state.sharedSessionId;
+        },
+      });
+      visibleReady = Boolean(visibleThreadId);
+      if (visibleThreadId) {
+        appendDaemonLog(
+          `visible_codex_thread_ready: thread=${visibleThreadId} cwd=${this.cwd}`,
+        );
+      } else {
+        appendDaemonLog(
+          `visible_codex_thread_timeout: cwd=${this.cwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS}`,
+        );
+      }
+    }
+
+    const activated = options.openVisible === false || (visibleConnected && visibleReady);
     if (activated) {
       this.activeAdapter = adapter;
     }
 
     appendDaemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} visible_ready=${visibleReady} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
     );
     return {
       activeAdapter: adapter,
       created,
       openedVisible,
       visibleConnected,
+      visibleReady,
       activated,
       previousActiveAdapter,
     };
@@ -1159,7 +1259,7 @@ class WechatDaemon {
     slot.pendingUserInput = null;
     slot.activeTask = null;
 
-    if (slot.adapter === "claude") {
+    if (slot.adapter === "codex" || slot.adapter === "claude") {
       await slot.runtime.reset();
     } else if (slot.adapter === "opencode" || slot.adapter === "pi") {
       if (!slot.runtime.createSession) {
@@ -1480,7 +1580,7 @@ class WechatDaemon {
       return;
     }
 
-    const slot = this.getActiveSlot();
+    let slot = this.getActiveSlot();
     if (!slot) {
       await this.queueWechatMessage(message.senderId, formatNoActiveAdapterMessage());
       return;
@@ -1521,6 +1621,22 @@ class WechatDaemon {
       );
       return;
     }
+
+    const visibleResult = await this.ensureSlot(slot.adapter, {
+      openVisible: true,
+      reuseExistingVisible: true,
+    });
+    if (!visibleResult.activated) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          formatDaemonSwitchResultDetail(visibleResult),
+        ),
+      );
+      return;
+    }
+    slot = this.getActiveSlot() ?? slot;
 
     const adapterState = slot.runtime.getState();
     if (adapterState.status === "busy" || adapterState.status === "awaiting_approval") {

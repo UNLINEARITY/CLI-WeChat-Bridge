@@ -693,6 +693,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         this.sessionPartialLine = "";
       }
       if (stat.size === this.sessionReadOffset) {
+        this.flushCompleteSessionPartialLine();
         return;
       }
       const fd = fs.openSync(this.sessionFilePath, "r");
@@ -718,6 +719,24 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     for (const line of lines) {
       this.handleSessionLogLine(line);
     }
+    this.flushCompleteSessionPartialLine();
+  }
+
+  private flushCompleteSessionPartialLine(): void {
+    const line = this.sessionPartialLine.trim();
+    if (!line) {
+      this.sessionPartialLine = "";
+      return;
+    }
+
+    try {
+      JSON.parse(line);
+    } catch {
+      return;
+    }
+
+    this.sessionPartialLine = "";
+    this.handleSessionLogLine(line);
   }
 
   private seedSessionReplayCutoff(startedAtMs: number): void {
@@ -2240,6 +2259,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const threadId = getNotificationThreadId(params);
     const turnId = getNotificationTurnId(params);
     if (!threadId || !turnId) {
+      return null;
+    }
+    if (this.hasCompletedTurn(turnId)) {
       return null;
     }
 

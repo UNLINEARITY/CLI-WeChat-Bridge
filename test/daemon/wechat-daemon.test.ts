@@ -15,6 +15,8 @@ import {
   parseDaemonSwitchCommand,
   parseDaemonSwitchDirective,
   resolveDaemonSessionStartMode,
+  shouldRestartDeadCodexVisibleRuntime,
+  waitForCodexVisibleThread,
   waitForVisibleClientConnection,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
@@ -226,6 +228,33 @@ describe("wechat-daemon helpers", () => {
     ).toBe("new");
   });
 
+  test("restarts an existing Codex runtime after its visible client exits", () => {
+    expect(
+      shouldRestartDeadCodexVisibleRuntime({
+        adapter: "codex",
+        slotCreated: false,
+        hadVisibleClient: true,
+        visibleConnected: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRestartDeadCodexVisibleRuntime({
+        adapter: "codex",
+        slotCreated: false,
+        hadVisibleClient: true,
+        visibleConnected: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRestartDeadCodexVisibleRuntime({
+        adapter: "claude",
+        slotCreated: false,
+        hadVisibleClient: true,
+        visibleConnected: false,
+      }),
+    ).toBe(false);
+  });
+
   test("buildWindowsVisibleClientLaunchCommand opens a titled console window", () => {
     const command = buildWindowsVisibleClientLaunchCommand({
       adapter: "claude",
@@ -300,6 +329,16 @@ describe("wechat-daemon helpers", () => {
         previousActiveAdapter: "claude",
       }),
     ).toContain("Active terminal remains claude");
+
+    expect(
+      formatDaemonSwitchResultDetail({
+        created: true,
+        openedVisible: true,
+        visibleConnected: true,
+        visibleReady: false,
+        activated: false,
+      }),
+    ).toContain("active thread is not ready yet");
   });
 
   test("waitForVisibleClientConnection resolves when the visible companion appears", async () => {
@@ -350,6 +389,50 @@ describe("wechat-daemon helpers", () => {
 
     expect(connected).toBe(false);
     expect(now).toBe(500);
+  });
+
+  test("waitForCodexVisibleThread waits for the local visible thread", async () => {
+    let now = 0;
+    let threadId: string | undefined;
+
+    const result = await waitForCodexVisibleThread(
+      {
+        getThreadId: () => threadId,
+        timeoutMs: 500,
+        pollMs: 50,
+      },
+      {
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+          if (now >= 150) {
+            threadId = "thread_visible";
+          }
+        },
+      },
+    );
+
+    expect(result).toBe("thread_visible");
+  });
+
+  test("waitForCodexVisibleThread returns null when no thread becomes ready", async () => {
+    let now = 0;
+
+    const result = await waitForCodexVisibleThread(
+      {
+        getThreadId: () => undefined,
+        timeoutMs: 100,
+        pollMs: 25,
+      },
+      {
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+    );
+
+    expect(result).toBeNull();
   });
 
   test("cleanupDaemonBeforeStart returns none when no daemon endpoint exists", async () => {
