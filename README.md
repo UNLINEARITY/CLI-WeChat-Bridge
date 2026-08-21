@@ -170,10 +170,10 @@ wechat-daemon
 
 | 指令 | 行为 |
 | --- | --- |
-| `/codex` | 切换到 Codex |
-| `/claude` | 切换到 Claude Code |
-| `/opencode` | 切换到 OpenCode |
-| `/pi` | 切换到 Pi |
+| `/codex [prompt]` | 切换到 Codex；携带 prompt 时切换后立即转发剩余文本 |
+| `/claude [prompt]` | 切换到 Claude Code；携带 prompt 时切换后立即转发剩余文本 |
+| `/opencode [prompt]` | 切换到 OpenCode；携带 prompt 时切换后立即转发剩余文本 |
+| `/pi [prompt]` | 切换到 Pi；携带 prompt 时切换后立即转发剩余文本 |
 
 daemon 启动后，后续切换都可以直接从微信发起；如果对应 CLI 还没有可见窗口，daemon 会自动打开或复用它，不需要再手动运行 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`。
 
@@ -186,6 +186,7 @@ daemon 启动后，后续切换都可以直接从微信发起；如果对应 CLI
 - 切换适配器不会关闭之前的 CLI；
 - 如果对应适配器已经有可见 CLI 在运行，则直接复用；
 - 如果还没有对应 CLI，daemon 会自动打开一个新的可见终端；
+- 如果当前活动 CLI 的本地窗口被关闭，下一条普通微信输入会自动重开可见终端；Codex 会重置旧 runtime 的残留 busy/turn 状态并建立新的可见 thread；
 - Codex / Claude / OpenCode / Pi 的重要输出都会带上 `[codex]`、`[claude]`、`[opencode]`、`[pi]` 标签再发回微信；
 - 可以在微信里发送 `/daemon-stop` 停止 daemon。
 
@@ -344,7 +345,7 @@ wechat-claude-start --model sonnet --dangerously-skip-permissions
 | 指令 | 说明 |
 | --- | --- |
 | 普通文本 | 发送到当前活动会话 |
-| `/codex` / `/claude` / `/opencode` / `/pi` | daemon 模式下切换活动 CLI；已有 CLI 会复用，没有则自动打开 |
+| `/codex [prompt]` / `/claude [prompt]` / `/opencode [prompt]` / `/pi [prompt]` | daemon 模式下切换活动 CLI；已有 CLI 会复用，没有则自动打开；可选 prompt 会在切换成功后立即转发 |
 | `/status` | 查看 bridge 当前状态 |
 | `/stop` | 中断当前任务 |
 | `/reset` | 重建当前本地会话 |

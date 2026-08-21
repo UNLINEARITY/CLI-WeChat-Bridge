@@ -4,6 +4,17 @@
 
 ## 版本列表
 
+### [v1.1.3](./1.1.3.md) / [中文说明](./1.1.3_CN.md)
+**原生 Pi TUI 接管 + Codex/OpenCode 较新主流版本兼容 + daemon 行内 prompt 切换**
+- 新增 Pi bridge、companion 和单命令启动器，微信与本地键盘共用真实 Pi TUI session；刷新 Codex app-server 与 OpenCode 1.18 协议支持；修复 Windows 命令 shim、OpenCode 健康检查启动竞态、Pi 慢启动超时与 `/claude hi` 等 daemon 切换转发
+- **Pi 原生 TUI**：新增 `wechat-bridge-pi`、`wechat-pi`、`wechat-pi-start` 和 daemon `/pi`，保留原生主题、快捷键、模型选择、extension UI 与完整本地权限
+- **Pi session 与启动**：启动器默认新建 session，支持 `--session-start-mode restore`；慢加载不再在 30 秒后误杀 TUI，extension context 就绪前会排队命令
+- **Codex 兼容**：移除废弃 `tui_app_server` 参数，更新 initialize/thread-start、`currentTime/read` 和阻塞/非阻塞 `request_user_input`；daemon 等待可见 Codex 发布本地 thread 后再转发 prompt，关闭窗口后自动重建 runtime，并清理已完成 turn 的迟到事件与残留 busy 状态
+- **OpenCode 1.18**：校验 `>=1.18.0 <2.0.0`，使用 `/global/health`、`permission.reply` 和当前 event 形态，支持 `question.*` 的单选、多选与自定义回答
+- **启动与切换**：Windows 含空格路径的 CLI shim 可直接通过 PTY 启动；`/claude hi`、`/codex hi`、`/opencode hi`、`/pi hi` 会先切换再转发 `hi`
+- **依赖安全**：`@modelcontextprotocol/sdk` 升级到 `^1.30.0`，npm/Bun lockfile 选用已修复的 Hono、Express、Ajv 间接依赖
+- **统计**：48 个文件，新增 3,744 行，删除 291 行
+
 ### [v1.1.2](./1.1.2.md) / [中文说明](./1.1.2_CN.md)
 **跨平台安装修复 + 崩溃/竞态加固 + 原子持久化 + 环境变量与诊断增强 + 基于 npm 的更新检查 + 三平台 CI** - 修复 node-pty 在 macOS/Linux 因 spawn-helper 缺执行位导致的静默 PTY fallback；为 adapter 加入 turn 完成竞态守卫和 spawn 错误处理；共享状态原子写入、入站去重 fail-closed、bridge.log 限长；恢复被过严白名单丢弃的 Windows 环境变量（ANTHROPIC_BASE_URL/OPENAI_API_KEY）；check-update 改查 npm registry；新增 Ubuntu/macOS/Windows 三平台 CI 质量门禁
 - **跨平台安装**：postinstall 恢复 node-pty spawn-helper 执行位（修复 macOS/Linux posix_spawnp 失败的静默 fallback），并纳入 published files（修复全局安装 MODULE_NOT_FOUND）
@@ -171,6 +182,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.1.3 | 2026-08-22 | 原生 Pi TUI 接管、Codex/OpenCode 较新主流版本兼容、Windows/OpenCode/Pi 启动可靠性、daemon 行内 prompt 切换转发 | 48 个文件，+3,744/-291 |
 | 1.1.2 | 2026-07-07 | node-pty 跨平台执行位修复、崩溃/turn 竞态加固、原子持久化与入站 fail-closed 去重、Windows 环境变量与诊断增强、npm-based 更新检查、三平台 CI 质量门禁 | 36 个文件，+1,182/-159 |
 | 1.1.1 | 2026-06-02 | 按适配器收敛的 doctor 诊断、紧凑 i18n 输出、bridge lock 字段化展示、架构文档与 PTY 排障补充 | 12 个文件，+1,706/-8 |
 | 1.1.0 | 2026-05-27 | i18n 中文默认、Claude 思考转发、自动批准修复、批量审批、单桥 emoji 绑定、进程树清理、跨平台诊断 | 26 个文件，+922/-206 |
