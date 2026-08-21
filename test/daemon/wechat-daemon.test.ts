@@ -13,6 +13,7 @@ import {
   formatDaemonStatus,
   parseDaemonCliArgs,
   parseDaemonSwitchCommand,
+  parseDaemonSwitchDirective,
   resolveDaemonSessionStartMode,
   waitForVisibleClientConnection,
 } from "../../src/daemon/wechat-daemon.ts";
@@ -59,6 +60,29 @@ describe("wechat-daemon helpers", () => {
     expect(parseDaemonSwitchCommand("/opencode")).toBe("opencode");
     expect(parseDaemonSwitchCommand("/pi")).toBe("pi");
     expect(parseDaemonSwitchCommand("/status")).toBeNull();
+  });
+
+  test("parseDaemonSwitchDirective intercepts and separates prompts for every adapter", () => {
+    for (const adapter of ["claude", "codex", "pi", "opencode"] as const) {
+      expect(parseDaemonSwitchDirective(`/${adapter} hi`)).toEqual({
+        adapter,
+        remainder: "hi",
+      });
+      expect(parseDaemonSwitchDirective(`  /${adapter.toUpperCase()}   inspect the project  `)).toEqual({
+        adapter,
+        remainder: "inspect the project",
+      });
+      expect(parseDaemonSwitchDirective(`/${adapter}`)).toEqual({
+        adapter,
+        remainder: "",
+      });
+    }
+  });
+
+  test("parseDaemonSwitchDirective does not intercept similar prompt text", () => {
+    expect(parseDaemonSwitchDirective("/claudex hi")).toBeNull();
+    expect(parseDaemonSwitchDirective("please use /claude hi")).toBeNull();
+    expect(parseDaemonSwitchDirective("/status hi")).toBeNull();
   });
 
   test("parseDaemonCliArgs binds daemon to cwd and optional initial adapter", () => {

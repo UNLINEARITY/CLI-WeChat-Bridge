@@ -297,6 +297,24 @@ export function parseDaemonSwitchCommand(text: string): DaemonAdapterKind | null
   }
 }
 
+export type DaemonSwitchDirective = {
+  adapter: DaemonAdapterKind;
+  remainder: string;
+};
+
+export function parseDaemonSwitchDirective(text: string): DaemonSwitchDirective | null {
+  const match = text
+    .trim()
+    .match(/^\/(codex|claude|opencode|pi)(?:\s+([\s\S]+))?$/i);
+  if (!match) {
+    return null;
+  }
+  return {
+    adapter: match[1]!.toLowerCase() as DaemonAdapterKind,
+    remainder: match[2]?.trim() ?? "",
+  };
+}
+
 export function defaultDaemonSessionStartMode(
   adapter: DaemonAdapterKind,
 ): BridgeSessionStartMode {
@@ -1418,21 +1436,29 @@ class WechatDaemon {
       }
     }
 
-    const switchAdapter = parseDaemonSwitchCommand(message.text);
-    if (switchAdapter) {
-      const result = await this.ensureSlot(switchAdapter, {
+    const switchDirective = parseDaemonSwitchDirective(message.text);
+    if (switchDirective) {
+      const result = await this.ensureSlot(switchDirective.adapter, {
         openVisible: true,
         reuseExistingVisible: true,
       });
       const detail = formatDaemonSwitchResultDetail(result);
-      const heading = result.activated
-        ? `Active terminal: ${switchAdapter}.`
-        : `Could not activate terminal: ${switchAdapter}.`;
-      await this.queueWechatMessage(
-        message.senderId,
-        `${heading}\n${detail}`,
-      );
-      return;
+      if (!result.activated) {
+        await this.queueWechatMessage(
+          message.senderId,
+          `Could not activate terminal: ${switchDirective.adapter}.\n${detail}`,
+        );
+        return;
+      }
+      if (switchDirective.remainder) {
+        message = { ...message, text: switchDirective.remainder };
+      } else {
+        await this.queueWechatMessage(
+          message.senderId,
+          `Active terminal: ${switchDirective.adapter}.\n${detail}`,
+        );
+        return;
+      }
     }
 
     if (message.text.trim().toLowerCase() === "/daemon-stop") {
