@@ -3113,15 +3113,22 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const previousText = this.emittedTextByPartId.get(partId) ?? "";
-    if (nextChunk === previousText || previousText.endsWith(nextChunk)) {
+    if (nextChunk === previousText) {
+      // Full replay of everything emitted for this part (an SSE replay after
+      // a reconnect): nothing new.
       return "";
     }
 
     if (previousText && nextChunk.startsWith(previousText)) {
+      // The "delta" actually carries the accumulated part text: keep the tail.
       this.emittedTextByPartId.set(partId, nextChunk);
       return nextChunk.slice(previousText.length);
     }
 
+    // Plain incremental delta: append. Duplicated fragments that legitimately
+    // occur in model output (repeated words, table separators, markdown
+    // rules) must still be forwarded, so there is deliberately no
+    // suffix-based dedup here — it silently truncated real content.
     this.emittedTextByPartId.set(partId, `${previousText}${nextChunk}`);
     return nextChunk;
   }

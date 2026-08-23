@@ -166,11 +166,22 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       });
       this.server = server;
       server.on("error", (error) => {
+        // Roll back the half-initialized server: start() early-returns while
+        // this.server is set, so a leftover handle would make every retry
+        // silently "succeed" without ever listening.
+        if (this.server === server) {
+          this.server = null;
+        }
+        server.close();
         reject(error);
       });
       server.listen(0, CODEX_APP_SERVER_HOST, () => {
         const address = server.address();
         if (!address || typeof address === "string") {
+          if (this.server === server) {
+            this.server = null;
+          }
+          server.close();
           reject(new Error(`Failed to allocate a local ${this.options.kind} companion port.`));
           return;
         }

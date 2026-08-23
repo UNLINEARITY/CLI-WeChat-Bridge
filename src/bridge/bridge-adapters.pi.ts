@@ -759,6 +759,15 @@ export class PiTuiAdapter implements BridgeAdapter {
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
       if (!this.socket && !this.disposing) {
+        // Reset the turn state alongside the fatal error: leaving status at
+        // "busy" would keep rejecting every message with "still working"
+        // while /stop stays unavailable (no socket) and /reset is the only
+        // way out.
+        this.clearActiveTurn();
+        this.setStatus(
+          "idle",
+          "The Pi TUI extension disconnected; the bridge is waiting for a reconnect.",
+        );
         this.emit({
           type: "fatal_error",
           message: "The native Pi TUI bridge extension disconnected and did not reconnect.",
@@ -813,9 +822,13 @@ export class PiTuiAdapter implements BridgeAdapter {
     this.extensionReady = false;
     this.clearActiveTurn();
     if (!this.disposing) {
+      // Report unexpected exits as fatal errors, matching the other adapters:
+      // a bare "stopped" status is only logged by the bridge, so WeChat users
+      // would get no signal that the TUI is gone until their next message
+      // fails with a cryptic not-connected error.
       this.emit({
-        type: "status",
-        status: "stopped",
+        type: "fatal_error",
+        message: `Pi TUI exited unexpectedly (code=${code ?? "none"}, signal=${signal ?? "none"}). Restart the bridge or use /reset to recover.`,
         timestamp: nowIso(),
       });
     }

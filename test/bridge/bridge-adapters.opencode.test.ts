@@ -2717,6 +2717,32 @@ describe("OpenCode message.part.updated handling", () => {
     expect(internal.state.lastOutputAt).toBeTruthy();
   });
 
+  test("forwards legitimate repeated delta fragments instead of dropping them", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      consumeVisiblePartDelta(partId: string, delta: string): string;
+      emittedTextByPartId: Map<string, string>;
+    };
+
+    expect(internal.consumeVisiblePartDelta("p1", "hello ha")).toBe("hello ha");
+    // The model genuinely repeated " ha" (old suffix heuristic ate this
+    // because the accumulated text happened to end with the same fragment).
+    expect(internal.consumeVisiblePartDelta("p1", " ha")).toBe(" ha");
+    // Repeated table separators must survive too.
+    expect(internal.consumeVisiblePartDelta("p1", " | done")).toBe(" | done");
+    expect(internal.consumeVisiblePartDelta("p1", " |")).toBe(" |");
+
+    // A full replay of everything emitted so far is still deduplicated.
+    expect(internal.consumeVisiblePartDelta("p1", "hello ha ha | done |")).toBe("");
+    // A delta carrying the accumulated text plus new content yields only the tail.
+    internal.emittedTextByPartId.set("p2", "part one");
+    expect(internal.consumeVisiblePartDelta("p2", "part one and two")).toBe(" and two");
+  });
+
   test("extracts text from part.text when no delta", () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
