@@ -8,10 +8,10 @@ import {
   getWorkspaceChannelPaths,
 } from "../wechat/channel-config.ts";
 import type {
-  BridgeAdapterKind,
   BridgeAdapterState,
   BridgeEvent,
   BridgeWorkerStatus,
+  LegacyBridgeAdapterKind,
 } from "../bridge/bridge-types.ts";
 import {
   LOCAL_CLIENT_PROTOCOL_VERSION,
@@ -40,7 +40,7 @@ export type LocalCompanionCloseReason =
 export type LocalCompanionEndpoint = LocalClientEndpoint;
 
 type EndpointReadOptions = {
-  adapter?: BridgeAdapterKind;
+  adapter?: LegacyBridgeAdapterKind;
 };
 
 type EndpointWriteOptions = {

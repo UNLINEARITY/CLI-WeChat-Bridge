@@ -240,17 +240,11 @@ function printPostLoginHelp(log: (message: string) => void): void {
   log("This WeChat account is now authorized for the bridge.");
   log("");
   log("Start from any project directory with one of:");
-  log("  wechat-codex-start");
-  log("  wechat-claude-start");
-  log("  wechat-opencode-start");
-  log("  wechat-pi-start");
-  log("  wechat-bridge-shell");
-  log("");
-  log("Manual two-terminal mode is also available:");
-  log("  wechat-bridge-codex  +  wechat-codex");
-  log("  wechat-bridge-claude +  wechat-claude");
-  log("  wechat-bridge-opencode + wechat-opencode");
-  log("  wechat-bridge-pi + wechat-pi");
+  log("  wechat-codex");
+  log("  wechat-claude");
+  log("  wechat-opencode");
+  log("  wechat-pi");
+  log("  wechat-daemon");
   log("");
   log("Run wechat-setup again any time you need to refresh the login.");
 }

@@ -9,6 +9,7 @@ import {
 } from "../wechat/channel-config.ts";
 import type {
   BridgeAdapterKind,
+  LegacyBridgeAdapterKind,
   BridgeLifecycleMode,
   BridgeSessionStartMode,
   BridgeState,
@@ -31,7 +32,7 @@ export type BridgeLockPayload = {
   pid: number;
   parentPid: number;
   instanceId: string;
-  adapter: BridgeAdapterKind;
+  adapter: LegacyBridgeAdapterKind;
   command: string;
   cwd: string;
   startedAt: string;

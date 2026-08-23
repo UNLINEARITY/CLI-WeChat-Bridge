@@ -48,9 +48,9 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: local-companion --adapter <codex|claude|opencode|pi> [--cwd <path>] [...cli args]",
+          "Internal companion usage: local-companion --adapter <codex|claude|opencode|pi> [--cwd <path>] [...cli args]",
           "",
-          'Starts the visible local companion and connects it to the matching running bridge for the current directory.',
+          "Connects a visible local CLI to the matching bridge runtime for the current directory.",
           "Unknown arguments are forwarded to the visible CLI client.",
           "",
         ].join("\n"),
@@ -104,17 +104,17 @@ function delay(ms: number): Promise<void> {
 
 function readMatchingEndpoint(
   options: LocalCompanionCliOptions,
-): LocalCompanionEndpoint {
+): LocalCompanionEndpoint & { kind: LocalCompanionCliOptions["adapter"] } {
   const endpoint = readLocalCompanionEndpoint(options.cwd, {
     adapter: options.adapter,
   });
   if (!endpoint || endpoint.kind !== options.adapter) {
     throw new Error(
-      `No active ${options.adapter} bridge endpoint was found for ${options.cwd}. Start "wechat-bridge-${options.adapter}" in that directory first.`,
+      `No active ${options.adapter} runtime was found for ${options.cwd}. Run "wechat-${options.adapter}" in that directory to recreate it.`,
     );
   }
 
-  return endpoint;
+  return endpoint as LocalCompanionEndpoint & { kind: LocalCompanionCliOptions["adapter"] };
 }
 
 export function shouldReconnectLocalCompanion(params: {

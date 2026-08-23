@@ -2,4 +2,4 @@
 
 import { runJsEntry } from "./_run-entry.mjs";
 
-runJsEntry("dist/companion/local-companion.js", ["--adapter", "claude"]);
+runJsEntry("dist/companion/local-companion-start.js", ["--adapter", "claude"]);

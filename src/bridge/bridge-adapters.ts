@@ -4,7 +4,6 @@ import { LocalCompanionProxyAdapter } from "./bridge-adapters.core.ts";
 import { CodexPtyAdapter } from "./bridge-adapters.codex.ts";
 import { OpenCodeServerAdapter } from "./bridge-adapters.opencode.ts";
 import { PiTuiAdapter } from "./bridge-adapters.pi.ts";
-import { ShellAdapter } from "./bridge-adapters.shell.ts";
 import type { AdapterOptions } from "./bridge-adapters.shared.ts";
 
 export * from "./bridge-adapters.shared.ts";
@@ -27,8 +26,6 @@ export function createBridgeAdapter(options: AdapterOptions): BridgeAdapter {
       return options.renderMode === "companion"
         ? new PiTuiAdapter(options)
         : new LocalCompanionProxyAdapter(options);
-    case "shell":
-      return new ShellAdapter(options);
     default:
       throw new Error(`Unsupported adapter: ${options.kind}`);
   }

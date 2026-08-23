@@ -1,4 +1,5 @@
 import type {
+  LegacyBridgeAdapterKind,
   BridgeAdapter,
   BridgeWorkerStatus,
 } from "../bridge/bridge-types.ts";
@@ -13,7 +14,7 @@ export type LocalClientEndpoint = {
   protocolVersion: number;
   runtimeKind: RuntimeKind;
   instanceId: string;
-  kind: "codex" | "claude" | "opencode" | "pi" | "shell";
+  kind: LegacyBridgeAdapterKind;
   port: number;
   token: string;
   renderMode?: RuntimeRenderMode;

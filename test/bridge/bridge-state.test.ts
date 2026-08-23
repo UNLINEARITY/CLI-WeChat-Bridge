@@ -92,6 +92,21 @@ describe("bridge-state lock helpers", () => {
     });
   });
 
+  test("normalizeBridgeLockPayload keeps legacy shell locks readable for cleanup", () => {
+    const payload = normalizeBridgeLockPayload({
+      pid: 123,
+      parentPid: 456,
+      instanceId: "bridge-shell",
+      adapter: "shell",
+      command: "powershell.exe",
+      cwd: "C:\\workspace",
+      startedAt: "2026-03-27T00:00:00.000Z",
+      lifecycle: "persistent",
+    });
+
+    expect(payload?.adapter).toBe("shell");
+  });
+
   test("shouldAutoReclaimBridgeLock reclaims companion-bound locks when the parent is gone", () => {
     expect(
       shouldAutoReclaimBridgeLock(

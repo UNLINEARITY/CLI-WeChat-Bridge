@@ -82,6 +82,13 @@ describe("local-companion-start helpers", () => {
     expect(options.cliArgs).toEqual([]);
   });
 
+  test("parseCliArgs keeps --doctor out of native CLI passthrough", () => {
+    const options = parseCliArgs(["--adapter", "pi", "--doctor"]);
+
+    expect(options.adapter).toBe("pi");
+    expect(options.cliArgs).toEqual([]);
+  });
+
   test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
     const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
       adapter: "codex",

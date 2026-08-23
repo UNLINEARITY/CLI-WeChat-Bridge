@@ -33,7 +33,7 @@ import {
   type DaemonResponse,
 } from "../daemon/daemon-link.ts";
 
-type LocalCompanionLaunchAdapter = Exclude<BridgeAdapterKind, "shell">;
+type LocalCompanionLaunchAdapter = BridgeAdapterKind;
 
 type LocalCompanionStartCliOptions = {
   adapter: LocalCompanionLaunchAdapter;
@@ -94,7 +94,7 @@ const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
 const DEFAULT_ADAPTER: LocalCompanionLaunchAdapter = "codex";
 
 function log(adapter: LocalCompanionLaunchAdapter, message: string): void {
-  process.stderr.write(`[wechat-${adapter}-start] ${message}\n`);
+  process.stderr.write(`[wechat-${adapter}] ${message}\n`);
 }
 
 export function normalizeComparablePath(cwd: string): string {
@@ -211,23 +211,38 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     const next = argv[i + 1];
 
     if (arg === "--help" || arg === "-h") {
+      const helpAdapter = adapter;
+      const commandName = `wechat-${helpAdapter}`;
+      const adapterLabel = {
+        codex: "Codex",
+        claude: "Claude Code",
+        opencode: "OpenCode",
+        pi: "Pi",
+      }[helpAdapter];
       process.stdout.write(
         [
-          "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...codex args]",
-          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...claude args]",
-          "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...opencode args]",
-          "       wechat-pi-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...pi args]",
-          "       local-companion-start [--adapter <codex|claude|opencode|pi>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
+          `Usage: ${commandName} [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--session-start-mode <restore|new>] [...${helpAdapter} args]`,
           "",
-          "Starts a bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
-          "Claude, OpenCode, and Pi launchers start a fresh CLI session by default.",
-          "Use --session-start-mode restore to explicitly restore the previous session.",
-          "All adapters are companion-bound: closing the companion/panel also stops the bridge.",
+          "Ensures the WeChat runtime for the current directory, then opens or reuses the visible CLI.",
+          "If a same-workspace daemon is running, the command delegates to that daemon.",
+          helpAdapter === "codex"
+            ? "Codex restores the current session by default."
+            : `${adapterLabel} starts a fresh session by default.`,
+          helpAdapter === "codex"
+            ? "Use --session-start-mode new to explicitly start a fresh session."
+            : "Use --session-start-mode restore to explicitly restore the previous session.",
+          "Use --doctor to check the selected adapter and workspace without starting it.",
+          "Without a daemon, the transient runtime is companion-bound and stops when the visible CLI closes.",
           "Unknown arguments are forwarded to the visible CLI client.",
+          `Deprecated alias: ${commandName}-start.`,
           "",
         ].join("\n"),
       );
       process.exit(0);
+    }
+
+    if (arg === "--doctor") {
+      continue;
     }
 
     if (arg === "--adapter") {
@@ -642,6 +657,12 @@ export async function ensureCompanionStartWechatCredentials(
 export async function runLocalCompanionStart(
   argv: string[] = process.argv.slice(2),
 ): Promise<number> {
+  if (argv.includes("--doctor")) {
+    const { runDoctorCheck } = await import("../utils/doctor.ts");
+    await runDoctorCheck(argv, { mode: "bridge" });
+    return 0;
+  }
+
   const options = parseCliArgs(argv);
   await ensureCompanionStartWechatCredentials(options.adapter);
 

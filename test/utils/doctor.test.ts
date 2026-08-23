@@ -330,24 +330,6 @@ describe("doctor report", () => {
     expect(output).toContain("Pi");
   });
 
-  test("shell bridge doctor skips agent CLI checks", async () => {
-    const lines = await buildDoctorReport(
-      {
-        argv: ["--doctor", "--adapter", "shell"],
-        mode: "bridge",
-        cwd: CWD,
-      },
-      makeDeps(),
-    );
-    const output = lines.join("\n");
-
-    expect(output).toContain("  [ok] shell 使用本机 shell");
-    expect(output).not.toContain("Codex CLI");
-    expect(output).not.toContain("Claude CLI");
-    expect(output).not.toContain("OpenCode");
-    expect(output).not.toContain("Pi");
-  });
-
   test("English locale uses English-only doctor labels", async () => {
     setLocale("en");
 

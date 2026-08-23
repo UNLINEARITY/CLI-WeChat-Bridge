@@ -941,19 +941,14 @@ class WechatDaemon {
           await this.handleInboundMessage(message);
         } catch (error) {
           const errorText = error instanceof Error ? error.message : String(error);
-          const isUserFacingShellRejection =
-            error instanceof Error && error.name === "ShellCommandRejectedError";
           logError(errorText);
-          appendDaemonLog(
-            `${isUserFacingShellRejection ? "inbound_rejected" : "inbound_error"}: ${errorText}`,
-          );
+          appendDaemonLog(`inbound_error: ${errorText}`);
           await this.queueWechatMessage(
             message.senderId,
             formatUserFacingInboundError({
               adapter: this.activeAdapter ?? "codex",
               cwd: this.cwd,
               errorText,
-              isUserFacingShellRejection,
             }),
             "inbound_error",
           );

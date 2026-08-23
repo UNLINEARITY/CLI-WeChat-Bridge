@@ -610,241 +610,6 @@ export function isHighRiskShellCommand(command: string): boolean {
   return HIGH_RISK_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
-const ALWAYS_INTERACTIVE_SHELL_COMMANDS = new Set([
-  "ftp",
-  "htop",
-  "irb",
-  "less",
-  "more",
-  "mongosh",
-  "mysql",
-  "nano",
-  "nvim",
-  "psql",
-  "redis-cli",
-  "screen",
-  "sftp",
-  "sqlite3",
-  "ssh",
-  "telnet",
-  "tmux",
-  "top",
-  "vi",
-  "vim",
-  "watch",
-]);
-
-function tokenizeShellCommand(command: string, maxTokens = 16): string[] {
-  const tokens: string[] = [];
-  let current = "";
-  let quote: '"' | "'" | null = null;
-
-  for (const char of command.trim()) {
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      quote = char;
-      continue;
-    }
-
-    if (/\s/u.test(char)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-        if (tokens.length >= maxTokens) {
-          return tokens;
-        }
-      }
-      continue;
-    }
-
-    current += char;
-  }
-
-  if (current) {
-    tokens.push(current);
-  }
-  return tokens;
-}
-
-function normalizeShellExecutableToken(token: string): string {
-  const trimmed = token.trim().replace(/^["']|["']$/g, "");
-  if (!trimmed) {
-    return "";
-  }
-  return path.parse(trimmed).name.toLowerCase();
-}
-
-function findCommandFlagIndex(args: string[], supportedFlags: string[]): number {
-  return args.findIndex((arg) => supportedFlags.includes(arg.toLowerCase()));
-}
-
-function hasScriptLikeArg(args: string[]): boolean {
-  return args.some((arg) => Boolean(arg) && !arg.startsWith("-") && !arg.startsWith("/"));
-}
-
-function hasAnyCommandFlag(args: string[], supportedFlags: string[]): boolean {
-  return findCommandFlagIndex(args, supportedFlags) >= 0;
-}
-
-function buildInteractiveShellCommandMessage(executable: string, suggestion: string): string {
-  return `Interactive command "${executable}" is not supported in shell mode yet. This shell bridge currently only supports non-interactive commands and scripts. ${suggestion}`;
-}
-
-export function getInteractiveShellCommandRejectionMessage(command: string): string | null {
-  const tokens = tokenizeShellCommand(command);
-  if (!tokens.length) {
-    return null;
-  }
-
-  const firstToken = tokens[0];
-  if (!firstToken) {
-    return null;
-  }
-
-  const executable = normalizeShellExecutableToken(firstToken);
-  const args = tokens.slice(1);
-  const lowerArgs = args.map((arg) => arg.toLowerCase());
-
-  if (!executable) {
-    return null;
-  }
-
-  if (ALWAYS_INTERACTIVE_SHELL_COMMANDS.has(executable)) {
-    return buildInteractiveShellCommandMessage(
-      executable,
-      "Run a non-interactive command or script instead.",
-    );
-  }
-
-  switch (executable) {
-    case "python":
-    case "python3":
-    case "py": {
-      if (!args.length) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          'Try "python script.py" or "python -c \\"...\\"" instead.',
-        );
-      }
-      if (lowerArgs.includes("-i") || lowerArgs.includes("--interactive")) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          'Try "python script.py" or "python -c \\"...\\"" instead.',
-        );
-      }
-      if (hasAnyCommandFlag(lowerArgs, ["-c", "-h", "--help", "-v", "--version"])) {
-        return null;
-      }
-      const moduleFlagIndex = findCommandFlagIndex(lowerArgs, ["-m"]);
-      if (moduleFlagIndex >= 0) {
-        return moduleFlagIndex < args.length - 1
-          ? null
-          : buildInteractiveShellCommandMessage(
-              executable,
-              'Try "python script.py" or "python -m module_name" instead.',
-            );
-      }
-      return hasScriptLikeArg(args)
-        ? null
-        : buildInteractiveShellCommandMessage(
-            executable,
-            'Try "python script.py" or "python -c \\"...\\"" instead.',
-          );
-    }
-
-    case "node":
-      if (!args.length || lowerArgs.includes("-i") || lowerArgs.includes("--interactive")) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          'Try "node script.js" or "node -e \\"...\\"" instead.',
-        );
-      }
-      if (hasAnyCommandFlag(lowerArgs, ["-e", "--eval", "-p", "--print", "-h", "--help", "-v", "--version"])) {
-        return null;
-      }
-      return hasScriptLikeArg(args)
-        ? null
-        : buildInteractiveShellCommandMessage(
-            executable,
-            'Try "node script.js" or "node -e \\"...\\"" instead.',
-          );
-
-    case "cmd":
-      if (lowerArgs.includes("/?")) {
-        return null;
-      }
-      if (lowerArgs.includes("/k") || !lowerArgs.includes("/c")) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          'Try "cmd /c <command>" or run the command directly instead.',
-        );
-      }
-      return null;
-
-    case "powershell":
-    case "pwsh":
-      if (
-        !args.length ||
-        lowerArgs.includes("-noexit") ||
-        lowerArgs.includes("-nologo") && args.length === 1
-      ) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          `Try "${executable} -Command \\"...\\"" or "${executable} -File script.ps1" instead.`,
-        );
-      }
-      if (
-        hasAnyCommandFlag(
-          lowerArgs,
-          ["-c", "-command", "-enc", "-encodedcommand", "-f", "-file", "-h", "-help", "-v", "-version", "-?"],
-        )
-      ) {
-        return null;
-      }
-      return hasScriptLikeArg(args)
-        ? null
-        : buildInteractiveShellCommandMessage(
-            executable,
-            `Try "${executable} -Command \\"...\\"" or "${executable} -File script.ps1" instead.`,
-          );
-
-    case "bash":
-    case "dash":
-    case "ksh":
-    case "sh":
-    case "zsh":
-      if (!args.length || lowerArgs.includes("-i")) {
-        return buildInteractiveShellCommandMessage(
-          executable,
-          `Try "${executable} -c '...'" or "${executable} script.sh" instead.`,
-        );
-      }
-      if (findCommandFlagIndex(lowerArgs, ["-c", "-lc"]) >= 0) {
-        return null;
-      }
-      if (hasAnyCommandFlag(lowerArgs, ["-h", "--help", "--version"])) {
-        return null;
-      }
-      return hasScriptLikeArg(args)
-        ? null
-        : buildInteractiveShellCommandMessage(
-            executable,
-            `Try "${executable} -c '...'" or "${executable} script.sh" instead.`,
-          );
-
-    default:
-      return null;
-  }
-}
-
 export function detectCliApproval(text: string): ApprovalRequest | null {
   const normalized = normalizeOutput(text);
   const compact = normalized.replace(/\s+/g, " ").trim();
@@ -1089,31 +854,17 @@ export function formatMirroredUserInputMessage(
 }
 
 export function formatFinalReplyMessage(
-  adapter: BridgeAdapterKind,
+  _adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  if (adapter === "claude" || adapter === "codex" || adapter === "opencode" || adapter === "pi") {
-    return text;
-  }
-  // After the early return above, only "shell" remains.
-  const label =
-    (adapter as string) === "codex"
-      ? "Codex"
-      : (adapter as string) === "claude"
-        ? "Claude"
-        : (adapter as string) === "opencode"
-          ? "OpenCode"
-          : (adapter as string) === "pi"
-            ? "Pi"
-            : adapter;
-  return `${label} final reply:\n${text}`;
+  return text;
 }
 
 const OPENCODE_WORKING_NOTICE_RE = /^OpenCode is still working on:\s*$/i;
 const OPENCODE_TRANSIENT_NOTICE_RES = [
   /^Bridge error: opencode companion is not connected\./i,
   /^OpenCode companion is not connected(?: for bridge workspace)?:?$/i,
-  /^Run "wechat-(?:bridge-opencode|opencode(?:-start)?)".*$/i,
+  /^Run "wechat-opencode".*$/i,
   /^OpenCode session switched to \S+ from the local terminal\.$/i,
   /^Local OpenCode input:\s*$/i,
 ];
@@ -1401,7 +1152,7 @@ export function formatApprovalMessage(
   }
 
   return [
-    `${pending.source === "shell" ? "Shell" : "CLI"} approval is required.`,
+    "CLI approval is required.",
     `adapter: ${adapterState.kind}`,
     `summary: ${pending.summary}`,
     `target: ${pending.commandPreview}`,

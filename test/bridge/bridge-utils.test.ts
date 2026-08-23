@@ -23,7 +23,6 @@ import {
   formatStatusReport,
   formatTaskFailedMessage,
   formatThreadSwitchMessage,
-  getInteractiveShellCommandRejectionMessage,
   isWechatOutboundAttachmentMutationTool,
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
@@ -254,34 +253,6 @@ describe("isHighRiskShellCommand", () => {
   test("allows low-risk commands", () => {
     expect(isHighRiskShellCommand("Get-ChildItem")).toBe(false);
     expect(isHighRiskShellCommand("git status")).toBe(false);
-  });
-});
-
-describe("getInteractiveShellCommandRejectionMessage", () => {
-  test("rejects common interactive entry commands", () => {
-    expect(getInteractiveShellCommandRejectionMessage("python")).toContain(
-      'Interactive command "python"',
-    );
-    expect(getInteractiveShellCommandRejectionMessage("vim README.md")).toContain(
-      'Interactive command "vim"',
-    );
-    expect(getInteractiveShellCommandRejectionMessage("cmd /k dir")).toContain(
-      'Interactive command "cmd"',
-    );
-  });
-
-  test("allows non-interactive scripts and one-shot shell commands", () => {
-    expect(getInteractiveShellCommandRejectionMessage("python script.py")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage('python -c "print(1)"')).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("python --version")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("node build.js")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("node --version")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage('pwsh -Command "Get-Date"')).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("pwsh -Version")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("bash -lc 'pwd'")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("bash --version")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("cmd /c dir")).toBeNull();
-    expect(getInteractiveShellCommandRejectionMessage("npm run build")).toBeNull();
   });
 });
 

@@ -96,10 +96,9 @@ describe("wechat forwarding helpers", () => {
         cwd: "C:\\Users\\unlin",
         errorText:
           'opencode companion is not connected. Run "wechat-opencode" in a second terminal for this directory.',
-        isUserFacingShellRejection: false,
       }),
     ).toBe(
-      'OpenCode companion is not connected for bridge workspace:\nC:\\Users\\unlin\nRun "wechat-opencode" in that directory to reconnect the current local terminal, or run "wechat-bridge-opencode" and then "wechat-opencode" in your target project to replace this bridge.',
+      'OpenCode is not connected for workspace:\nC:\\Users\\unlin\nRun "wechat-opencode" in that directory to recreate or reconnect the visible terminal.',
     );
   });
 
@@ -108,7 +107,6 @@ describe("wechat forwarding helpers", () => {
       formatUserFacingInboundError({
         adapter: "codex",
         errorText: "codex app-server websocket closed unexpectedly.",
-        isUserFacingShellRejection: false,
       }),
     ).toBe("Bridge error: codex app-server websocket closed unexpectedly.");
   });
@@ -146,6 +144,5 @@ describe("wechat forwarding helpers", () => {
   test("keeps non-OpenCode adapters forwarding bridge events", () => {
     expect(shouldForwardBridgeEventToWechat("codex", "stdout")).toBe(true);
     expect(shouldForwardBridgeEventToWechat("claude", "notice")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("shell", "stderr")).toBe(true);
   });
 });

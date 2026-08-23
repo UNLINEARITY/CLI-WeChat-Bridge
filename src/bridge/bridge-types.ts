@@ -1,4 +1,5 @@
-export type BridgeAdapterKind = "codex" | "claude" | "opencode" | "pi" | "shell";
+export type BridgeAdapterKind = "codex" | "claude" | "opencode" | "pi";
+export type LegacyBridgeAdapterKind = BridgeAdapterKind | "shell";
 export type BridgeLifecycleMode = "persistent" | "companion_bound";
 export type BridgeSessionStartMode = "restore" | "new";
 export type BridgeTurnOrigin = "wechat" | "local";
@@ -23,7 +24,7 @@ export type BridgeWorkerStatus =
 
 export type BridgeNoticeLevel = "info" | "warning";
 
-export type ApprovalSource = "shell" | "cli";
+export type ApprovalSource = "cli";
 
 export type ApprovalRequest = {
   source: ApprovalSource;

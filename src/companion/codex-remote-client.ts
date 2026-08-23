@@ -41,9 +41,9 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: wechat-codex [--cwd <path>] [...codex args]",
+          "Internal Codex client usage: npm run codex:panel -- [--cwd <path>] [...codex args]",
           "",
-          'Starts the visible native Codex client and connects it to the running "wechat-bridge-codex" instance for the current directory.',
+          "Connects the visible native Codex client to the bridge runtime for the current directory.",
           "Unknown arguments are forwarded to the Codex client.",
           "",
         ].join("\n"),
@@ -70,13 +70,13 @@ export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
   const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
   if (!endpoint || endpoint.kind !== "codex") {
     throw new Error(
-      `No active Codex bridge endpoint was found for ${cwd}. Start "wechat-bridge-codex" in that directory first.`,
+      `No active Codex runtime was found for ${cwd}. Run "wechat-codex" in that directory to recreate it.`,
     );
   }
 
   if (endpoint.runtimeKind !== "codex_runtime_host" || (!endpoint.serverUrl && !endpoint.serverPort)) {
     throw new Error(
-      `The running Codex bridge for ${cwd} is using an older local companion protocol. Restart "wechat-bridge-codex" in that directory first.`,
+      `The running Codex runtime for ${cwd} uses an older local client protocol. Run "wechat-codex" in that directory to replace it.`,
     );
   }
 

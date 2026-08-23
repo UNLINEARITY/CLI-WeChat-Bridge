@@ -57,20 +57,16 @@ export function formatUserFacingInboundError(params: {
   adapter: BridgeAdapterKind;
   cwd?: string;
   errorText: string;
-  isUserFacingShellRejection: boolean;
 }): string {
-  const { adapter, cwd, errorText, isUserFacingShellRejection } = params;
-  if (isUserFacingShellRejection) {
-    return errorText;
-  }
+  const { adapter, cwd, errorText } = params;
 
   if (
     adapter === "opencode" &&
     /opencode companion is not connected/i.test(errorText)
   ) {
     return cwd
-      ? `OpenCode companion is not connected for bridge workspace:\n${cwd}\nRun "wechat-opencode" in that directory to reconnect the current local terminal, or run "wechat-bridge-opencode" and then "wechat-opencode" in your target project to replace this bridge.`
-      : 'OpenCode companion is not connected. Start "wechat-opencode" in this directory to reconnect it, then retry.';
+      ? `OpenCode is not connected for workspace:\n${cwd}\nRun "wechat-opencode" in that directory to recreate or reconnect the visible terminal.`
+      : 'OpenCode is not connected. Run "wechat-opencode" in this directory, then retry.';
   }
 
   return `Bridge error: ${errorText}`;

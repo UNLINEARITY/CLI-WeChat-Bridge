@@ -135,13 +135,8 @@ function printHelp() {
 
 function isSafeSmokeCommand(commandName) {
   return (
-    commandName === "wechat-codex" ||
-    commandName === "wechat-claude" ||
-    commandName === "wechat-opencode" ||
-    commandName === "wechat-pi" ||
     commandName === "wechat-daemon" ||
-    commandName.startsWith("wechat-bridge") ||
-    commandName.endsWith("-start")
+    /^wechat-(?:codex|claude|opencode|pi)(?:-start)?$/.test(commandName)
   );
 }
 

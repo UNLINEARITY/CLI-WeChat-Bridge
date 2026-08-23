@@ -9,7 +9,10 @@ import {
   shouldAutoReclaimBridgeLock,
   type BridgeLockPayload,
 } from "../bridge/bridge-state.ts";
-import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
+import type {
+  BridgeAdapterKind,
+  LegacyBridgeAdapterKind,
+} from "../bridge/bridge-types.ts";
 import {
   readLocalCompanionEndpoint as readWorkspaceEndpoint,
   type LocalCompanionEndpoint,
@@ -36,7 +39,7 @@ type DoctorStatus = "ok" | "warn" | "fail";
 export type DoctorCliOptions = {
   mode: DoctorMode;
   cwd: string;
-  adapter?: BridgeAdapterKind;
+  adapter?: LegacyBridgeAdapterKind;
 };
 
 type FileReadResult<T> =
@@ -63,7 +66,7 @@ export type DoctorDeps = {
   isDaemonAlive?: (endpoint: DaemonEndpoint) => Promise<boolean>;
   readLocalCompanionEndpoint?: (
     cwd: string,
-    adapter?: BridgeAdapterKind,
+    adapter?: LegacyBridgeAdapterKind,
   ) => LocalCompanionEndpoint | null;
 };
 
@@ -73,7 +76,7 @@ type BuildDoctorReportOptions = {
   argv?: string[];
   mode?: DoctorMode;
   cwd?: string;
-  adapter?: BridgeAdapterKind;
+  adapter?: LegacyBridgeAdapterKind;
 };
 
 function msg(key: string, params?: Record<string, string | number>): string {
@@ -261,8 +264,7 @@ function isBridgeAdapterKind(value: string | undefined): value is BridgeAdapterK
     value === "codex" ||
     value === "claude" ||
     value === "opencode" ||
-    value === "pi" ||
-    value === "shell"
+    value === "pi"
   );
 }
 
@@ -561,7 +563,7 @@ function appendBridgeLockLines(
 function chooseEndpointAdapters(
   options: DoctorCliOptions,
   lock: BridgeLockPayload | null,
-): BridgeAdapterKind[] {
+): LegacyBridgeAdapterKind[] {
   if (options.adapter) {
     return [options.adapter];
   }
@@ -588,8 +590,6 @@ function chooseCliChecks(options: DoctorCliOptions): Array<{
         return [{ name: "opencode", label: "OpenCode", optional: false }];
       case "pi":
         return [{ name: "pi", label: "Pi", optional: false }];
-      case "shell":
-        return [];
       default:
         return [];
     }
@@ -609,12 +609,6 @@ function appendCliLines(
   deps: ResolvedDoctorDeps,
 ): void {
   const clis = chooseCliChecks(options);
-  if (options.mode === "bridge" && options.adapter === "shell") {
-    section(lines, msg("section.adapterCli"));
-    lines.push(row(STATE_OK, msg("label.shell"), msg("adapterCli.shellNative")));
-    return;
-  }
-
   if (clis.length === 0) {
     return;
   }

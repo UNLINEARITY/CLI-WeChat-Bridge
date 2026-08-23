@@ -57,3 +57,15 @@ export function runJsEntry(relativeEntryPath, extraArgs = []) {
     process.exit(code ?? 0);
   });
 }
+
+export function runDeprecatedJsEntry(
+  commandName,
+  replacementCommand,
+  relativeEntryPath,
+  extraArgs = [],
+) {
+  process.stderr.write(
+    `[cli-wechat-bridge] ${commandName} is deprecated; use ${replacementCommand}. This alias will be removed in the next release.\n`,
+  );
+  runJsEntry(relativeEntryPath, extraArgs);
+}

@@ -174,8 +174,6 @@ export const LOCAL_COMPANION_RECONNECT_GRACE_MS = 15_000;
 export const CLAUDE_HOOK_LISTEN_HOST = "127.0.0.1";
 export const CLAUDE_HELP_PROBE_TIMEOUT_MS = 5_000;
 export const CLAUDE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
-export const DEFAULT_UNIX_SHELL_CANDIDATES = ["pwsh", "bash", "zsh", "sh"] as const;
-export const POSIX_SHELL_NAMES = new Set(["bash", "zsh", "sh", "dash", "ksh"]);
 export const CLAUDE_FLAG_SUPPORT_CACHE = new Map<string, boolean>();
 export const OPENCODE_SERVER_HOST = "127.0.0.1";
 export const OPENCODE_SERVER_READY_TIMEOUT_MS = 10_000;
@@ -188,13 +186,6 @@ export const OPENCODE_WECHAT_WORKING_NOTICE_DELAY_MS = 12_000;
 export const OPENCODE_HTTP_READY_TIMEOUT_MS = 15_000;
 export const OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS = 3_000;
 export const OPENCODE_HTTP_READY_PROBE_INTERVAL_MS = 500;
-
-export type ShellRuntimeFamily = "powershell" | "posix";
-
-export type ShellRuntime = {
-  family: ShellRuntimeFamily;
-  launchArgs: string[];
-};
 
 export function buildCodexCliArgs(
   remoteUrl: string,
@@ -1081,34 +1072,16 @@ function applyLoopbackNoProxy(env: Record<string, string>): Record<string, strin
 
 export function resolveDefaultAdapterCommand(
   kind: BridgeAdapterKind,
-  options: {
+  _options: {
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
   } = {},
 ): string {
-  const platform = options.platform ?? process.platform;
-  if (kind !== "shell") {
-    return kind;
-  }
-
-  if (platform === "win32") {
-    return "powershell.exe";
-  }
-
-  const env = options.env ?? (process.env as Record<string, string | undefined>);
-  for (const candidate of DEFAULT_UNIX_SHELL_CANDIDATES) {
-    if (resolveCommandPath(candidate, platform, env)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    `No default shell executable was found on ${platform}. Tried: ${DEFAULT_UNIX_SHELL_CANDIDATES.join(", ")}. Use --cmd <executable>.`,
-  );
+  return kind;
 }
 
 export function buildCliEnvironment(
-  kind: BridgeAdapterKind,
+  _kind: BridgeAdapterKind,
   options: {
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
@@ -1117,28 +1090,21 @@ export function buildCliEnvironment(
   const sourceEnv = options.env ?? (process.env as Record<string, string | undefined>);
   const platform = options.platform ?? process.platform;
 
-  if (kind === "codex" || kind === "claude" || kind === "opencode" || kind === "pi") {
-    // Pass the full environment through on every platform. A previous
-    // Windows-only allowlist silently dropped user-configured variables such
-    // as ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY, which
-    // broke CLIs that authenticate via environment variables even though the
-    // same CLI worked when launched manually from the user's shell.
-    const env: Record<string, string> = {
-      ...copyDefinedEnv(sourceEnv),
-      TERM: sourceEnv.TERM || "xterm-256color",
-    };
-
-    if (platform === "win32" && !env.HOME && env.USERPROFILE) {
-      env.HOME = env.USERPROFILE;
-    }
-
-    return applyLoopbackNoProxy(env);
-  }
-
-  return {
+  // Pass the full environment through on every platform. A previous
+  // Windows-only allowlist silently dropped user-configured variables such
+  // as ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / OPENAI_API_KEY, which
+  // broke CLIs that authenticate via environment variables even though the
+  // same CLI worked when launched manually from the user's shell.
+  const env: Record<string, string> = {
     ...copyDefinedEnv(sourceEnv),
     TERM: sourceEnv.TERM || "xterm-256color",
   };
+
+  if (platform === "win32" && !env.HOME && env.USERPROFILE) {
+    env.HOME = env.USERPROFILE;
+  }
+
+  return applyLoopbackNoProxy(env);
 }
 
 // ConPTY shipped in Windows 10 build 18309; on older builds node-pty must be
@@ -1172,97 +1138,6 @@ export function buildPtySpawnOptions(params: {
   }
 
   return options;
-}
-
-export function normalizeShellCommandName(command: string): string {
-  return path.parse(path.basename(command)).name.toLowerCase();
-}
-
-export function resolveShellRuntime(
-  command: string,
-  options: {
-    platform?: NodeJS.Platform;
-  } = {},
-): ShellRuntime {
-  const platform = options.platform ?? process.platform;
-  const name = normalizeShellCommandName(command);
-
-  if (name === "powershell" || name === "pwsh") {
-    return {
-      family: "powershell",
-      launchArgs:
-        platform === "win32"
-          ? ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit"]
-          : ["-NoLogo", "-NoProfile", "-NoExit"],
-    };
-  }
-
-  if (POSIX_SHELL_NAMES.has(name)) {
-    return {
-      family: "posix",
-      launchArgs: ["-i"],
-    };
-  }
-
-  throw new Error(
-    `Unsupported shell executable for shell adapter: ${command}. Supported shells: powershell, pwsh, bash, zsh, sh, dash, ksh.`,
-  );
-}
-
-export function escapePowerShellString(text: string): string {
-  return text.replace(/`/g, "``").replace(/"/g, '`"');
-}
-
-export function escapePosixShellString(text: string): string {
-  return `'${text.replace(/'/g, `'"'"'`)}'`;
-}
-
-export function buildShellProfileCommand(
-  profilePath: string,
-  family: ShellRuntimeFamily,
-): string {
-  const resolved = path.resolve(profilePath);
-  if (family === "powershell") {
-    return `. "${escapePowerShellString(resolved)}"`;
-  }
-  return `. ${escapePosixShellString(resolved)}`;
-}
-
-export function buildShellInputPayload(
-  text: string,
-  family: ShellRuntimeFamily,
-  completionMarker = "__WECHAT_BRIDGE_DONE__",
-): string {
-  if (family === "powershell") {
-    const encodedCommand = Buffer.from(text, "utf8").toString("base64");
-    const script = [
-      "$__wechatBridgePreviousErrorActionPreference = $ErrorActionPreference",
-      "$ErrorActionPreference = 'Continue'",
-      "$global:LASTEXITCODE = 0",
-      "try {",
-      `  $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String("${escapePowerShellString(encodedCommand)}"))`,
-      "  $scriptBlock = [scriptblock]::Create($decoded)",
-      "  & $scriptBlock",
-      "} catch {",
-      "  Write-Error $_",
-      "  $global:LASTEXITCODE = 1",
-      "} finally {",
-      "  if (-not ($global:LASTEXITCODE -is [int])) { $global:LASTEXITCODE = 0 }",
-      `  Write-Output "${escapePowerShellString(completionMarker)}:$global:LASTEXITCODE"`,
-      "  $ErrorActionPreference = $__wechatBridgePreviousErrorActionPreference",
-      "}",
-      "",
-    ];
-    return `${script.join("\r")}\r`;
-  }
-
-  const script = [
-    text,
-    "__wechat_bridge_status=$?",
-    `printf '%s:%s\\n' ${escapePosixShellString(completionMarker)} "$__wechat_bridge_status"`,
-    "",
-  ];
-  return `${script.join("\r")}\r`;
 }
 
 export async function reserveLocalPort(): Promise<number> {

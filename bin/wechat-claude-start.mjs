@@ -1,5 +1,10 @@
 #!/usr/bin/env node
 
-import { runJsEntry } from "./_run-entry.mjs";
+import { runDeprecatedJsEntry } from "./_run-entry.mjs";
 
-runJsEntry("dist/companion/local-companion-start.js", ["--adapter", "claude"]);
+runDeprecatedJsEntry(
+  "wechat-claude-start",
+  "wechat-claude",
+  "dist/companion/local-companion-start.js",
+  ["--adapter", "claude"],
+);
