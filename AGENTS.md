@@ -4,15 +4,15 @@
 CLI WeChat Bridge lets one WeChat iLink account drive local CLI agents from a normal project directory. The user-facing npm package is `cli-wechat-bridge`; `@unlinearity/cli-wechat-bridge` is kept as a compatibility mirror for existing users.
 
 There are two runtime shapes:
-- `wechat-daemon`: the preferred long-lived mode. It owns one WeChat connection for one startup working directory, keeps Codex, Claude Code, and OpenCode slots alive, and switches from WeChat with `/codex`, `/claude`, and `/opencode`. Switching reuses an already connected visible CLI, or opens a new visible CLI when needed.
-- Standalone bridges: `wechat-bridge-*` commands run one adapter-specific bridge. They are still useful for focused debugging, but must not run alongside a same-cwd daemon.
+- `wechat-daemon`: the preferred long-lived mode. It owns one WeChat connection for one startup working directory, keeps Codex, Claude Code, OpenCode, and Pi slots alive, and switches from WeChat with `/codex`, `/claude`, `/opencode`, and `/pi`. Switching reuses an already connected visible CLI, or opens a new visible CLI when needed.
+- Direct launchers: `wechat-codex`, `wechat-claude`, `wechat-opencode`, and `wechat-pi` delegate to a same-cwd daemon when available; otherwise they create an internal companion-bound bridge runtime and open the visible CLI. Public `wechat-bridge-*` commands no longer exist.
 
 Runtime data now lives under `~/.cli-bridge` by default. Legacy data is copy-migrated from `~/.claude/channels/wechat` and from `CLAUDE_WECHAT_CHANNEL_DATA_DIR` only as a migration source. Use `CLI_BRIDGE_DATA_DIR` for the active data directory.
 
 ## Project Structure
 - `src/wechat`: iLink setup, channel config, long polling, message send, inbound media download/decryption, stale context-token handling, and transport logging.
 - `src/bridge`: bridge lifecycle, adapter selection, controller orchestration, approvals, user-input requests, final-reply forwarding, locks, workspace state, process cleanup, and shared formatting.
-- `src/bridge/bridge-adapters.*.ts`: adapter-specific Codex, Claude Code, OpenCode, and shell behavior. Keep adapter conditionals here or in closely related companion modules.
+- `src/bridge/bridge-adapters.*.ts`: adapter-specific Codex, Claude Code, OpenCode, and Pi behavior. Keep adapter conditionals here or in closely related companion modules.
 - `src/companion`: visible local CLI companion launchers, IPC endpoint files, daemon delegation, and local companion proxy support.
 - `src/daemon`: persistent WeChat daemon, daemon IPC, multi-slot switching, visible terminal auto-open, and pre-start cleanup of stale single bridges.
 - `src/runtime`: bridge-owned runtime host creation, including the Codex runtime host and legacy adapter runtime wrapper.
@@ -101,11 +101,11 @@ Add focused regression coverage when changing:
 For release-facing changes, run `npm run quality` plus package/smoke checks. For narrow fixes, run the smallest focused test first, then expand to the relevant suite.
 
 ## Daemon And Bridge Behavior
-`wechat-daemon` is the preferred user workflow. It binds to its startup cwd; v1 does not switch to a different local project directory from WeChat. If a same-cwd daemon is live, `wechat-codex-start`, `wechat-claude-start`, and `wechat-opencode-start` should delegate to the daemon instead of replacing it.
+`wechat-daemon` is the preferred user workflow. It binds to its startup cwd; v1 does not switch to a different local project directory from WeChat. If a same-cwd daemon is live, the four direct launchers should delegate to the daemon instead of replacing it. The `wechat-*-start` names are one-release deprecated aliases for the same launcher behavior.
 
 Daemon startup should clean stale or still-running single-bridge state automatically when possible. Do not push cleanup work onto the user if the code can safely detect and clear stale locks, dead endpoints, peer bridge processes, or orphan OpenCode processes. When changing cleanup logic, update daemon tests and make logs explicit enough to diagnose what was cleaned.
 
-Standalone single bridges must refuse to start when a live daemon owns the workspace. If an endpoint is stale, clear it and continue using existing helper functions.
+Internal transient bridges must refuse to start when a live daemon owns the workspace. If an endpoint is stale, clear it and continue using existing helper functions.
 
 ## WeChat, Attachments, And Transport
 Inbound WeChat images and files are downloaded to `~/.cli-bridge/inbound-attachments/<date>/` and forwarded to the selected CLI as local paths in the prompt. This project saves and exposes attachment paths; it does not implement OCR or document parsing inside the bridge.

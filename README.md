@@ -62,7 +62,7 @@
 npm install -g cli-wechat-bridge@latest
 ```
 
-安装后，可以在任意项目目录中使用 `wechat-daemon`、`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start`、`wechat-pi-start` 等命令。
+安装后，可以在任意项目目录中直接运行 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`，或使用 `wechat-daemon` 保持长期连接。
 
 兼容性说明：旧包名 `@unlinearity/cli-wechat-bridge` 会继续同步发布，已经安装旧包名的用户可以正常升级；新用户优先使用更短的 `cli-wechat-bridge`。
 
@@ -114,7 +114,7 @@ wechat-setup
 
 登录成功后，程序会清理旧的同步游标和上下文 token，避免旧会话状态污染新的登录状态。数据目录、状态文件和旧版本迁移说明见 [问题排查](docs/troubleshooting.md#数据目录与状态文件)。
 
-首次安装或微信登录过期时，`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start`、`wechat-pi-start` 也会在前台提示扫码登录。
+首次安装或微信登录过期时，四个直接启动命令也会在前台提示扫码登录。
 
 ### 4. 先从微信发一条同步消息（重要）
 
@@ -122,7 +122,7 @@ wechat-setup
 
 如果冷启动或长时间闲置后直接从本地终端先发消息，bridge 通常仍会捕获这条本地输入并交给 Codex / Claude Code / OpenCode / Pi 处理，但回发到微信时可能因为旧的 `context_token` 失效而失败。表现是：本地已经有回复，微信暂时收不到；等你先从微信发来一条消息后，后续双向同步就能恢复正常。
 
-### 5. 单命令启动桥接（兼容模式）
+### 5. 直接启动本地 CLI
 
 先进入需要操作的项目目录：
 
@@ -134,28 +134,30 @@ cd D:\work\your-project
 
 | 使用的本地 CLI | 启动命令 |
 | --- | --- |
-| Codex | `wechat-codex-start` |
-| Claude Code | `wechat-claude-start` |
-| OpenCode | `wechat-opencode-start` |
-| Pi | `wechat-pi-start` |
+| Codex | `wechat-codex` |
+| Claude Code | `wechat-claude` |
+| OpenCode | `wechat-opencode` |
+| Pi | `wechat-pi` |
 
-这些启动器会自动完成以下动作：
+这些命令会自动完成以下动作：
 
 1. 校验或刷新微信登录凭据；
 2. 如果当前目录已有 `wechat-daemon`，则委托 daemon 切换到对应 CLI；
-3. 如果没有 daemon，则复用当前目录中已运行的 bridge，或在当前目录启动新的 bridge；
-4. 如果已有独立 bridge 正在服务其他目录，则停止旧 bridge 并切换到当前目录；
-5. 等待当前目录对应的本地 companion endpoint 就绪；
+3. 如果没有 daemon，则创建或复用内部 transient bridge runtime；
+4. 如果旧 runtime 正在服务其他目录，则安全停止旧 runtime 并切换到当前目录；
+5. 等待当前目录对应的本地 endpoint 就绪；
 6. 打开可见的本地 CLI 会话。
 
-没有 daemon 时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 仍按**单活工作区切换器**工作：
+没有 daemon 时，四个直接命令按**单活工作区切换器**工作：
 
 - 同一时间只有一个项目与微信对话；
 - Codex 在当前目录重复执行时会复用已有会话；Claude Code、OpenCode 和 Pi 启动器默认新建会话；
-- Pi 如需显式恢复上一次会话，可使用 `wechat-pi-start --session-start-mode restore`；
+- Pi 如需显式恢复上一次会话，可使用 `wechat-pi --session-start-mode restore`；
 - 如果当前目录已经有可见 companion / panel 在运行，则不会重复打开第二个窗口；
 - 如果检测到可见端仍在运行但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
 - 在其他目录执行会显式切换活动工作区。
+
+`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start`、`wechat-pi-start` 暂时保留为过渡别名，功能与直接命令一致，但会输出弃用提示，并将在下一版本移除。
 
 ### 6. 常驻 daemon 模式（支持多 CLI 切换）
 
@@ -197,20 +199,9 @@ wechat-daemon --adapter codex
 wechat-daemon --adapter claude --profile work
 ```
 
-当同一工作目录已有 `wechat-daemon` 在运行时，`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 会自动委托给 daemon：请求 daemon 切到对应 CLI，并在需要时打开可见终端，不会停止 daemon 或关闭其他 CLI。
+当同一工作目录已有 `wechat-daemon` 在运行时，四个直接启动命令会自动委托给 daemon：请求 daemon 切到对应 CLI，并在需要时打开可见终端，不会停止 daemon 或关闭其他 CLI。
 
-其中 `wechat-pi-start` 仍表示启动一个新的 Pi session；如果 Pi TUI 已经可见，daemon 会在现有窗口中创建新 session。微信中的 `/pi` 仅用于切换适配器，仍会复用已经连接的 Pi TUI。
-
-### 7. 手动双终端模式（高级调试）
-
-如果你希望明确观察 bridge 与本地 CLI companion，也可以用两个终端分别启动。
-
-| 适配器 | 终端 A：bridge | 终端 B：本地 companion |
-| --- | --- | --- |
-| Codex | `wechat-bridge-codex` | `wechat-codex` |
-| Claude Code | `wechat-bridge-claude` | `wechat-claude` |
-| OpenCode | `wechat-bridge-opencode` | `wechat-opencode` |
-| Pi | `wechat-bridge-pi` | `wechat-pi` |
+其中 `wechat-pi` 默认表示启动一个新的 Pi session；如果 Pi TUI 已经可见，daemon 会在现有窗口中创建新 session。微信中的 `/pi` 仅用于切换适配器，仍会复用已经连接的 Pi TUI。
 
 ## 适配器支持情况
 
@@ -226,10 +217,10 @@ wechat-daemon --adapter claude --profile work
 
 | 适配器 | 当前状态 | 说明 |
 | --- | --- | --- |
-| `codex` | 已接入 | 双终端模式；本地 companion 作为线程权威；微信跟随本地线程 |
-| `claude` | 已接入 | `wechat-bridge-claude` + `wechat-claude` 的双终端 companion 模式；会话切换、最终回复与审批元数据按 Claude session 语义同步 |
-| `opencode` | 已接入 | [`OpenCode`](https://github.com/anomalyco/opencode) 适配器；`wechat-bridge-opencode` + `wechat-opencode` 的双终端 companion 模式；支持本地 session 切换跟随，微信侧支持 `/new` / `/new-session` |
-| `pi` | 已接入 | `wechat-bridge-pi` + `wechat-pi`；`wechat-pi` 启动用户原生 Pi TUI，并通过本地 extension 让微信接管同一 session，支持最终回复、停止、新建和恢复 session |
+| `codex` | 已接入 | `wechat-codex` 自动确保内部 runtime 并打开可见 Codex；微信跟随本地 thread |
+| `claude` | 已接入 | `wechat-claude` 自动启动或复用 Claude Code；会话、最终回复与审批按 Claude session 语义同步 |
+| `opencode` | 已接入 | `wechat-opencode` 自动启动或复用 OpenCode；支持本地 session 跟随及微信 `/new` / `/new-session` |
+| `pi` | 已接入 | `wechat-pi` 启动用户原生 Pi TUI，并通过本地 extension 让微信接管同一 session，支持最终回复、停止、新建和恢复 session |
 
 Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。
 
@@ -257,16 +248,14 @@ OpenCode 模式下，微信侧支持 `/new` 或 `/new-session` 创建新 session
 | --- | --- |
 | 登录与更新 | `wechat-setup`、`wechat-check-update` |
 | 常驻 daemon | `wechat-daemon` |
-| Codex | `wechat-bridge-codex`、`wechat-codex`、`wechat-codex-start` |
-| Claude Code | `wechat-bridge-claude`、`wechat-claude`、`wechat-claude-start` |
-| OpenCode | `wechat-bridge-opencode`、`wechat-opencode`、`wechat-opencode-start` |
-| Pi | `wechat-bridge-pi`、`wechat-pi`、`wechat-pi-start` |
+| Codex | `wechat-codex` |
+| Claude Code | `wechat-claude` |
+| OpenCode | `wechat-opencode` |
+| Pi | `wechat-pi` |
+
+`wechat-*-start` 暂时作为弃用别名保留一个版本。公开的 `wechat-bridge*` 命令和 Shell adapter 已移除；内部 bridge runtime 仍由直接命令和 daemon 自动管理。
 
 ### Daemon CLI 参数
-
-适用于：
-
-- `wechat-daemon`
 
 示例：
 
@@ -281,64 +270,38 @@ wechat-daemon --adapter claude --profile work
 - `--cwd <path>`：指定 daemon 绑定的工作目录；
 - `--adapter <codex|claude|opencode|pi>`：启动 daemon 后立即切换到指定 CLI；
 - `--profile <name-or-path>`：传给 daemon 创建的对应适配器；
-- `--no-open`：只创建 bridge slot，不自动打开可见 CLI。
+- `--no-open`：只创建 runtime slot，不自动打开可见 CLI；
+- `--doctor`：检查环境、CLI、锁、endpoint 和 daemon 状态。
 
-### Bridge CLI 参数
+### 直接启动命令参数
 
-适用于：
-
-- `wechat-bridge`
-- `wechat-bridge-codex`
-- `wechat-bridge-claude`
-- `wechat-bridge-opencode`
-- `wechat-bridge-pi`
-
-示例：
+适用于 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`。
 
 ```bash
-wechat-bridge --adapter codex --cwd D:\work\my-project
-wechat-bridge-codex --cwd D:\work\my-project
-wechat-bridge-claude --profile work
-wechat-bridge-opencode --cwd D:\work\my-project
-wechat-bridge-pi --cwd D:\work\my-project
-wechat-bridge-codex --lifecycle companion_bound
+wechat-codex --cwd D:\work\my-project
+wechat-claude --profile work
+wechat-opencode --cwd D:\work\my-project
+wechat-pi --cwd D:\work\my-project --model openai/gpt-5.6-sol
 ```
 
 支持参数：
 
-- `--adapter <codex|claude|opencode|pi>`：通用入口 `wechat-bridge` 需要显式指定适配器；
-- `--cwd <path>`：指定工作目录；
-- `--profile <name-or-path>`：向适配器传入 profile；
-- `--lifecycle <persistent|companion_bound>`：指定 bridge 生命周期；`wechat-*-start` 会使用 `companion_bound`。
+- `--cwd <path>`：指定 runtime 与可见 CLI 对应的工作目录；
+- `--profile <name-or-path>`：传给内部 runtime；
+- `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`；
+- `--session-start-mode <restore|new>`：显式选择恢复或新建会话；
+- 其他未知参数会继续透传给可见的底层 CLI。
 
-### `wechat-*-start` 参数
-
-示例：
-
-```bash
-wechat-codex-start --cwd D:\work\my-project
-wechat-claude-start --profile work
-wechat-opencode-start --cwd D:\work\my-project
-wechat-pi-start --cwd D:\work\my-project --model openai/gpt-5.6-sol
-```
-
-支持参数：
-
-- `--cwd <path>`：显式指定 bridge / companion 对应的工作目录；
-- `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-codex` / `wechat-bridge-claude` / `wechat-bridge-opencode` / `wechat-bridge-pi`；
-- `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`。
-- `--session-start-mode <restore|new>`：显式选择恢复或新建会话；Pi 启动器默认 `new`。
-
-高级用法：除上述启动器参数外，未知参数会继续透传给可见的底层 CLI。这样既能保留微信登录、工作区切换与 bridge 生命周期管理，也能启用 Codex / Claude Code / OpenCode / Pi 自己的高级启动模式。
+默认会话策略：Codex 恢复当前会话；Claude Code、OpenCode 和 Pi 新建会话。
 
 ```bash
-wechat-codex-start --yolo
-wechat-codex-start --model gpt-5.2 --yolo
-wechat-claude-start --dangerously-skip-permissions
-wechat-claude-start --model sonnet --dangerously-skip-permissions
+wechat-codex --yolo
+wechat-codex --model gpt-5.2 --yolo
+wechat-claude --dangerously-skip-permissions
+wechat-claude --model sonnet --dangerously-skip-permissions
 ```
 
-其中，`--yolo` 会传给 Codex；`--dangerously-skip-permissions` 会传给 Claude Code。它们只影响本地可见 CLI，不会覆盖 bridge 托管的 Codex remote 连接参数、Claude settings、微信登录状态或当前工作区锁。由于这两类参数会降低审批保护，建议只在可信工作区中使用。
+其中，`--yolo` 会传给 Codex；`--dangerously-skip-permissions` 会传给 Claude Code。它们只影响本地可见 CLI，不会覆盖内部 runtime 的连接参数、微信登录状态或工作区锁。由于这两类参数会降低审批保护，建议只在可信工作区中使用。
 
 ## 微信侧支持的指令
 
@@ -394,16 +357,16 @@ Daemon 模式支持将微信表情映射为命令，在微信中发送表情即�
 
 本项目采用“当前目录即当前工作区”的模型：
 
-- 从哪个目录启动 `wechat-bridge-codex` / `wechat-bridge-claude` / `wechat-bridge-opencode` / `wechat-bridge-pi`，哪个目录就是当前工作区；
-- 对应的本地 companion 必须连接同一工作区；
+- 从哪个目录启动 `wechat-codex` / `wechat-claude` / `wechat-opencode` / `wechat-pi`，哪个目录就是当前工作区；
+- 直接命令会自动管理同一工作区的内部 runtime 与可见 CLI；
 - 不同工作区的运行状态相互隔离。
 
 目前支持两种运行模型：
 
-- 独立 bridge：单 owner、单 bridge、单活动工作区；
+- 直接启动模式：单 owner、内部 transient runtime、单活动工作区；
 - `wechat-daemon`：单 owner、单 daemon、绑定一个启动工作区，但可在这个工作区内同时保留 Codex / Claude Code / OpenCode / Pi 四个 CLI slot。
 
-对 `wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 来说，这意味着：
+对四个直接启动命令来说，这意味着：
 
 - 如果同一工作区已有 daemon，它们会委托 daemon 切换 CLI；
 - 如果没有 daemon，它们会作为**单活工作区切换器**工作；
@@ -426,7 +389,7 @@ wechat-check-update
 - 远程仓库的最新版本；
 - 如果有更新，会提供详细的更新指引。
 
-当启动 `wechat-bridge` 相关命令时（如 `wechat-bridge-codex`、`wechat-bridge-claude`），程序也会自动检查更新（每 24 小时一次）。自动检查在后台异步执行，不影响启动速度。
+没有 daemon 时，四个直接命令启动的内部 runtime 会按现有缓存策略检查更新。自动检查在后台异步执行，不影响启动速度。
 
 ### 获取最新版本
 

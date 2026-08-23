@@ -62,8 +62,8 @@ git push -u origin fix/opencode-session-start
 
 提交 bug issue 时，请尽量包含：
 
-1. 使用的命令，例如 `wechat-daemon`、`wechat-codex-start`、`wechat-claude-start` 或 `wechat-opencode-start`。
-2. 使用的 adapter：Codex、Claude Code、OpenCode 或 shell。
+1. 使用的命令，例如 `wechat-daemon`、`wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`。
+2. 使用的 adapter：Codex、Claude Code、OpenCode 或 Pi。
 3. 操作系统、Node.js 版本、包版本和安装方式。
 4. 期望行为与实际行为。
 5. 最小复现步骤。
@@ -102,7 +102,7 @@ npm run opencode:start
 
 - `src/wechat`: WeChat iLink 登录、轮询、发送、附件下载和传输日志。
 - `src/bridge`: bridge 生命周期、状态、审批、用户输入、最终回复和共享格式化逻辑。
-- `src/bridge/bridge-adapters.*.ts`: Codex、Claude Code、OpenCode 和 shell 的 adapter 实现。
+- `src/bridge/bridge-adapters.*.ts`: Codex、Claude Code、OpenCode 和 Pi 的 adapter 实现。
 - `src/companion`: 可见本地 CLI companion、endpoint 文件和 daemon 委托。
 - `src/daemon`: 长驻 daemon、多 adapter slot 切换和可见终端自动打开。
 - `src/runtime`: bridge 托管 runtime host。

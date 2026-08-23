@@ -43,11 +43,10 @@
 
 通常原因是：
 
-- 还没有先启动对应的 `wechat-bridge-*`；
-- bridge 与 companion 不在同一个工作目录；
+- 可见 CLI 与内部 runtime 不在同一个工作目录；
 - 当前工作区 endpoint 文件来自旧进程或已经失效。
 
-建议先确认两个终端在同一目录。如果不想手动分两个终端，可以改用 `wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 或 `wechat-pi-start`。这些启动器会自动复用同目录 daemon，或在没有 daemon 时启动 / 切换独立 bridge。
+请在目标项目目录重新运行对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`。直接命令会自动复用同目录 daemon，或在没有 daemon 时重建内部 runtime 和可见 CLI。
 
 ## 全局命令不存在
 
@@ -71,13 +70,13 @@ npm install -g cli-wechat-bridge@latest
 
 **注意**：Claude Code 适配器当前通过 PTY 交互模式工作，在回退模式下可能无法正常桥接。Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响。OpenCode 和 Pi 适配器不依赖 node-pty。
 
-## Pi companion 启动或会话异常
+## Pi 启动或会话异常
 
 先确认本机可执行 `pi`，并检查环境：
 
 ```bash
 pi --help
-wechat-bridge-pi --doctor
+wechat-pi --doctor
 ```
 
 `wechat-pi` 会启动并托管唯一的原生 `pi --approve --extension <bridge-extension>` TUI。当前窗口里显示的就是用户平时使用的 Pi，微信通过注入的本地 extension 接管同一 session。不要再运行第二个 Pi 进程写入同一 session 文件，否则会造成会话竞争或 transcript 状态不一致。需要新会话时，在 Pi TUI 或微信使用 `/new` / `/new-session`；需要中断当前任务时使用 `/stop`。
@@ -223,9 +222,9 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 ## 本地 `/resume` 后微信不同步
 
-请优先确认 `wechat-bridge-codex` 与 `wechat-codex` 是否都已重启到同一版本。
+请优先重新运行对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`，确保内部 runtime 与可见 CLI 来自同一安装版本。
 
-微信侧 `/resume` 当前仍保持禁用。需要切换 Codex / Claude Code / OpenCode / Pi 会话时，优先在本地 companion 中使用 `/new` 或对应 CLI 的会话命令，bridge 会跟随本地活动会话。
+微信侧 `/resume` 当前仍保持禁用。需要切换 Codex / Claude Code / OpenCode / Pi 会话时，优先在可见 CLI 中使用 `/new` 或对应 CLI 的会话命令，内部 runtime 会跟随本地活动会话。
 
 部分设备可能存在第一次本地输入不同步到微信的情况，可以先从微信发送一条普通消息来建立连接。
 

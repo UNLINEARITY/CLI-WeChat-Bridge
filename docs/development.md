@@ -38,36 +38,17 @@ bun install
 | Pi bridge | `npm run bridge:pi` |
 | Pi companion | `npm run pi:companion` |
 | Pi 单命令启动器 | `npm run pi:start` |
-| Shell bridge | `npm run bridge:shell` |
-| 通用 bridge 入口 | `npm run bridge:bun -- --adapter codex` |
 
 如果需要额外参数，可以追加在脚本后。例如：
 
 ```bash
 npm run daemon -- --adapter codex
-npm run bridge:bun -- --adapter claude --cwd D:\work\my-project
+npm run bridge:claude -- --cwd D:\work\my-project
 npm run opencode:start -- --cwd D:\work\my-project
 npm run pi:start -- --cwd D:\work\my-project --model openai/gpt-5.6-sol
 ```
 
-## Shell / PowerShell 调试适配器
-
-Shell 适配器主要用于开发调试和验证 bridge 的基础输入输出、审批与进程管理，不作为日常桥接入口。
-
-源码模式可以运行：
-
-```bash
-npm run bridge:shell
-```
-
-全局命令模式可以运行：
-
-```bash
-wechat-bridge-shell
-wechat-bridge-shell --cmd pwsh.exe
-```
-
-默认会使用持久 `powershell.exe` 会话；需要执行高风险命令时，bridge 会走审批流程。相关能力更适合用来排查 bridge 管线，而不是替代 Codex、Claude Code、OpenCode 或 Pi 的日常适配器。
+`bridge:*` 与 `*:companion` 是维护者源码调试入口，不会发布为 `wechat-bridge*` 全局命令。普通用户应直接运行 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 或 `wechat-daemon`。
 
 ## Pi 原生 TUI 接管说明
 
@@ -124,7 +105,7 @@ npm run smoke:global -- --purge-global --clean-cache --full
 | `--full` | 额外执行 `npm run quality` |
 | `--keep-tarball` | 保留生成的 tarball，方便排查 |
 
-`smoke:global` 会先用当前源码打出真实 npm tarball，再执行 `npm install -g <tarball>` 安装到真实全局环境。脚本结束后，可以离开仓库目录运行 `wechat-codex-start` 等命令验证。
+`smoke:global` 会先用当前源码打出真实 npm tarball，再执行 `npm install -g <tarball>` 安装到真实全局环境。脚本结束后，可以离开仓库目录运行 `wechat-codex` 等直接命令验证。
 
 ## 源码更新
 
@@ -178,13 +159,13 @@ npm pack --dry-run --json
 | `src/bridge/wechat-bridge.ts` | bridge 主事件循环 |
 | `src/daemon/wechat-daemon.ts` | 常驻 WeChat daemon 与多 CLI slot 管理 |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |
-| `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `pi` / `shell` 适配器入口 |
+| `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `pi` 适配器入口 |
 | `src/bridge/bridge-adapters.opencode.ts` | OpenCode 适配器实现 |
 | `src/bridge/bridge-adapters.pi.ts` | Pi 原生 TUI adapter、extension IPC、session 跟随与最终回复实现 |
 | `src/companion/pi-tui-bridge-extension.ts` | 注入 Pi TUI 的本地 bridge extension |
 | `src/companion/local-companion.ts` | `wechat-claude` / `wechat-opencode` / `wechat-pi` 本地 companion 入口 |
 | `src/companion/codex-remote-client.ts` | `wechat-codex` 本地客户端入口 |
-| `src/companion/local-companion-start.ts` | `wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` / `wechat-pi-start` 单命令启动入口 |
+| `src/companion/local-companion-start.ts` | 四个直接命令及其一版过渡 `*-start` aliases 共用的智能启动入口 |
 | `src/wechat/wechat-transport.ts` | iLink 消息收发 |
 | `src/bridge/bridge-state.ts` | bridge 状态、锁与日志 |
 | `src/wechat/setup.ts` | 登录与凭据初始化 |
