@@ -571,6 +571,13 @@ async function ensureBridgeReady(
   return { shouldOpenVisibleClient: true };
 }
 
+// The daemon's ensure_slot can legitimately take a while: opening a visible
+// client waits up to 15s for it to connect, and codex waits another 15s for
+// the visible thread — all serialized per adapter. The default 2s IPC timeout
+// would expire on nearly every cold start, so delegation uses a generous
+// deadline and falls back to a local bridge when the daemon cannot deliver.
+const ENSURE_SLOT_DELEGATION_TIMEOUT_MS = 45_000;
+
 export async function tryDelegateToDaemon(
   options: LocalCompanionStartCliOptions,
   deps: {
@@ -600,19 +607,31 @@ export async function tryDelegateToDaemon(
     );
   }
 
-  const response: DaemonResponse = await sendRequest(endpoint, {
-    command: "ensure_slot",
-    adapter: options.adapter,
-    cwd: options.cwd,
-    profile: options.profile,
-    cliArgs: options.cliArgs,
-    openVisible: true,
-    sessionStartMode: options.sessionStartMode,
-    reuseExistingVisible:
-      options.adapter !== "pi" || options.sessionStartMode !== "new",
-  });
+  const response: DaemonResponse = await sendRequest(
+    endpoint,
+    {
+      command: "ensure_slot",
+      adapter: options.adapter,
+      cwd: options.cwd,
+      profile: options.profile,
+      cliArgs: options.cliArgs,
+      openVisible: true,
+      sessionStartMode: options.sessionStartMode,
+      reuseExistingVisible:
+        options.adapter !== "pi" || options.sessionStartMode !== "new",
+    },
+    { timeoutMs: ENSURE_SLOT_DELEGATION_TIMEOUT_MS },
+  );
   if (!response.ok) {
-    throw new Error(response.error);
+    // A daemon that cannot answer in time (or at all) must not abort the
+    // launch: fall back to a local companion-bound bridge so the user still
+    // gets a working terminal instead of an error for work the daemon may
+    // still complete.
+    log(
+      options.adapter,
+      `Daemon delegation failed (${response.error ?? "unknown error"}). Falling back to a local bridge.`,
+    );
+    return false;
   }
 
   log(

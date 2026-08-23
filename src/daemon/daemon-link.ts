@@ -290,6 +290,11 @@ export async function sendDaemonRequest(
     socket.once("error", () => {
       finish({ ok: false, error: "Daemon endpoint is not reachable." });
     });
+    socket.once("close", () => {
+      // The daemon may die or be taken over mid-request; without this the
+      // caller waits out the full timeout for a socket that is already gone.
+      finish({ ok: false, error: "Daemon connection closed before a response." });
+    });
   });
 }
 
@@ -302,5 +307,19 @@ export async function isDaemonEndpointAlive(
   }
 
   const response = await sendDaemonRequest(endpoint, { command: "status" }, options);
-  return response.ok;
+  if (response.ok) {
+    return true;
+  }
+
+  // A momentarily busy daemon (e.g. a synchronous session-directory scan
+  // blocking its event loop) can miss the short status deadline. Retry once
+  // before declaring it dead: a false negative makes callers delete a live
+  // daemon's endpoint file and break its singleton.
+  const timedOut = (response.error ?? "").includes("Timed out");
+  if (!timedOut) {
+    return false;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const retry = await sendDaemonRequest(endpoint, { command: "status" }, options);
+  return retry.ok;
 }

@@ -389,6 +389,42 @@ describe("local-companion-start helpers", () => {
     expect(cleared).toEqual([123]);
   });
 
+  test("tryDelegateToDaemon falls back to a local bridge when the daemon cannot deliver", async () => {
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd: path.resolve("./tmp/project"),
+      startedAt: "2026-05-22T00:00:00.000Z",
+    };
+    const timeouts: number[] = [];
+
+    const delegated = await tryDelegateToDaemon(
+      {
+        adapter: "codex",
+        cwd: endpoint.cwd,
+        timeoutMs: 15000,
+        sessionStartMode: "restore",
+        cliArgs: [],
+      },
+      {
+        readEndpoint: () => endpoint,
+        isEndpointAlive: async () => true,
+        sendRequest: async (_endpoint, _request, options) => {
+          timeouts.push(options?.timeoutMs ?? 0);
+          return { ok: false, error: "Timed out waiting for daemon response." };
+        },
+      },
+    );
+
+    // Failure must degrade to a local launch (false) instead of throwing, and
+    // ensure_slot must use a deadline that covers the daemon's 15s+15s
+    // visible-client waits instead of the 2s IPC default.
+    expect(delegated).toBe(false);
+    expect(timeouts).toEqual([45_000]);
+  });
+
   test("runVisibleClient routes OpenCode through the shared in-process companion", async () => {
     const calls: Array<{ adapter: string; cwd: string }> = [];
     const exitCode = await runVisibleClient(
