@@ -207,7 +207,7 @@ describe("wechat-daemon helpers", () => {
         sharedSessionId: "session_current",
         reuseExistingVisible: true,
       }),
-    ).toBe("restore");
+    ).toBe("new");
 
     expect(
       resolveDaemonSessionStartMode({

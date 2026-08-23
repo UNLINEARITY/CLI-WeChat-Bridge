@@ -313,11 +313,15 @@ export function resolveDaemonSessionStartMode(params: {
   sharedSessionId?: string;
   reuseExistingVisible?: boolean;
 }): BridgeSessionStartMode {
-  if (params.reuseExistingVisible && params.visibleConnected) {
-    return "restore";
-  }
+  // An explicit --session-start-mode wins over visible-client reuse: the user
+  // asked for a fresh (or restored) session on purpose, so silently degrading
+  // "new" back to "restore" because a window happens to be connected would
+  // ignore the request.
   if (params.explicitSessionStartMode) {
     return params.explicitSessionStartMode;
+  }
+  if (params.reuseExistingVisible && params.visibleConnected) {
+    return "restore";
   }
   if (params.adapter === "codex") {
     return "restore";
@@ -757,6 +761,8 @@ class WechatDaemon {
   private readonly authorizedUserId: string;
   private readonly transport: WeChatTransport;
   private readonly slots = new Map<DaemonAdapterKind, DaemonSlot>();
+  // Per-adapter serialization chains for ensureSlot (see ensureSlot comment).
+  private readonly slotEnsureChains = new Map<DaemonAdapterKind, Promise<unknown>>();
   private readonly startedAt = new Date().toISOString();
   private readonly bridgeStartedAtMs = Date.now();
   private backlogNoticeSent = false;
@@ -964,6 +970,32 @@ class WechatDaemon {
     await this.shutdownPromise;
   }
 
+  /**
+   * Remove a slot whose runtime reported a fatal (terminal) error. The dead
+   * runtime would otherwise stay in the slot map forever: every later message
+   * would fail against it ("adapter is not running") with no path back to a
+   * working adapter short of a manual /reset or daemon restart. After removal,
+   * the next switch directive (/codex etc.) rebuilds the adapter from scratch.
+   */
+  private disposeDeadSlot(slot: DaemonSlot): void {
+    if (this.slots.get(slot.adapter) !== slot) {
+      return; // Already replaced by a newer ensureSlot run.
+    }
+    this.slots.delete(slot.adapter);
+    if (this.activeAdapter === slot.adapter) {
+      this.activeAdapter = null;
+    }
+    appendDaemonLog(`dead_slot_disposed: adapter=${slot.adapter}`);
+    void (async () => {
+      try {
+        await slot.runtime.dispose();
+      } catch {
+        // Best effort: the runtime already reported a fatal error.
+      }
+      slot.controller.clearLocalClientEndpoint();
+    })();
+  }
+
   private async cleanup(): Promise<void> {
     appendDaemonLog("shutdown_started");
     for (const slot of this.slots.values()) {
@@ -1049,6 +1081,45 @@ class WechatDaemon {
     activated: boolean;
     previousActiveAdapter?: DaemonAdapterKind;
   }> {
+    // Serialize per-adapter ensureSlot runs. The IPC handler, the WeChat poll
+    // loop, and startup can all call this concurrently; without serialization
+    // two callers would both observe an empty slot map, create two runtimes,
+    // and the second slots.set would orphan the first (duplicate PTY child,
+    // double visible client, endpoint files overwriting each other).
+    const tail = this.slotEnsureChains.get(adapter) ?? Promise.resolve();
+    const run = tail.then(
+      () => this.runEnsureSlot(adapter, options),
+      // A rejected predecessor must not block this run — start fresh either way.
+      () => this.runEnsureSlot(adapter, options),
+    );
+    this.slotEnsureChains.set(
+      adapter,
+      run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return run;
+  }
+
+  private async runEnsureSlot(
+    adapter: DaemonAdapterKind,
+    options: {
+      profile?: string;
+      cliArgs?: string[];
+      openVisible?: boolean;
+      sessionStartMode?: BridgeSessionStartMode;
+      reuseExistingVisible?: boolean;
+    } = {},
+  ): Promise<{
+    activeAdapter: DaemonAdapterKind;
+    created: boolean;
+    openedVisible: boolean;
+    visibleConnected: boolean;
+    visibleReady: boolean;
+    activated: boolean;
+    previousActiveAdapter?: DaemonAdapterKind;
+  }> {
     const previousActiveAdapter = this.activeAdapter ?? undefined;
     let slot = this.slots.get(adapter);
     let created = false;
@@ -1104,7 +1175,8 @@ class WechatDaemon {
     });
     if (
       !created &&
-      options.reuseExistingVisible === false &&
+      (options.reuseExistingVisible === false ||
+        options.sessionStartMode === "new") &&
       sessionStartMode === "new" &&
       (adapter === "claude" || adapter === "opencode" || adapter === "pi") &&
       visibleConnected
@@ -1355,13 +1427,17 @@ class WechatDaemon {
           );
         }));
         break;
-      case "user_input_required":
+      case "user_input_required": {
+        // Mirror the pending request synchronously, before the async WeChat
+        // send (which retries with backoff). Otherwise a fast user reply can
+        // race past the still-unwritten mirror and be dispatched as plain
+        // input into a CLI that is waiting for a structured form answer.
+        const pending = toPendingUserInput(event.request);
+        slot.pendingUserInput = pending;
+        appendDaemonLog(
+          `user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`,
+        );
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          const pending = toPendingUserInput(event.request);
-          slot.pendingUserInput = pending;
-          appendDaemonLog(
-            `user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`,
-          );
           await this.queueWechatMessage(
             this.authorizedUserId,
             prefixDaemonAdapterMessage(
@@ -1372,6 +1448,7 @@ class WechatDaemon {
           );
         }));
         break;
+      }
       case "mirrored_user_input":
         appendDaemonLog(
           `mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(event.text)}`,
@@ -1461,6 +1538,7 @@ class WechatDaemon {
         slot.pendingConfirmations = [];
         slot.pendingUserInput = null;
         slot.activeTask = null;
+        this.disposeDeadSlot(slot);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await this.queueWechatMessage(
             this.authorizedUserId,
@@ -1618,6 +1696,21 @@ class WechatDaemon {
     slot = this.getActiveSlot() ?? slot;
 
     const adapterState = slot.runtime.getState();
+    if (adapterState.status === "awaiting_input") {
+      // Belt-and-braces with the pendingUserInput mirror above: the adapter
+      // state is authoritative even when the mirror was cleared or the WeChat
+      // notification is still queued.
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(
+          slot.adapter,
+          slot.pendingUserInput
+            ? formatPendingUserInputReminder(slot.pendingUserInput)
+            : `${slot.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+        ),
+      );
+      return;
+    }
     if (adapterState.status === "busy" || adapterState.status === "awaiting_approval") {
       await this.queueWechatMessage(
         message.senderId,
@@ -1812,7 +1905,19 @@ class WechatDaemon {
     activeSlot: DaemonSlot,
     raw: string,
   ): Promise<void> {
-    const pending = activeSlot.pendingUserInput;
+    // Mirror the /confirm and /deny behavior: search every slot for a pending
+    // user-input request so the answer reaches the adapter that asked, even
+    // when the user has since switched the active adapter.
+    const slot = this.resolvePendingUserInputSlot(activeSlot);
+    if (!slot) {
+      await this.queueWechatMessage(
+        message.senderId,
+        prefixDaemonAdapterMessage(activeSlot.adapter, "No pending user input request."),
+      );
+      return;
+    }
+
+    const pending = slot.pendingUserInput;
     if (!pending) {
       await this.queueWechatMessage(
         message.senderId,
@@ -1825,34 +1930,48 @@ class WechatDaemon {
     if ("error" in parsed) {
       await this.queueWechatMessage(
         message.senderId,
-        prefixDaemonAdapterMessage(activeSlot.adapter, parsed.error),
+        prefixDaemonAdapterMessage(slot.adapter, parsed.error),
       );
       return;
     }
 
-    const submitted = await activeSlot.runtime.submitUserInput(parsed.answers);
+    const submitted = await slot.runtime.submitUserInput(parsed.answers);
     if (!submitted) {
       await this.queueWechatMessage(
         message.senderId,
         prefixDaemonAdapterMessage(
-          activeSlot.adapter,
+          slot.adapter,
           "The worker could not apply this answer.",
         ),
       );
       return;
     }
 
-    activeSlot.pendingUserInput = null;
-    activeSlot.activeTask = {
+    slot.pendingUserInput = null;
+    slot.activeTask = {
       startedAt: Date.now(),
       inputPreview: parsed.preview,
     };
     appendDaemonLog(
-      `user_input_answered: adapter=${activeSlot.adapter} preview=${parsed.preview}`,
+      `user_input_answered: adapter=${slot.adapter} preview=${parsed.preview}`,
     );
     await this.queueWechatMessage(
       message.senderId,
-      prefixDaemonAdapterMessage(activeSlot.adapter, "Answer submitted. Continuing..."),
+      prefixDaemonAdapterMessage(slot.adapter, "Answer submitted. Continuing..."),
+    );
+  }
+
+  private resolvePendingUserInputSlot(
+    activeSlot: DaemonSlot,
+  ): DaemonSlot | null {
+    if (activeSlot.pendingUserInput) {
+      return activeSlot;
+    }
+
+    return (
+      Array.from(this.slots.values()).find(
+        (slot) => slot.pendingUserInput !== null,
+      ) ?? null
     );
   }
 
@@ -2457,29 +2576,36 @@ export async function runDaemon(
     daemon.takenOverAdapter = cleanupResult.lock.adapter;
   }
   await daemon.startIpcServer();
-  await daemon.runInitialAdapter(options);
+  try {
+    await daemon.runInitialAdapter(options);
 
-  let shutdownInProgress = false;
-  const handleSignal = (signal: string) => {
-    if (shutdownInProgress) {
-      log(`Received ${signal} during shutdown, forcing exit.`);
-      process.exit(1);
+    let shutdownInProgress = false;
+    const handleSignal = (signal: string) => {
+      if (shutdownInProgress) {
+        log(`Received ${signal} during shutdown, forcing exit.`);
+        process.exit(1);
+      }
+      shutdownInProgress = true;
+      log(`Received ${signal}. Stopping daemon.`);
+      void daemon.shutdown().finally(() => process.exit(0));
+    };
+    process.on("SIGINT", () => handleSignal("SIGINT"));
+    process.on("SIGTERM", () => handleSignal("SIGTERM"));
+    process.on("SIGHUP", () => handleSignal("SIGHUP"));
+    if (process.platform === "win32") {
+      process.on("SIGBREAK", () => handleSignal("SIGBREAK"));
     }
-    shutdownInProgress = true;
-    log(`Received ${signal}. Stopping daemon.`);
-    void daemon.shutdown().finally(() => process.exit(0));
-  };
-  process.on("SIGINT", () => handleSignal("SIGINT"));
-  process.on("SIGTERM", () => handleSignal("SIGTERM"));
-  process.on("SIGHUP", () => handleSignal("SIGHUP"));
-  if (process.platform === "win32") {
-    process.on("SIGBREAK", () => handleSignal("SIGBREAK"));
-  }
-  process.on("exit", () => {
-    clearDaemonEndpoint();
-  });
+    process.on("exit", () => {
+      clearDaemonEndpoint();
+    });
 
-  await daemon.runPollLoop();
+    await daemon.runPollLoop();
+  } catch (error) {
+    // Abnormal exit (poll loop failure, initial adapter failure): dispose the
+    // slot runtimes so adapter child processes are not stranded as orphans.
+    await daemon.shutdown().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
