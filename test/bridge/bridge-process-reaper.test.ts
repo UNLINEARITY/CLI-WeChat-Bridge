@@ -88,6 +88,14 @@ describe("bridge peer process reaper", () => {
     expect(isOpencodeServeCommandLine("")).toBe(false);
   });
 
+  test("does not reap unrelated commands merely containing opencode and serve", () => {
+    expect(isOpencodeServeCommandLine("node opencode-lint/serve.js")).toBe(false);
+    expect(isOpencodeServeCommandLine("mytool --theme opencode --mode serve")).toBe(false);
+    expect(isOpencodeServeCommandLine("cat opencode-serve.json")).toBe(false);
+    expect(isOpencodeAttachCommandLine("node opencode-lint/attach.js")).toBe(false);
+    expect(isOpencodeAttachCommandLine("mytool --theme opencode --mode attach")).toBe(false);
+  });
+
   test("detects opencode attach command lines", () => {
     expect(isOpencodeAttachCommandLine("opencode attach http://127.0.0.1:12345")).toBe(true);
     expect(

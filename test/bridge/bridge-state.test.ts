@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  classifyLockHolderProcess,
   evaluateBridgeRuntimeOwnership,
   normalizeBridgeLockPayload,
   resolveRestorableSharedSessionId,
@@ -256,5 +257,31 @@ describe("bridge-state lock helpers", () => {
       activeInstanceId: "bridge-other",
       activePid: 789,
     });
+  });
+});
+
+describe("classifyLockHolderProcess", () => {
+  test("returns unknown for pids that are not alive", () => {
+    expect(classifyLockHolderProcess(-1)).toBe("unknown");
+  });
+
+  test("returns unknown when the command line cannot be resolved", () => {
+    // getProcessRecordByPid always excludes the current pid, so probing this
+    // process yields no record and must fall back to "unknown".
+    expect(classifyLockHolderProcess(process.pid)).toBe("unknown");
+  });
+
+  test("returns foreign for a live non-bridge process (pid reuse scenario)", () => {
+    const child = Bun.spawn(
+      process.platform === "win32"
+        ? ["cmd.exe", "/c", "ping -n 20 127.0.0.1"]
+        : ["sleep", "20"],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    try {
+      expect(classifyLockHolderProcess(child.pid)).toBe("foreign");
+    } finally {
+      child.kill();
+    }
   });
 });

@@ -86,9 +86,14 @@ export function isWechatDaemonCommandLineForCwd(
  *   opencode serve --port 12345 --hostname 127.0.0.1
  *   opencode.exe serve --port 12345
  * Also matches wrapper invocations (opencode.cmd / opencode.bat) on Windows.
+ *
+ * `serve` must be the first subcommand token after the executable so that
+ * unrelated command lines merely containing both words (e.g.
+ * `node opencode-lint/serve.js` or `mytool --theme opencode --mode serve`)
+ * are not reaped as orphans.
  */
 export function isOpencodeServeCommandLine(commandLine: string): boolean {
-  return /\bopencode(?:\.exe|\.cmd|\.bat)?\b.*\bserve\b/i.test(commandLine);
+  return /\bopencode(?:\.exe|\.cmd|\.bat)?["']?\s+serve\b/i.test(commandLine);
 }
 
 /**
@@ -98,7 +103,7 @@ export function isOpencodeServeCommandLine(commandLine: string): boolean {
  *   opencode.exe attach http://127.0.0.1:12345 --session ses_123
  */
 export function isOpencodeAttachCommandLine(commandLine: string): boolean {
-  return /\bopencode(?:\.exe|\.cmd|\.bat)?\b.*\battach\b/i.test(commandLine);
+  return /\bopencode(?:\.exe|\.cmd|\.bat)?["']?\s+attach\b/i.test(commandLine);
 }
 
 function normalizeBridgeProcessRecord(value: unknown): BridgeProcessRecord | null {
@@ -213,7 +218,8 @@ function listWindowsBridgeProcesses(currentPid = process.pid): BridgeProcessReco
       "Bypass",
       "-Command",
       [
-        "$ErrorActionPreference='Stop'",
+        // Trailing semicolon required — see the note in listAllProcessesRaw.
+        "$ErrorActionPreference='Stop';",
         "Get-CimInstance Win32_Process",
         "| Where-Object { $_.CommandLine }",
         "| Select-Object ProcessId,ParentProcessId,Name,CommandLine",
@@ -322,7 +328,11 @@ function listAllProcessesRaw(currentPid = process.pid): BridgeProcessRecord[] {
         "Bypass",
         "-Command",
         [
-          "$ErrorActionPreference='Stop'",
+          // Statement separator required: without the trailing semicolon
+          // PowerShell parses the preference assignment and the first command
+          // as one statement and fails with a ParserError, silently
+          // returning an empty process list on every probe.
+          "$ErrorActionPreference='Stop';",
           "Get-CimInstance Win32_Process",
           "| Where-Object { $_.CommandLine }",
           "| Select-Object ProcessId,ParentProcessId,Name,CommandLine",

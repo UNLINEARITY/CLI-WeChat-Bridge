@@ -17,6 +17,10 @@ import type {
   PendingUserInputRequest,
 } from "./bridge-types.ts";
 import { buildInstanceId } from "./bridge-utils.ts";
+import {
+  getProcessRecordByPid,
+  isWechatBridgeCommandLine,
+} from "./bridge-process-reaper.ts";
 
 type BridgeStateOptions = {
   adapter: BridgeAdapterKind;
@@ -251,7 +255,39 @@ function buildLockConflictError(lock: BridgeLockPayload): Error {
   );
 }
 
+/**
+ * Check whether the process currently holding a stale lock is still a
+ * wechat-bridge process. OS pid reuse can hand the recorded pid to an
+ * unrelated process; terminating that pid would kill an innocent process.
+ *
+ * Returns "bridge" when the command line matches a bridge, "foreign" when the
+ * pid is alive but belongs to something else, and "unknown" when the command
+ * line could not be resolved (probe failure, restricted permissions).
+ */
+export function classifyLockHolderProcess(pid: number): "bridge" | "foreign" | "unknown" {
+  if (!isPidAlive(pid)) {
+    return "unknown";
+  }
+  const record = getProcessRecordByPid(pid);
+  if (!record) {
+    return "unknown";
+  }
+  return isWechatBridgeCommandLine(record.commandLine) ? "bridge" : "foreign";
+}
+
 function tryTerminateOrphanedBridge(lock: BridgeLockPayload): boolean {
+  const holderKind = classifyLockHolderProcess(lock.pid);
+  if (holderKind === "foreign") {
+    // The lock-holding bridge is gone and its pid was reused by an unrelated
+    // process. Reclaim the lock without killing that process.
+    return true;
+  }
+  if (holderKind === "unknown") {
+    // Could not confirm the pid still belongs to a bridge. Do not risk
+    // killing an innocent process; keep the conflict error instead.
+    return false;
+  }
+
   try {
     process.kill(lock.pid);
   } catch {
@@ -463,7 +499,15 @@ export class BridgeStateStore {
       existing.pid !== process.pid &&
       isPidAlive(existing.pid)
     ) {
-      if (shouldAutoReclaimBridgeLock(existing)) {
+      const holderKind = classifyLockHolderProcess(existing.pid);
+      if (holderKind === "foreign") {
+        // The recorded bridge exited and the OS reused its pid for an
+        // unrelated process. The lock is stale: reclaim it instead of
+        // dead-locking new bridges on a phantom holder.
+        this.appendLog(
+          `stale_lock_pid_reuse: pid=${existing.pid} instanceId=${existing.instanceId} adapter=${existing.adapter} cwd=${existing.cwd}`,
+        );
+      } else if (shouldAutoReclaimBridgeLock(existing)) {
         this.appendLog(
           `lock_reclaim_attempt: pid=${existing.pid} instanceId=${existing.instanceId} adapter=${existing.adapter} cwd=${existing.cwd}`,
         );

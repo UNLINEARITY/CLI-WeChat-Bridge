@@ -23,7 +23,11 @@ import {
 } from "./wechat-forwarding.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { BridgeStateStore } from "./bridge-state.ts";
-import { reapOrphanedOpencodeProcesses, reapPeerBridgeProcesses } from "./bridge-process-reaper.ts";
+import {
+  getProcessRecordByPid,
+  reapOrphanedOpencodeProcesses,
+  reapPeerBridgeProcesses,
+} from "./bridge-process-reaper.ts";
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import type {
   ApprovalRequest,
@@ -107,6 +111,9 @@ type DeferredInboundMessage = {
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 const PARENT_PROCESS_POLL_MS = 5_000;
+// Re-verify the parent's command line every N polls (5s each → ~60s) to keep
+// the full-process probe off the hot path.
+const PARENT_IDENTITY_CHECK_INTERVAL = 12;
 
 function log(message: string): void {
   process.stderr.write(`[wechat-bridge] ${message}\n`);
@@ -601,6 +608,11 @@ async function main(): Promise<void> {
   let shutdownPromise: Promise<void> | null = null;
   let requestedExitCode = 0;
   let stdinDetached = false;
+  // Snapshot of the parent process command line at bridge startup (null when
+  // unresolvable). Compared against periodic re-probes to detect OS pid reuse.
+  const parentStartupCommandLine =
+    getProcessRecordByPid(startupParentPid)?.commandLine ?? null;
+  let parentWatchPollCount = 0;
   const parentWatchTimer =
     shouldWatchParentProcess({
       startupParentPid,
@@ -609,6 +621,23 @@ async function main(): Promise<void> {
     })
       ? setInterval(() => {
           if (shutdownPromise || isPidAlive(startupParentPid)) {
+            // Periodically re-verify the parent's command line so an OS pid
+            // reuse (dead parent's pid handed to an unrelated long-running
+            // process) cannot keep this companion-bound bridge alive forever.
+            parentWatchPollCount += 1;
+            if (parentWatchPollCount % PARENT_IDENTITY_CHECK_INTERVAL === 0) {
+              const record = getProcessRecordByPid(startupParentPid);
+              if (
+                parentStartupCommandLine !== null &&
+                record !== null &&
+                record.commandLine !== parentStartupCommandLine
+              ) {
+                log(
+                  `Parent pid ${startupParentPid} was reused by another process. Stopping bridge.`,
+                );
+                void shutdown(0);
+              }
+            }
             return;
           }
           log(`Parent process ${startupParentPid} exited. Stopping bridge.`);

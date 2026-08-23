@@ -159,8 +159,12 @@ export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    // EPERM means the OS found the pid but denied access (e.g. a Windows
+    // process running under another privilege level). The process exists, so
+    // it must be treated as alive — returning false here would let callers
+    // delete a live daemon's endpoint file and break its singleton.
+    return error instanceof Error && (error as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
