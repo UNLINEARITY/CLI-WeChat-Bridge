@@ -799,10 +799,12 @@ async function main(): Promise<void> {
     }
 
     loadEmojiBindings();
+    // Keep the standalone bridge's WeChat welcome brief: command and emoji
+    // reference material belongs to /status and /bindings, which users can
+    // request on demand. The daemon sends its own, fuller welcome.
     const welcomeText = t("bridge.welcome", {
       adapter: options.adapter,
       cwd: options.cwd,
-      bindings: formatBindingsListMessage(listBindings()),
     });
     await queueWechatMessage(credentials.userId, welcomeText);
 

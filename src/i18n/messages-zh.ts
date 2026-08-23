@@ -1,6 +1,6 @@
 export const messages: Record<string, string> = {
   // === 桥接欢迎 & 控制 ===
-  "bridge.welcome": "微信桥接就绪 ({adapter})。\n工作目录: {cwd}\n\n命令: /stop, /confirm, /deny, /status, /new\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
+  "bridge.welcome": "微信桥接就绪 ({adapter})。\n工作目录: {cwd}",
   "bridge.stopped": "桥接已停止。",
   "bridge.interrupt.sent": "已发送中断信号。",
   "bridge.interrupt.notBusy": "没有正在执行的任务可中断。",

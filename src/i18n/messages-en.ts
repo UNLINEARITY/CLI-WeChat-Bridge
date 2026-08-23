@@ -1,6 +1,6 @@
 export const messages: Record<string, string> = {
   // === Bridge welcome & control ===
-  "bridge.welcome": "WeChat Bridge ready ({adapter}).\nCWD: {cwd}\n\nCommands: /stop, /confirm, /deny, /status, /new\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
+  "bridge.welcome": "WeChat Bridge ready ({adapter}).\nCWD: {cwd}",
   "bridge.stopped": "Bridge stopped.",
   "bridge.interrupt.sent": "Interrupt signal sent.",
   "bridge.interrupt.notBusy": "No active task to interrupt.",
