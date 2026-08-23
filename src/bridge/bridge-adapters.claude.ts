@@ -618,7 +618,15 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     const { workspaceDir } = ensureWorkspaceChannelDir(this.options.cwd);
-    const runtimeDir = path.join(workspaceDir, "claude-runtime");
+    // Scope the runtime directory to this adapter instance: two bridges in the
+    // same cwd would otherwise overwrite each other's hook script, settings,
+    // and error log, routing approvals and final replies to the wrong chat.
+    // The hook token is unique per hook server (per instance), and the same
+    // token regenerates the same directory across hook restarts.
+    const runtimeDir = path.join(
+      workspaceDir,
+      `claude-runtime-${this.hookToken.replace(/[^a-zA-Z0-9]/g, "").slice(0, 12)}`,
+    );
     fs.mkdirSync(runtimeDir, { recursive: true });
 
     const hookScriptPath = path.join(

@@ -64,7 +64,12 @@ describe("forwardWechatFinalReply", () => {
       },
     });
 
-    expect(calls).toEqual(["text:Visible text."]);
+    // The failed visible-text send now emits an interruption notice telling
+    // the user which parts (here: 1 attachment) were not delivered.
+    expect(calls).toEqual([
+      "text:Visible text.",
+      "text:[bridge] Reply delivery was interrupted; 1 attachment(s) could not be sent. Send a new message to retry.",
+    ]);
   });
 
   test("sends stripped text before attachments in listed order", async () => {

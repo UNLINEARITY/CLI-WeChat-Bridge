@@ -34,9 +34,26 @@ export async function forwardWechatFinalReply(params: {
   if (visibleText) {
     // Send long replies in bounded chunks: a single oversized sendmessage call
     // can be rejected by the WeChat API, silently losing the whole reply.
-    for (const chunk of splitWechatTextIntoChunks(visibleText)) {
-      const sent = await sender.sendText(chunk);
+    const chunks = splitWechatTextIntoChunks(visibleText);
+    for (let index = 0; index < chunks.length; index += 1) {
+      const sent = await sender.sendText(chunks[index]!);
       if (sent === false) {
+        // The send channel is failing (e.g. an expired context token).
+        // Report what was dropped instead of ending mid-reply silently;
+        // this notice itself is best effort and may also fail.
+        const remainingChunks = chunks.length - index - 1;
+        if (remainingChunks > 0 || parsed.attachments.length > 0) {
+          const parts: string[] = [];
+          if (remainingChunks > 0) {
+            parts.push(`${remainingChunks} reply chunk(s)`);
+          }
+          if (parsed.attachments.length > 0) {
+            parts.push(`${parsed.attachments.length} attachment(s)`);
+          }
+          await sender.sendText(
+            `[bridge] Reply delivery was interrupted; ${parts.join(" and ")} could not be sent. Send a new message to retry.`,
+          );
+        }
         return;
       }
     }

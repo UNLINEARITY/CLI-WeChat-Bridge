@@ -1481,6 +1481,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       ) {
         try {
           await this.connectRpcClient();
+          // The new connection starts with an empty subscription set.
+          // Resubscribe the shared thread so turn notifications and approval
+          // requests keep flowing: without this, a mid-turn reconnect
+          // silently stops delivery, and approvals answered over the new
+          // connection (with the old request id) are ignored by the server.
+          if (this.state.sharedThreadId) {
+            await this.tryEnsureSharedThreadSubscribed(this.state.sharedThreadId);
+          }
           return true;
         } catch (error) {
           lastError = describeUnknownError(error);

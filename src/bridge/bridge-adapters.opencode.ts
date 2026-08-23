@@ -212,6 +212,9 @@ const OPENCODE_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(
 const OPENCODE_DUPLICATE_EVENT_TTL_MS = 150;
 const OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS = 30_000;
 const OPENCODE_RECENT_LOCAL_PROMPT_TTL_MS = 10_000;
+// How long a selectSession echo suppression stays valid before it is treated
+// as lost and cleared.
+const TUI_SESSION_SELECT_SUPPRESSION_TTL_MS = 5_000;
 const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
 const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 const OPENCODE_MINIMUM_SUPPORTED_VERSION = "1.18.0";
@@ -263,7 +266,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     string,
     { streamName: SdkEventStreamName; observedAtMs: number }
   >();
-  private suppressedTuiSessionSelectId: string | null = null;
+  private suppressedTuiSessionSelect: { sessionId: string; setAtMs: number } | null =
+    null;
   private lastMirroredLocalPrompt: { text: string; createdAtMs: number } | null = null;
   private pendingLocalSessionCreateFollowUntilMs = 0;
 
@@ -621,7 +625,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.client = null;
     this.activeSessionId = null;
     this.activeWorkspaceId = null;
-    this.suppressedTuiSessionSelectId = null;
+    this.suppressedTuiSessionSelect = null;
     this.state.status = "stopped";
     this.state.pid = undefined;
     this.state.startedAt = undefined;
@@ -2140,8 +2144,13 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    if (sessionId === this.suppressedTuiSessionSelectId) {
-      this.suppressedTuiSessionSelectId = null;
+    if (
+      this.suppressedTuiSessionSelect &&
+      sessionId === this.suppressedTuiSessionSelect.sessionId
+    ) {
+      // Echo of our own selectSession — swallow it once. The TTL guard in
+      // isSuppressedTuiSessionSelectExpired covers the lost-echo case.
+      this.suppressedTuiSessionSelect = null;
       return;
     }
 
@@ -2857,6 +2866,21 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     );
   }
 
+  private isTuiSessionSelectSuppressed(sessionId: string): boolean {
+    const suppression = this.suppressedTuiSessionSelect;
+    if (!suppression || suppression.sessionId !== sessionId) {
+      return false;
+    }
+    // Bound the suppression window: if the echo never arrives (TUI not ready,
+    // dropped event), a stale flag must not swallow a later genuine local
+    // switch to the same session.
+    if (Date.now() - suppression.setAtMs > TUI_SESSION_SELECT_SUPPRESSION_TTL_MS) {
+      this.suppressedTuiSessionSelect = null;
+      return false;
+    }
+    return true;
+  }
+
   private async syncVisibleSessionSelection(
     session: { id: string; workspaceID?: string },
     options: {
@@ -2867,12 +2891,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (
       !this.client?.tui ||
       this.options.renderMode !== "companion" ||
-      (!options.force && session.id === this.suppressedTuiSessionSelectId)
+      (!options.force && this.isTuiSessionSelectSuppressed(session.id))
     ) {
       return;
     }
 
-    this.suppressedTuiSessionSelectId = session.id;
+    this.suppressedTuiSessionSelect = { sessionId: session.id, setAtMs: Date.now() };
     this.logDebug(
       `[opencode-adapter:tui] selectSession session=${session.id} workspace=${session.workspaceID ?? this.activeWorkspaceId ?? "(none)"}`,
     );
@@ -2883,8 +2907,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         this.scheduleVisibleSessionSelectionRetries(session);
       }
     } catch (err) {
-      if (this.suppressedTuiSessionSelectId === session.id) {
-        this.suppressedTuiSessionSelectId = null;
+      if (this.suppressedTuiSessionSelect?.sessionId === session.id) {
+        this.suppressedTuiSessionSelect = null;
       }
       this.logDebug(
         `[opencode-adapter:tui] selectSession failed for ${session.id}: ${describeUnknownError(err)}`,
