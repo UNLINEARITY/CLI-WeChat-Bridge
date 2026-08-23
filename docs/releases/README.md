@@ -4,6 +4,10 @@
 
 ## 版本列表
 
+### [v1.1.4](./1.1.4.md) / [中文说明](./1.1.4_CN.md)
+**启动收拢为四条命令 + 全面审查的稳定性修复 + OpenCode 问答与会话恢复**
+启动方式收拢为 `wechat-codex` / `wechat-claude` / `wechat-opencode` / `wechat-pi` 四条命令，统一完成微信凭据校验、daemon 委托与本地桥接拉起；`wechat-bridge*` 命令全部移除，`wechat-*-start` 保留至 1.1.5。全面代码审查的二十余处修复集中落地：进程号复用不再导致启动失败或误终止无关进程（并修复 Windows 进程扫描自首个版本起从未生效的缺陷）、daemon 并发保护与委托超时修正、各适配器断连与中断后的恢复、共享状态原子写入与网络请求超时完整覆盖。OpenCode 补齐微信 `/answer` 直接作答 agent 提问与 `/resume` 恢复历史会话，每个启动的服务器注入一次性随机密码。统计：73 个文件，新增 2,272 行，删除 2,106 行。
+
 ### [v1.1.3](./1.1.3.md) / [中文说明](./1.1.3_CN.md)
 **原生 Pi TUI 接管 + Codex/OpenCode 较新主流版本兼容 + daemon 行内 prompt 切换**
 - 新增 Pi bridge、companion 和单命令启动器，微信与本地键盘共用真实 Pi TUI session；刷新 Codex app-server 与 OpenCode 1.18 协议支持；修复 Windows 命令 shim、OpenCode 健康检查启动竞态、Pi 慢启动超时与 `/claude hi` 等 daemon 切换转发
