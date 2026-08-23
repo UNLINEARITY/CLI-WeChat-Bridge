@@ -94,6 +94,11 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
   private eventSink: EventSink = () => undefined;
   private server: net.Server | null = null;
   private socket: net.Socket | null = null;
+  // Pending senders waiting for the companion's first state frame.
+  private readonly readyWaiters = new Set<{
+    timer: NodeJS.Timeout;
+    settle: (error?: Error) => void;
+  }>();
   private detachMessageListener: (() => void) | null = null;
   private requestCounter = 0;
   private endpoint: LocalCompanionEndpoint | null = null;
@@ -421,6 +426,9 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.state.activeTurnOrigin = undefined;
         this.state.pendingApprovalOrigin = undefined;
         Object.assign(this.state, message.state);
+        if (this.state.pid) {
+          this.settleReadyWaiters();
+        }
         this.eventSink({
           type: "status",
           status: this.state.status,
@@ -446,6 +454,12 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
   }
 
   private detachPanelSocket(): void {
+    this.settleReadyWaiters(
+      new Error(formatCompanionNotConnectedMessage({
+        kind: this.options.kind,
+        launchMode: this.options.companionLaunchMode,
+      })),
+    );
     this.rejectPendingRequests("Companion socket disconnected unexpectedly.");
     this.detachMessageListener?.();
     this.detachMessageListener = null;
@@ -547,8 +561,49 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.pendingRequests.clear();
   }
 
+  /**
+   * Wait for the companion's first state frame (which reports the worker
+   * pid). The companion sends it only after its adapter finished starting —
+   * for opencode that spans spawning `opencode serve`, connecting, and the
+   * initial session scan — so a WeChat message arriving inside that window
+   * must wait instead of failing with "connected but not ready yet".
+   */
+  private waitForCompanionReady(): Promise<void> {
+    if (this.state.pid) {
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve, reject) => {
+      const entry = {
+        timer: setTimeout(() => {
+          this.readyWaiters.delete(entry);
+          reject(
+            new Error(
+              `${this.options.kind} companion is connected but not ready yet. Wait for it to finish starting.`,
+            ),
+          );
+        }, 30_000),
+        settle: (error?: Error) => {
+          clearTimeout(entry.timer);
+          this.readyWaiters.delete(entry);
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        },
+      };
+      this.readyWaiters.add(entry);
+    });
+  }
+
+  private settleReadyWaiters(error?: Error): void {
+    for (const entry of [...this.readyWaiters]) {
+      entry.settle(error);
+    }
+  }
+
   private async sendRequest(payload: LocalCompanionCommand): Promise<unknown> {
-    const socket = this.socket;
+    let socket = this.socket;
     if (!socket) {
       throw new Error(formatCompanionNotConnectedMessage({
         kind: this.options.kind,
@@ -556,7 +611,14 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       }));
     }
     if (!this.state.pid && payload.command !== "dispose") {
-      throw new Error(`${this.options.kind} companion is connected but not ready yet. Wait for it to finish starting.`);
+      await this.waitForCompanionReady();
+      socket = this.socket;
+      if (!socket) {
+        throw new Error(formatCompanionNotConnectedMessage({
+          kind: this.options.kind,
+          launchMode: this.options.companionLaunchMode,
+        }));
+      }
     }
 
     const id = `${++this.requestCounter}`;

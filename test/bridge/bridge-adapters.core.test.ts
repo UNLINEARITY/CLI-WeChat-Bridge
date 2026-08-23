@@ -195,3 +195,67 @@ describe("local companion proxy lifecycle", () => {
     });
   });
 });
+
+describe("companion ready gate", () => {
+  test("sendRequest waits for the first state frame instead of failing immediately", async () => {
+    const cwd = path.resolve("tmp/ready-gate");
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: "opencode" });
+    const adapter = new LocalCompanionProxyAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd,
+      lifecycle: "persistent",
+      companionLaunchMode: "daemon_auto",
+    });
+    await adapter.start();
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "opencode" });
+    const internal = adapter as unknown as {
+      waitForCompanionReady(): Promise<void>;
+    };
+
+    const socket = net.connect({
+      host: "127.0.0.1",
+      port: endpoint?.port ?? 0,
+    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once("connect", resolve);
+        socket.once("error", reject);
+      });
+
+      // Authenticated but no state frame yet: the ready gate must hold.
+      sendLocalCompanionMessage(socket, {
+        type: "hello",
+        token: endpoint?.token ?? "",
+        companionPid: 22_222,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      let settled = false;
+      const readyPromise = internal.waitForCompanionReady().then(
+        () => (settled = true),
+        () => (settled = true),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(settled).toBe(false);
+
+      // First state frame with a pid releases the waiter.
+      sendLocalCompanionMessage(socket, {
+        type: "state",
+        state: {
+          kind: "opencode",
+          status: "idle",
+          cwd,
+          command: "opencode",
+          pid: 33_333,
+        },
+      });
+      await readyPromise;
+      expect(settled).toBe(true);
+    } finally {
+      socket.destroy();
+      await adapter.dispose();
+      clearLocalCompanionEndpoint(cwd, undefined, { adapter: "opencode" });
+    }
+  });
+});
