@@ -93,6 +93,8 @@ export const messages: Record<string, string> = {
   "doctor.mode.generic": "generic",
   "doctor.notSpecified": "(not specified)",
   "doctor.none": "none",
+  "doctor.endpoint.corrupted": "endpoint file exists but cannot be parsed; it will be replaced on the next successful write",
+
   "doctor.unknown": "unknown",
   "doctor.yes": "yes",
   "doctor.no": "no",

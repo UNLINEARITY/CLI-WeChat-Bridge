@@ -7,6 +7,7 @@ import {
   getWorkspaceAdapterEndpointFile,
   getWorkspaceChannelPaths,
 } from "../wechat/channel-config.ts";
+import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import type {
   BridgeAdapterState,
   BridgeEvent,
@@ -199,13 +200,16 @@ export function writeLocalCompanionEndpoint(
     ...serializeEndpoint(endpoint),
   };
 
-  fs.writeFileSync(
+  // Atomic writes: the endpoint files are rewritten on every adapter event
+  // while companions poll them concurrently; a torn write reads as JSON.parse
+  // failure → "no endpoint" → healthy bridges get restarted or duplicate
+  // clients launched.
+  writeJsonFileAtomic(
     getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind),
-    JSON.stringify(payload, null, 2),
-    "utf8",
+    payload,
   );
   if (options.writeLegacy !== false) {
-    fs.writeFileSync(endpointFile, JSON.stringify(payload, null, 2), "utf8");
+    writeJsonFileAtomic(endpointFile, payload);
   }
 }
 

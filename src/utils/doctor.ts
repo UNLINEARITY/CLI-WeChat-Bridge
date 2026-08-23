@@ -22,7 +22,12 @@ import {
   type DaemonEndpoint,
 } from "../daemon/daemon-link.ts";
 import { t } from "../i18n/index.ts";
-import { DEFAULT_BASE_URL, resolveChannelDataDir } from "../wechat/channel-config.ts";
+import {
+  DEFAULT_BASE_URL,
+  getWorkspaceAdapterEndpointFile,
+  getWorkspaceChannelPaths,
+  resolveChannelDataDir,
+} from "../wechat/channel-config.ts";
 
 const STATE_OK = "[ok]";
 const STATE_WARN = "[warn]";
@@ -710,6 +715,18 @@ async function appendEndpointSummary(
   }
 }
 
+function endpointFileState(filePath: string): "missing" | "corrupted" | "readable" {
+  if (!fs.existsSync(filePath)) {
+    return "missing";
+  }
+  try {
+    JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return "readable";
+  } catch {
+    return "corrupted";
+  }
+}
+
 async function appendWorkspaceEndpointLines(
   lines: string[],
   options: DoctorCliOptions,
@@ -723,6 +740,20 @@ async function appendWorkspaceEndpointLines(
     const endpoint = deps.readLocalCompanionEndpoint(options.cwd, adapter);
     if (endpoint) {
       seenEndpoints.add(`${endpoint.kind}:${endpoint.instanceId}:${endpoint.port}`);
+    } else if (
+      endpointFileState(getWorkspaceAdapterEndpointFile(options.cwd, adapter)) ===
+      "corrupted"
+    ) {
+      // A torn or otherwise unparsable endpoint file must not read as a
+      // healthy "none" — surface it so the operator knows to clear it.
+      lines.push(
+        row(
+          STATE_WARN,
+          msg("label.workspaceEndpoint", { adapter }),
+          msg("endpoint.corrupted"),
+        ),
+      );
+      continue;
     }
     await appendEndpointSummary(
       lines,
@@ -737,7 +768,16 @@ async function appendWorkspaceEndpointLines(
   const legacyEndpoint = deps.readLocalCompanionEndpoint(options.cwd);
   const legacyLabel = msg("label.legacyEndpoint");
   if (!legacyEndpoint) {
-    lines.push(row(STATE_OK, legacyLabel, msg("none")));
+    const legacyFileState = endpointFileState(
+      getWorkspaceChannelPaths(options.cwd).endpointFile,
+    );
+    lines.push(
+      row(
+        legacyFileState === "corrupted" ? STATE_WARN : STATE_OK,
+        legacyLabel,
+        legacyFileState === "corrupted" ? msg("endpoint.corrupted") : msg("none"),
+      ),
+    );
     return;
   }
 

@@ -17,6 +17,7 @@ import type {
   PendingUserInputRequest,
 } from "./bridge-types.ts";
 import { buildInstanceId } from "./bridge-utils.ts";
+import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import {
   getProcessRecordByPid,
   isWechatBridgeCommandLine,
@@ -479,13 +480,9 @@ export class BridgeStateStore {
   }
 
   private writeAtomicJsonFile(filePath: string, value: unknown): void {
-    ensureChannelDataDir();
-    const data = JSON.stringify(value, null, 2);
     // temp + rename so a crash mid-write cannot leave a truncated/half-written
     // state or lock file that would break the next launch or look like a stale lock.
-    const tempPath = `${filePath}.${process.pid}.tmp`;
-    fs.writeFileSync(tempPath, data, "utf-8");
-    fs.renameSync(tempPath, filePath);
+    writeJsonFileAtomic(filePath, value);
   }
 
   private save(): void {

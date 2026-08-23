@@ -12,6 +12,7 @@ import {
   migrateLegacyChannelFiles,
   SYNC_BUF_FILE,
 } from "./channel-config.ts";
+import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 
 export const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 
@@ -21,6 +22,7 @@ const RECENT_MESSAGE_CACHE_SIZE = 500;
 const BYTES_PER_MB = 1024 * 1024;
 const SEND_TIMEOUT_MS = 15_000;
 const INBOUND_DOWNLOAD_TIMEOUT_MS = 30_000;
+const CDN_UPLOAD_TIMEOUT_MS = 60_000;
 const CDN_MAX_RETRIES = 3;
 const ERROR_CAUSE_DEPTH_LIMIT = 4;
 const INBOUND_MESSAGE_CLAIM_TTL_MS = 10 * 60 * 1000;
@@ -564,13 +566,7 @@ export function classifyWechatTransportError(
 }
 
 function writeJsonFile(filePath: string, value: unknown): void {
-  ensureChannelDataDir();
-  const data = JSON.stringify(value, null, 2);
-  // Atomic write via temp file + rename, so a crash mid-write cannot leave a
-  // truncated/half-written JSON that would break readers on the next launch.
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, data, "utf-8");
-  fs.renameSync(tempPath, filePath);
+  writeJsonFileAtomic(filePath, value);
 }
 
 function randomWechatUin(): string {
@@ -614,9 +610,12 @@ async function apiFetch(params: {
       body: params.body,
       signal: controller.signal,
     });
-    clearTimeout(timer);
 
+    // Keep the abort timer armed until the body has been fully read: a server
+    // that sends headers and then stalls would otherwise leave res.text()
+    // pending forever, freezing the long-poll loop with no timeout at all.
     const text = await res.text();
+    clearTimeout(timer);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}: ${text}`);
     }
@@ -839,12 +838,18 @@ async function uploadBufferToCdn(params: {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= CDN_MAX_RETRIES; attempt += 1) {
+    // Abort guard mirrors the download path: without it a stalled CDN upload
+    // hangs the send queue forever (no timeout, no signal).
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), CDN_UPLOAD_TIMEOUT_MS);
     try {
       const res = await fetch(cdnUrl, {
         method: "POST",
         headers: { "Content-Type": "application/octet-stream" },
         body: new Uint8Array(ciphertext),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
       if (res.status >= 400 && res.status < 500) {
         const errMsg = res.headers.get("x-error-message") ?? (await res.text());
@@ -861,6 +866,7 @@ async function uploadBufferToCdn(params: {
       }
       break;
     } catch (err) {
+      clearTimeout(timer);
       lastError = err;
       if (err instanceof Error && err.message.includes("client error")) {
         throw err;

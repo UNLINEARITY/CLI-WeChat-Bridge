@@ -93,6 +93,8 @@ export const messages: Record<string, string> = {
   "doctor.mode.generic": "通用",
   "doctor.notSpecified": "(未指定)",
   "doctor.none": "无",
+  "doctor.endpoint.corrupted": "endpoint 文件存在但无法解析；下次成功写入时将被替换",
+
   "doctor.unknown": "未知",
   "doctor.yes": "是",
   "doctor.no": "否",
