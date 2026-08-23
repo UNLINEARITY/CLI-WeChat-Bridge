@@ -175,15 +175,15 @@ describe("forwardWechatFinalReply", () => {
     ]);
   });
 
-  test("keeps source code paths in text instead of auto-sending them as files", async () => {
+  test("sends referenced source files but keeps executables as text", async () => {
     const calls: string[] = [];
 
     await forwardWechatFinalReply({
       adapter: "codex",
       rawText: [
-        "Reference only:",
+        "Reference:",
         "`C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts`",
-        "Do not upload this file.",
+        "Built artifact: `C:\\Users\\unlin\\Desktop\\Github\\build\\app.exe`",
       ].join("\n"),
       sender: {
         sendText: async (text) => {
@@ -204,8 +204,11 @@ describe("forwardWechatFinalReply", () => {
       },
     });
 
+    // Source files are auto-sendable per the attachment policy; executables
+    // stay in the visible text as a plain reference.
     expect(calls).toEqual([
-      "text:Reference only:\n`C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts`\nDo not upload this file.",
+      "text:Reference:\n\nBuilt artifact: `C:\\Users\\unlin\\Desktop\\Github\\build\\app.exe`",
+      "file:C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts",
     ]);
   });
 

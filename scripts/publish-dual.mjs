@@ -12,7 +12,13 @@ const PACKAGE_JSON_PATH = path.join(REPO_ROOT, "package.json");
 const PRIMARY_PACKAGE_NAME = "cli-wechat-bridge";
 const COMPAT_PACKAGE_NAME = "@unlinearity/cli-wechat-bridge";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
-const MIRROR_FILES = ["bin", "dist", "README.md", "LICENSE.txt"];
+const MIRROR_FILES = [
+  "bin",
+  "dist",
+  "scripts/ensure-node-pty-permissions.mjs",
+  "README.md",
+  "LICENSE.txt",
+];
 const NPM_EXEC_PATH = process.env.npm_execpath;
 
 const NPM_COMMAND = NPM_EXEC_PATH
@@ -214,8 +220,15 @@ function createMirrorPackage(packageJson) {
     },
   };
 
+  // Drop dev scripts, but keep postinstall: it restores the node-pty
+  // spawn-helper execute bit (upstream tarballs ship 0644), and without it
+  // PTY-based adapters fail on macOS/Linux installs of the mirror package.
+  const postinstallScript = packageJson.scripts?.postinstall;
   delete mirrorPackageJson.scripts;
   delete mirrorPackageJson.devDependencies;
+  if (postinstallScript) {
+    mirrorPackageJson.scripts = { postinstall: postinstallScript };
+  }
 
   fs.writeFileSync(
     path.join(mirrorRoot, "package.json"),

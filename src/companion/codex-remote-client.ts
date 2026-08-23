@@ -21,6 +21,7 @@ import { CODEX_REMOTE_AUTH_TOKEN_ENV } from "../runtime/runtime-types.ts";
 type CodexRemoteClientCliOptions = {
   cwd: string;
   cliArgs: string[];
+  sessionStartMode?: "restore" | "new";
 };
 
 function log(message: string): void {
@@ -29,6 +30,7 @@ function log(message: string): void {
 
 export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
   let cwd = process.cwd();
+  let sessionStartMode: CodexRemoteClientCliOptions["sessionStartMode"];
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -41,9 +43,10 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Internal Codex client usage: npm run codex:panel -- [--cwd <path>] [...codex args]",
+          "Internal Codex client usage: npm run codex:panel -- [--cwd <path>] [--session-start-mode <restore|new>] [...codex args]",
           "",
           "Connects the visible native Codex client to the bridge runtime for the current directory.",
+          "Use --session-start-mode new to open the client without resuming the shared thread.",
           "Unknown arguments are forwarded to the Codex client.",
           "",
         ].join("\n"),
@@ -60,10 +63,19 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
       continue;
     }
 
+    if (arg === "--session-start-mode") {
+      if (next !== "restore" && next !== "new") {
+        throw new Error(`Invalid --session-start-mode value: ${next ?? "(missing)"}`);
+      }
+      sessionStartMode = next;
+      i += 1;
+      continue;
+    }
+
     cliArgs.push(arg);
   }
 
-  return { cwd, cliArgs };
+  return { cwd, cliArgs, sessionStartMode };
 }
 
 export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
@@ -85,7 +97,7 @@ export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
 
 export function buildRemoteCodexClientArgs(
   endpoint: LocalCompanionEndpoint,
-  options: { extraCliArgs?: string[] } = {},
+  options: { extraCliArgs?: string[]; sessionStartMode?: "restore" | "new" } = {},
 ): string[] {
   const extraCliArgs = options.extraCliArgs ?? [];
   assertNoReservedExtraCliArgs(
@@ -96,7 +108,10 @@ export function buildRemoteCodexClientArgs(
   const remoteUrl = endpoint.serverUrl ?? `ws://127.0.0.1:${endpoint.serverPort ?? endpoint.port}`;
   const args = buildCodexCliArgs(remoteUrl, {
     profile: endpoint.profile,
-    resumeThreadId: endpoint.sharedThreadId,
+    // "new" skips resume so the visible client opens a fresh Codex session
+    // instead of rejoining the shared thread.
+    resumeThreadId:
+      options.sessionStartMode === "new" ? undefined : endpoint.sharedThreadId,
   });
   const tokenEnvName = endpoint.remoteAuthTokenEnv ?? CODEX_REMOTE_AUTH_TOKEN_ENV;
   return [...args, "--remote-auth-token-env", tokenEnvName, ...extraCliArgs];
@@ -114,11 +129,12 @@ export function buildRemoteCodexClientEnv(
 
 export async function runCodexRemoteClientFromEndpoint(
   endpoint: LocalCompanionEndpoint,
-  options: { extraCliArgs?: string[] } = {},
+  options: { extraCliArgs?: string[]; sessionStartMode?: "restore" | "new" } = {},
 ): Promise<number> {
   const spawnTarget = resolveSpawnTarget(endpoint.command, "codex");
   const args = buildRemoteCodexClientArgs(endpoint, {
     extraCliArgs: options.extraCliArgs,
+    sessionStartMode: options.sessionStartMode,
   });
   const env = buildRemoteCodexClientEnv(endpoint);
 
@@ -166,6 +182,7 @@ export async function runCodexRemoteClient(
   const endpoint = readCodexRuntimeEndpoint(options.cwd);
   return await runCodexRemoteClientFromEndpoint(endpoint, {
     extraCliArgs: options.cliArgs,
+    sessionStartMode: options.sessionStartMode,
   });
 }
 

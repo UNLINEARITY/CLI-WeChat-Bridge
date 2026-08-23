@@ -104,45 +104,40 @@ const INLINE_VOICE_EXTENSIONS = new Set([
   ".ogg",
   ".aac",
 ]);
+// Directly executable / installer file types are never auto-uploaded from a
+// path mentioned in a reply: handing these to WeChat contacts by accident is
+// a real hazard. Everything else — source code, documents, archives, data
+// files — stays auto-sendable so common workflows keep working.
 const INLINE_REFERENCE_ONLY_FILE_EXTENSIONS = new Set([
+  // Windows binaries and installers
+  ".exe",
+  ".dll",
+  ".sys",
+  ".msi",
+  ".msp",
+  ".scr",
+  ".com",
+  ".pif",
+  ".cpl",
+  ".ocx",
+  ".hta",
+  ".jar",
+  // Windows one-click script launchers
   ".bat",
-  ".c",
-  ".cc",
-  ".cjs",
   ".cmd",
-  ".cpp",
-  ".cs",
-  ".cts",
-  ".cxx",
-  ".go",
-  ".h",
-  ".hh",
-  ".hpp",
-  ".java",
-  ".js",
-  ".jsx",
-  ".kt",
-  ".kts",
-  ".lua",
-  ".m",
-  ".mjs",
-  ".mm",
-  ".mts",
-  ".php",
-  ".pl",
   ".ps1",
-  ".psd1",
-  ".psm1",
-  ".py",
-  ".rb",
-  ".rs",
-  ".scala",
+  ".vbs",
+  ".vbe",
+  ".jse",
+  ".wsf",
+  ".wsh",
+  // Unix one-click script launchers and installable packages
   ".sh",
-  ".swift",
-  ".ts",
-  ".tsx",
-  ".vb",
-  ".zsh",
+  ".bash",
+  ".deb",
+  ".rpm",
+  ".apk",
+  ".dmg",
 ]);
 const INLINE_MAAS_URL_RE =
   /https?:\/\/[^\s]*?\/([A-Za-z]:\\.+?(?:\.\s*[A-Za-z0-9]{2,8})+)(?:\?[^\n]*)?/g;
@@ -985,7 +980,7 @@ export function sanitizeWechatFinalReplyText(
   return isOpenCodeReasoningResidue(resolved) ? "" : resolved;
 }
 
-function extractInlineWechatAttachments(text: string): ParsedWechatFinalReply {
+export function extractInlineWechatAttachments(text: string): ParsedWechatFinalReply {
   const sanitized = text
     .replace(/\\\n\s*/g, "\\")
     .replace(/\.\s*\n?\s*([A-Za-z0-9]{2,8})(?=\?)/g, ".$1")
@@ -1097,8 +1092,9 @@ function inferInlineWechatAttachmentKind(filePath: string): WechatAttachmentKind
     return "voice";
   }
 
-  // Keep ordinary local files auto-sendable, but avoid turning common
-  // source/script references in prose into unintended WeChat uploads.
+  // Ordinary local files stay auto-sendable; only directly executable /
+  // installer types are excluded so a path mentioned in prose cannot
+  // accidentally ship a runnable binary to a WeChat contact.
   if (!extension || INLINE_REFERENCE_ONLY_FILE_EXTENSIONS.has(extension)) {
     return null;
   }

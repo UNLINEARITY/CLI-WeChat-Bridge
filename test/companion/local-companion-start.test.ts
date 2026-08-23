@@ -209,6 +209,7 @@ describe("local-companion-start helpers", () => {
       {
         cwd: path.resolve("./tmp/project"),
         cliArgs: ["--yolo"],
+        sessionStartMode: "restore",
       },
     ]);
   });

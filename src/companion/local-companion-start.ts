@@ -156,7 +156,8 @@ export function decideLaunchAction(
     input.sessionStartMode === "new" &&
     (input.requestedAdapter === "claude" ||
       input.requestedAdapter === "opencode" ||
-      input.requestedAdapter === "pi")
+      input.requestedAdapter === "pi" ||
+      input.requestedAdapter === "codex")
   ) {
     return {
       kind: "start_bridge",
@@ -651,6 +652,7 @@ export async function runVisibleClient(
     return await (runners.codexRemoteClient ?? runCodexRemoteClient)({
       cwd: options.cwd,
       cliArgs: options.cliArgs,
+      sessionStartMode: options.sessionStartMode,
     });
   }
 

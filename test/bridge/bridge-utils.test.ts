@@ -11,6 +11,7 @@ import {
   buildWechatInboundPrompt,
   buildOneTimeCode,
   containsWechatOutboundAttachmentPath,
+  extractInlineWechatAttachments,
   shouldInjectWechatAttachmentPrompt,
   detectCliApproval,
   formatApprovalMessage,
@@ -582,23 +583,23 @@ describe("WeChat attachment reply protocol", () => {
     });
   });
 
-  test("does not auto-attach source code paths from ordinary text", () => {
-    expect(
-      parseWechatFinalReply(
-        [
-          "Reference only:",
-          "`C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts`",
-          "Do not upload this file.",
-        ].join("\n"),
-      ),
-    ).toEqual({
-      visibleText: [
-        "Reference only:",
+  test("auto-attaches referenced source files while excluding executables", () => {
+    const result = parseWechatFinalReply(
+      [
+        "Reference:",
         "`C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts`",
-        "Do not upload this file.",
+        "Built artifact: `C:\\Users\\unlin\\Desktop\\Github\\build\\app.exe`",
       ].join("\n"),
-      attachments: [],
-    });
+    );
+    // Source files stay auto-sendable per the inline attachment policy; only
+    // directly executable types are excluded.
+    expect(result.attachments).toEqual([
+      {
+        kind: "file",
+        path: "C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts",
+      },
+    ]);
+    expect(result.visibleText).toContain("app.exe");
   });
 
   test("extracts home-relative desktop paths from ordinary text", () => {
@@ -890,5 +891,24 @@ describe("adapter-aware message formatting", () => {
     expect(formatPendingApprovalReminder(pending, codexAdapterState)).toContain(
       "/confirm or /deny",
     );
+  });
+});
+
+describe("inline WeChat attachment extraction", () => {
+  test("keeps ordinary referenced files auto-sendable", () => {
+    const parsed = extractInlineWechatAttachments(
+      "Report saved to C:\\Users\\me\\Desktop\\notes.md and config at C:\\proj\\package.json; full doc: C:\\proj\\report.pdf",
+    );
+    expect(parsed.attachments.map((a) => a.kind)).toEqual(["file", "file", "file"]);
+    expect(parsed.visibleText).not.toContain("notes.md");
+  });
+
+  test("never auto-sends directly executable or installer types", () => {
+    const parsed = extractInlineWechatAttachments(
+      "Built C:\\proj\\app.exe and C:\\proj\\lib.dll; run setup C:\\proj\\install.bat or deploy.sh",
+    );
+    expect(parsed.attachments).toEqual([]);
+    // The rejected paths stay visible as plain text references.
+    expect(parsed.visibleText).toContain("app.exe");
   });
 });
