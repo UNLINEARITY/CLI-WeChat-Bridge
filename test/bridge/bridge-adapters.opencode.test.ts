@@ -1187,10 +1187,10 @@ describe("OpenCode session.error handling", () => {
 });
 
 /* ------------------------------------------------------------------ */
-/*  permission.updated handling                                        */
+/*  permission.asked handling                                        */
 /* ------------------------------------------------------------------ */
 
-describe("OpenCode permission.updated handling", () => {
+describe("OpenCode permission.asked handling", () => {
   function createPermissionAdapter() {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
@@ -1227,10 +1227,10 @@ describe("OpenCode permission.updated handling", () => {
   test("emits approval_required with one-time code", () => {
     const { events, internal } = createPermissionAdapter();
 
-    // Real SDK: EventPermissionUpdated = { type: "permission.updated", properties: Permission }
+    // Real SDK: EventPermissionAsked = { type: "permission.asked", properties: Permission }
     // Permission = { id, sessionID, title, type, metadata, ... }
     internal.handleSseEvent({
-      type: "permission.updated",
+      type: "permission.asked",
       properties: {
         id: "perm_123",
         sessionID: "session_perm_1",
@@ -1258,7 +1258,7 @@ describe("OpenCode permission.updated handling", () => {
     const { events, internal } = createPermissionAdapter();
 
     internal.handleSseEvent({
-      type: "permission.updated",
+      type: "permission.asked",
       properties: {
         id: "perm_alt_456",
         sessionID: "session_perm_1",
@@ -1280,7 +1280,7 @@ describe("OpenCode permission.updated handling", () => {
     const { events, internal } = createPermissionAdapter();
 
     internal.handleSseEvent({
-      type: "permission.updated",
+      type: "permission.asked",
       properties: { type: "bash" },
     });
 
@@ -1293,7 +1293,7 @@ describe("OpenCode permission.updated handling", () => {
     const { events, internal } = createPermissionAdapter();
 
     internal.handleSseEvent({
-      type: "permission.updated",
+      type: "permission.asked",
       properties: {
         id: "perm_789",
         sessionID: "session_perm_1",

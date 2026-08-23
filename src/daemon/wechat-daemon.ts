@@ -87,6 +87,7 @@ import {
   setBinding,
   type EmojiBindingsCommand,
 } from "./emoji-bindings.ts";
+import { formatResumeSessionList } from "../bridge/bridge-utils.ts";
 import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
@@ -1767,12 +1768,54 @@ class WechatDaemon {
           formatDaemonStatus(this.getStatus()),
         );
         return;
-      case "resume":
-        await this.queueWechatMessage(
-          message.senderId,
-          `WeChat /resume is disabled in daemon mode. Use /resume directly inside the visible ${activeSlot.adapter} terminal; WeChat will follow that local session.`,
-        );
+      case "resume": {
+        if (activeSlot.adapter !== "opencode") {
+          await this.queueWechatMessage(
+            message.senderId,
+            `WeChat /resume is disabled for ${activeSlot.adapter} in daemon mode. Use /resume directly inside the visible terminal; WeChat will follow that local session.`,
+          );
+          return;
+        }
+        if (command.type !== "resume") {
+          return;
+        }
+        try {
+          if (command.target) {
+            await activeSlot.runtime.resumeSession(command.target);
+            await this.queueWechatMessage(
+              message.senderId,
+              prefixDaemonAdapterMessage(
+                activeSlot.adapter,
+                `Resumed OpenCode session ${command.target}.`,
+              ),
+            );
+          } else {
+            const candidates = await activeSlot.runtime.listResumeSessions(8);
+            await this.queueWechatMessage(
+              message.senderId,
+              prefixDaemonAdapterMessage(
+                activeSlot.adapter,
+                formatResumeSessionList({
+                  adapter: activeSlot.adapter,
+                  candidates,
+                  currentSessionId: activeSlot.runtime.getState().sharedSessionId,
+                }),
+              ),
+            );
+          }
+        } catch (error) {
+          await this.queueWechatMessage(
+            message.senderId,
+            prefixDaemonAdapterMessage(
+              activeSlot.adapter,
+              `Failed to resume OpenCode session: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
+          );
+        }
         return;
+      }
       case "new_session":
         if (!activeSlot.runtime.createSession) {
           await this.queueWechatMessage(

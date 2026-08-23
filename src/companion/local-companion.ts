@@ -325,6 +325,14 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
             await adapter.resolveApproval(message.payload.action),
           );
           break;
+        case "submit_user_input":
+          sendResponse(
+            socket,
+            message.id,
+            true,
+            await adapter.submitUserInput(message.payload.answers),
+          );
+          break;
         case "dispose":
           sendResponse(socket, message.id, true);
           await closeCompanion(0, "bridge_dispose");

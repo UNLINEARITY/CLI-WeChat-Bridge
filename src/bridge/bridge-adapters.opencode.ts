@@ -1,4 +1,5 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 
 import {
   type AdapterOptions,
@@ -167,6 +168,8 @@ type SdkEventSubscription = {
 
 type NormalizedSdkEvent = {
   type: string;
+  /** Unique server-assigned frame id ("evt_..."), when the stream provides it. */
+  id?: string;
   properties?: unknown;
   data?: unknown;
   directory?: string;
@@ -232,6 +235,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private serverProcess: ChildProcess | null = null;
   private nativeProcess: ChildProcess | null = null;
   private serverPort = 0;
+  // Random per-instance password handed to `opencode serve` via
+  // OPENCODE_SERVER_PASSWORD. Without it the server accepts unauthenticated
+  // connections from any local process; the attach client inherits the env
+  // automatically, and the SDK/health calls send the matching Basic header.
+  private serverPassword: string | null = null;
   private client: OpenCodeSdkClient | null = null;
   private sseAbortController: AbortController | null = null;
   private sseLoopPromise: Promise<void> | null = null;
@@ -395,17 +403,58 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
-    void limit;
-    throw new Error(
-      'WeChat /resume is disabled in opencode mode. Use /session directly inside "wechat-opencode"; WeChat will follow the active local session.',
-    );
+    if (!this.client) {
+      return [];
+    }
+
+    let sessions: SdkSession[];
+    try {
+      sessions = this.unwrapOrThrow(await this.client.session.list()) ?? [];
+    } catch {
+      return [];
+    }
+
+    return sessions
+      .filter((session) => this.isCurrentDirectorySession(session))
+      .slice(0, limit)
+      .map((session) => {
+        const rawTime =
+          typeof session.time?.updated === "number"
+            ? session.time.updated
+            : typeof session.time?.created === "number"
+              ? session.time.created
+              : 0;
+        const updatedMs =
+          rawTime > 0 && rawTime < 1_000_000_000_000 ? rawTime * 1_000 : rawTime;
+        return {
+          sessionId: session.id,
+          title: session.title?.trim() || "untitled",
+          lastUpdatedAt: new Date(
+            updatedMs > 0 ? updatedMs : Date.now(),
+          ).toISOString(),
+          source: "opencode",
+        };
+      });
   }
 
   async resumeSession(sessionId: string): Promise<void> {
-    void sessionId;
-    throw new Error(
-      'WeChat /resume is disabled in opencode mode. Use /session directly inside "wechat-opencode"; WeChat will follow the active local session.',
-    );
+    if (!this.client) {
+      throw new Error("OpenCode is not running yet.");
+    }
+    const session = await this.getSessionForCurrentDirectory(sessionId, []);
+    if (!session) {
+      throw new Error(
+        `No OpenCode session ${sessionId} was found for ${this.options.cwd}.`,
+      );
+    }
+    this.switchSharedSession(session, {
+      source: "wechat",
+      reason: "wechat_resume",
+      notify: true,
+      clearTrackedTurn: true,
+      syncVisible: true,
+      forceVisibleSync: true,
+    });
   }
 
   async createSession(): Promise<void> {
@@ -635,6 +684,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async startServerProcess(): Promise<ChildProcess> {
     const env = buildCliEnvironment(this.options.kind);
+    this.serverPassword = randomBytes(24).toString("hex");
+    env.OPENCODE_SERVER_PASSWORD = this.serverPassword;
     const serverArgs = [
       "serve",
       "--port",
@@ -759,6 +810,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private buildNativeClientEnv(): Record<string, string> {
     const env = buildCliEnvironment(this.options.kind);
+    if (this.serverPassword) {
+      env.OPENCODE_SERVER_PASSWORD = this.serverPassword;
+    }
     if (this.activeSessionId) {
       env.OPENCODE_ROUTE = JSON.stringify({
         type: "session",
@@ -768,6 +822,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return env;
   }
 
+  private buildServerAuthHeaders(): Record<string, string> {
+    if (!this.serverPassword) {
+      return {};
+    }
+    const credentials = Buffer.from(
+      `opencode:${this.serverPassword}`,
+      "utf8",
+    ).toString("base64");
+    return { Authorization: `Basic ${credentials}` };
+  }
+
   private async createSdkClient(): Promise<void> {
     try {
       const { createOpencodeClient } = await import("@opencode-ai/sdk/v2");
@@ -775,6 +840,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         baseUrl: `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`,
         directory: this.options.cwd,
         experimental_workspaceID: this.activeWorkspaceId ?? undefined,
+        headers: this.buildServerAuthHeaders(),
       }) as unknown as OpenCodeSdkClient;
     } catch (err) {
       throw new Error(
@@ -797,6 +863,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     while (Date.now() < deadline) {
       try {
         const response = await fetch(`${baseUrl}/global/health`, {
+          headers: this.buildServerAuthHeaders(),
           signal: AbortSignal.timeout(OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS),
         });
         if (response.ok) {
@@ -837,7 +904,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     const major = Number(match[1]);
     const minor = Number(match[2]);
-    return major === 1 && minor >= 18;
+    return (
+      major >= 1 &&
+      major < OPENCODE_MAXIMUM_SUPPORTED_MAJOR &&
+      (major > 1 || minor >= 18)
+    );
   }
 
   private async initializeSessions(): Promise<void> {
@@ -1040,6 +1111,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         return this.normalizeGlobalSyncPayload(payload, rawEvent);
       }
       const normalized = { ...payload } as NormalizedSdkEvent;
+      if (typeof payload.id === "string") {
+        normalized.id = payload.id;
+      }
       if (typeof rawEvent.directory === "string") {
         normalized.directory = rawEvent.directory;
       }
@@ -1142,7 +1216,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         return;
       }
 
-      case "permission.updated":
+      // Note: only permission.asked exists in the OpenCode wire protocol;
+      // permission.updated was never emitted by the server.
       case "permission.asked": {
         this.handlePermissionRequest(payload);
         return;
@@ -1308,7 +1383,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    // properties: { sessionID: string, status: { type: "busy" | "idle" | ... } }
+    // properties: { sessionID, status: { type: "busy" | "idle" | "retry" | ... } }
+    // "retry" means the model call is being retried (attempt, message): the
+    // session is still working, so it must keep the busy state instead of
+    // letting WeChat messages race a retried turn.
     const status = properties.status;
     if (!isRecord(status)) {
       return;
@@ -1319,7 +1397,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    if (statusType === "busy" || statusType === "running") {
+    if (statusType === "busy" || statusType === "running" || statusType === "retry") {
       if (this.state.status === "idle") {
         this.outputBatcher.clear();
         this.clearStreamedPartState();
@@ -3056,8 +3134,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return true;
   }
 
+  // Fold both path separators to "/" so directory comparisons behave
+  // identically on Windows (backslash-native) and POSIX hosts.
   private normalizeDirectory(directory: string): string {
-    return directory.replace(/[\\/]+/g, "\\").replace(/\\$/, "").toLowerCase();
+    return directory.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
   }
 
   private recordSessionSwitch(
@@ -3261,20 +3341,37 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return false;
     }
 
+    // Frame-id keys identify one exact server event, so any repeat — even on
+    // the same stream (SSE replay) — is a duplicate; the wide TTL absorbs
+    // reconnect replays. Synthetic keys still rely on the narrow cross-stream
+    // window only, because they cannot distinguish a replay from a legitimate
+    // repeated payload.
+    const idKeyTtlMs = 30_000;
+    const isIdKey = key.startsWith("evt:");
+    const ttlMs = isIdKey ? idKeyTtlMs : OPENCODE_DUPLICATE_EVENT_TTL_MS;
+
     const now = Date.now();
-    const cutoff = now - OPENCODE_DUPLICATE_EVENT_TTL_MS;
     for (const [candidateKey, observed] of this.recentSdkEventObservations.entries()) {
-      if (observed.observedAtMs < cutoff) {
+      if (observed.observedAtMs < now - idKeyTtlMs) {
         this.recentSdkEventObservations.delete(candidateKey);
       }
     }
 
     const previous = this.recentSdkEventObservations.get(key);
     this.recentSdkEventObservations.set(key, { streamName, observedAtMs: now });
-    return Boolean(previous && previous.streamName !== streamName && previous.observedAtMs >= cutoff);
+    return Boolean(
+      previous &&
+        previous.observedAtMs >= now - ttlMs &&
+        (isIdKey || previous.streamName !== streamName),
+    );
   }
 
   private getDuplicateSdkEventKey(event: NormalizedSdkEvent): string | null {
+    // Exact frame ids (when the stream provides them) dedupe precisely.
+    if (typeof event.id === "string" && event.id) {
+      return `evt:${event.id}`;
+    }
+
     const type = this.normalizeEventType(event.type);
     const payload = this.extractEventPayload(event);
     if (!isRecord(payload)) {

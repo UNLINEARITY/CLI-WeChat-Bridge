@@ -267,8 +267,16 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     return ok ? 1 : 0;
   }
 
-  async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
-    return false;
+  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+    try {
+      const result = await this.sendRequest({
+        command: "submit_user_input",
+        answers,
+      });
+      return result === true;
+    } catch {
+      return false;
+    }
   }
 
   async dispose(): Promise<void> {

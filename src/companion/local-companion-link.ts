@@ -29,7 +29,8 @@ export type LocalCompanionCommand =
   | { command: "interrupt" }
   | { command: "reset" }
   | { command: "dispose" }
-  | { command: "resolve_approval"; action: "confirm" | "deny" };
+  | { command: "resolve_approval"; action: "confirm" | "deny" }
+  | { command: "submit_user_input"; answers: Record<string, string[]> };
 
 export type LocalCompanionCloseReason =
   | "bridge_dispose"

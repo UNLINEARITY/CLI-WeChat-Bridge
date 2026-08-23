@@ -49,6 +49,7 @@ import {
   formatPendingUserInputReminder,
   formatDuration,
   formatMirroredUserInputMessage,
+  formatResumeSessionList,
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
@@ -1329,10 +1330,32 @@ async function handleInboundMessage(params: {
         return null;
       }
       if (options.adapter === "opencode") {
-        await queueWechatMessage(
-          message.senderId,
-          'WeChat /resume is disabled in opencode mode. Use /resume directly inside "wechat-opencode"; WeChat will follow the active local session.',
-        );
+        try {
+          if (systemCommand.target) {
+            await adapter.resumeSession(systemCommand.target);
+            await queueWechatMessage(
+              message.senderId,
+              `Resumed OpenCode session ${systemCommand.target}.`,
+            );
+          } else {
+            const candidates = await adapter.listResumeSessions(8);
+            await queueWechatMessage(
+              message.senderId,
+              formatResumeSessionList({
+                adapter: options.adapter,
+                candidates,
+                currentSessionId: adapter.getState().sharedSessionId,
+              }),
+            );
+          }
+        } catch (error) {
+          await queueWechatMessage(
+            message.senderId,
+            `Failed to resume OpenCode session: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
         return null;
       }
 
