@@ -286,6 +286,21 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
+    if (this.pendingApproval) {
+      // The flush above answered the pending hook approval with an empty
+      // response, so the mirrored request is dead. Drop it — otherwise a
+      // later /confirm targets a deleted requestId and every new message is
+      // rejected by a stale "approval pending" state. Mirrors what the
+      // socket-close path does via handleClosedClaudeHookApproval.
+      this.pendingApproval = null;
+      this.state.pendingApproval = null;
+      this.state.pendingApprovalOrigin = undefined;
+    }
+    if (this.state.status === "awaiting_approval") {
+      // Return to busy so the interrupt settle path (guarded on busy) can
+      // complete the turn normally.
+      this.setStatus("busy");
+    }
     this.writeToPty("\u0003");
     this.scheduleTaskComplete(shared.INTERRUPT_SETTLE_DELAY_MS);
     return true;

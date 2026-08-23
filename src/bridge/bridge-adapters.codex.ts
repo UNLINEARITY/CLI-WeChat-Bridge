@@ -1726,7 +1726,20 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         return;
       }
 
-      this.resetTurnTracking({ preserveThread: true });
+      // Remember the interrupted turn as completed before resetting: the
+      // server may still deliver a late turn/completed for it, and without
+      // this entry it would be tracked as a brand-new local turn — emitting a
+      // duplicate task_complete (or a ghost reply) for work we already
+      // reported as interrupted.
+      const interruptedTurnId = this.activeTurn?.turnId;
+      this.resetTurnTracking({
+        preserveThread: true,
+        preserveCompletedTurns: true,
+      });
+      if (interruptedTurnId) {
+        this.rememberCompletedTurn(interruptedTurnId);
+        this.bridgeOwnedTurnIds.add(interruptedTurnId);
+      }
       this.setStatus("idle", "Codex task interrupted.");
       this.emit({
         type: "task_complete",
@@ -1785,7 +1798,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.clearInterruptTimer();
   }
 
-  private resetTurnTracking(options: { preserveThread: boolean }): void {
+  private resetTurnTracking(options: {
+    preserveThread: boolean;
+    /** Keep completed/bridge-owned turn dedup sets (interrupt fallback). */
+    preserveCompletedTurns?: boolean;
+  }): void {
     this.clearInterruptTimer();
     this.clearFinalReplyCompletionTimer();
     if (this.activeTurn) {
@@ -1805,9 +1822,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.turnErrorById.clear();
     this.turnLastActivityAtMs.clear();
     this.mirroredUserInputTurnIds.clear();
-    this.bridgeOwnedTurnIds.clear();
-    this.completedTurnIds.clear();
-    this.completedTurnOrder = [];
+    if (!options.preserveCompletedTurns) {
+      this.bridgeOwnedTurnIds.clear();
+      this.completedTurnIds.clear();
+      this.completedTurnOrder = [];
+    }
     this.pendingInjectedInputs = [];
     this.recentBridgeThreadSignalAtById.clear();
     this.sessionFinalText = null;

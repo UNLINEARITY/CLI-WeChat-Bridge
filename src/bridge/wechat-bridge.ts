@@ -111,6 +111,8 @@ type DeferredInboundMessage = {
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
 const PARENT_PROCESS_POLL_MS = 5_000;
+// Hard ceiling for the whole shutdown cleanup sequence before a forced exit.
+const SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 10_000;
 // Re-verify the parent's command line every N polls (5s each → ~60s) to keep
 // the full-process probe off the hot path.
 const PARENT_IDENTITY_CHECK_INTERVAL = 12;
@@ -687,7 +689,19 @@ async function main(): Promise<void> {
       return;
     }
     log(message);
-    void shutdown(exitCode).finally(() => process.exit(requestedExitCode));
+    // Bound the whole cleanup: a dispose that hangs (child process refusing
+    // to exit) would otherwise keep the process alive indefinitely after the
+    // one-shot signal handlers are consumed.
+    const forceExitTimer = setTimeout(() => {
+      logError(
+        `Shutdown cleanup exceeded ${formatDuration(SHUTDOWN_FORCE_EXIT_TIMEOUT_MS)}; forcing exit.`,
+      );
+      process.exit(requestedExitCode);
+    }, SHUTDOWN_FORCE_EXIT_TIMEOUT_MS);
+    void shutdown(exitCode).finally(() => {
+      clearTimeout(forceExitTimer);
+      process.exit(requestedExitCode);
+    });
   };
 
   process.once("SIGINT", () => {
@@ -793,6 +807,12 @@ async function main(): Promise<void> {
     await queueWechatMessage(credentials.userId, welcomeText);
 
     while (true) {
+      if (shutdownPromise) {
+        // Shutdown (e.g. SIGINT) was requested while we were awaiting the
+        // previous poll: stop consuming inbound messages instead of racing
+        // the concurrent cleanup/dispose with new sends.
+        break;
+      }
       if (!ensureRuntimeOwnership()) {
         break;
       }
@@ -826,7 +846,7 @@ async function main(): Promise<void> {
         continue;
       }
 
-      if (!ensureRuntimeOwnership()) {
+      if (shutdownPromise || !ensureRuntimeOwnership()) {
         break;
       }
 
