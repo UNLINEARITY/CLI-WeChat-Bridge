@@ -70,6 +70,11 @@ type SdkSession = {
   share?: { url: string };
 };
 
+type SdkSessionStatus =
+  | { type: "idle" }
+  | { type: "busy" }
+  | { type: "retry"; attempt?: number; message?: string; next?: number };
+
 type SdkPart = {
   id: string;
   sessionID: string;
@@ -86,6 +91,7 @@ type SdkMessageRecord = {
 type OpenCodeSdkClient = {
   session: {
     list(parameters?: Record<string, unknown>): Promise<SdkResult<SdkSession[]>>;
+    status(parameters?: Record<string, unknown>): Promise<SdkResult<Record<string, SdkSessionStatus>>>;
     create(parameters?: Record<string, unknown>): Promise<SdkResult<SdkSession>>;
     get(parameters: {
       sessionID: string;
@@ -404,42 +410,67 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
     if (!this.client) {
-      return [];
+      throw new Error("OpenCode is not running yet.");
     }
 
-    let sessions: SdkSession[];
     try {
-      sessions = this.unwrapOrThrow(await this.client.session.list()) ?? [];
-    } catch {
-      return [];
-    }
+      const sessions =
+        this.unwrapOrThrow(
+          await this.client.session.list({
+            directory: this.options.cwd,
+            workspace: this.activeWorkspaceId ?? undefined,
+            roots: true,
+            limit: Math.max(1, limit),
+          }),
+        ) ?? [];
 
-    return sessions
-      .filter((session) => this.isCurrentDirectorySession(session))
-      .slice(0, limit)
-      .map((session) => {
-        const rawTime =
-          typeof session.time?.updated === "number"
-            ? session.time.updated
-            : typeof session.time?.created === "number"
-              ? session.time.created
-              : 0;
-        const updatedMs =
-          rawTime > 0 && rawTime < 1_000_000_000_000 ? rawTime * 1_000 : rawTime;
-        return {
-          sessionId: session.id,
-          title: session.title?.trim() || "untitled",
-          lastUpdatedAt: new Date(
-            updatedMs > 0 ? updatedMs : Date.now(),
-          ).toISOString(),
-          source: "opencode",
-        };
+      return sessions
+        .filter(
+          (session) =>
+            !session.parentID && this.isCurrentDirectorySession(session),
+        )
+        .sort((left, right) => right.time.updated - left.time.updated)
+        .slice(0, limit)
+        .map((session) => {
+          const rawTime =
+            typeof session.time?.updated === "number"
+              ? session.time.updated
+              : typeof session.time?.created === "number"
+                ? session.time.created
+                : 0;
+          const updatedMs =
+            rawTime > 0 && rawTime < 1_000_000_000_000 ? rawTime * 1_000 : rawTime;
+          return {
+            sessionId: session.id,
+            title: session.title?.trim() || "untitled",
+            lastUpdatedAt: new Date(
+              updatedMs > 0 ? updatedMs : Date.now(),
+            ).toISOString(),
+            source: "opencode",
+          };
+        });
+    } catch (error) {
+      throw new Error(`Failed to list OpenCode sessions: ${describeUnknownError(error)}`, {
+        cause: error,
       });
+    }
   }
 
   async resumeSession(sessionId: string): Promise<void> {
     if (!this.client) {
       throw new Error("OpenCode is not running yet.");
+    }
+    if (this.pendingPermission) {
+      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+    }
+    if (this.pendingQuestion) {
+      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+    }
+    if (this.state.status === "busy") {
+      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.state.status !== "idle") {
+      throw new Error(`OpenCode cannot switch sessions while its status is ${this.state.status}.`);
     }
     const session = await this.getSessionForCurrentDirectory(sessionId, []);
     if (!session) {
@@ -447,13 +478,27 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         `No OpenCode session ${sessionId} was found for ${this.options.cwd}.`,
       );
     }
+
+    const sessionStatuses = this.unwrapOrThrow(
+      await this.client.session.status({
+        workspace: session.workspaceID ?? this.activeWorkspaceId ?? undefined,
+      }),
+    );
+    const targetStatus = sessionStatuses[session.id];
+    if (targetStatus && targetStatus.type !== "idle") {
+      const statusLabel = targetStatus.type === "retry" ? "retrying" : "busy";
+      throw new Error(
+        `OpenCode session ${session.id} is still ${statusLabel}. Wait for it to become idle before resuming it.`,
+      );
+    }
+
+    await this.selectVisibleSessionForResume(session);
     this.switchSharedSession(session, {
       source: "wechat",
       reason: "wechat_resume",
       notify: true,
       clearTrackedTurn: true,
-      syncVisible: true,
-      forceVisibleSync: true,
+      syncVisible: false,
     });
   }
 
@@ -1244,6 +1289,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         return;
       }
 
+      case "session.deleted": {
+        this.handleSessionDeleted(payload);
+        return;
+      }
+
       case "message.updated": {
         // Full message update — not used for incremental text extraction.
         // Text output comes from message.part.updated events.
@@ -1287,7 +1337,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
       case "session.diff":
       case "session.diff.delta":
-      case "session.deleted":
       case "message.removed":
       case "permission.replied":
       case "tui.toast.show":
@@ -1748,6 +1797,34 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     const session = this.extractSessionReference(properties);
     this.syncTrackedSessionFromEvent(session, { allowLocalTurnFollow: false });
+  }
+
+  private handleSessionDeleted(properties: unknown): void {
+    if (!isRecord(properties)) {
+      return;
+    }
+
+    const sessionId = this.extractSessionId(properties);
+    if (!sessionId || sessionId !== this.activeSessionId) {
+      return;
+    }
+
+    this.clearTrackedTurnForLocalSessionSwitch();
+    this.activeSessionId = null;
+    this.state.sharedSessionId = undefined;
+    this.state.sharedThreadId = undefined;
+    this.state.activeRuntimeSessionId = undefined;
+    this.suppressedTuiSessionSelect = null;
+    if (this.state.status !== "idle") {
+      this.setStatus("idle");
+    } else {
+      this.emit({
+        type: "status",
+        status: "idle",
+        message: "The active OpenCode session was deleted locally.",
+        timestamp: nowIso(),
+      });
+    }
   }
 
   private handleMessageUpdated(properties: unknown): void {
@@ -2941,6 +3018,39 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         workspaceID: this.activeWorkspaceId ?? undefined,
       },
       { force: options.force, retry: options.retry },
+    );
+  }
+
+  private async selectVisibleSessionForResume(
+    session: { id: string; workspaceID?: string },
+  ): Promise<void> {
+    if (!this.client?.tui || this.options.renderMode !== "companion") {
+      throw new Error("The visible OpenCode companion is not connected.");
+    }
+
+    this.suppressedTuiSessionSelect = {
+      sessionId: session.id,
+      setAtMs: Date.now(),
+    };
+    let lastError: unknown;
+    for (const delayMs of [0, ...OPENCODE_TUI_SELECT_RETRY_DELAYS_MS]) {
+      if (delayMs > 0) {
+        await delay(delayMs);
+      }
+      try {
+        await this.sendVisibleSessionSelection(session);
+        return;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (this.suppressedTuiSessionSelect?.sessionId === session.id) {
+      this.suppressedTuiSessionSelect = null;
+    }
+    throw new Error(
+      `Failed to switch the visible OpenCode session: ${describeUnknownError(lastError)}`,
+      { cause: lastError },
     );
   }
 

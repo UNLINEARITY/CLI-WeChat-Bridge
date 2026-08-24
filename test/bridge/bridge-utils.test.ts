@@ -827,10 +827,10 @@ describe("formatResumeSessionList", () => {
       currentSessionId: "session_1",
     });
 
-    expect(output).toContain("Recent sessions:");
+    expect(output).toContain("Recent Claude sessions:");
     expect(output).toContain("session_1");
     expect(output).toContain("[current]");
-    expect(output).toContain("/resume <sessionId>");
+    expect(output).toContain("/resume <unique-id-prefix>");
   });
 });
 

@@ -762,6 +762,21 @@ export function formatSessionSwitchMessage(params: {
     }
   }
 
+  if (params.adapter === "pi") {
+    switch (params.reason) {
+      case "local_follow":
+      case "local_session_fallback":
+      case "local_turn":
+        return `Pi session switched to ${shortSessionId} from the local terminal.`;
+      case "wechat_resume":
+        return `Pi session switched to ${shortSessionId} from WeChat.`;
+      case "startup_restore":
+        return `Pi restored shared session ${shortSessionId} on startup.`;
+      default:
+        return `Pi session switched to ${shortSessionId}.`;
+    }
+  }
+
   switch (params.reason) {
     case "local_follow":
     case "local_session_fallback":
@@ -800,11 +815,19 @@ export function formatResumeSessionList(params: {
       ? "No saved Codex threads were found for this working directory."
       : adapter === "opencode"
         ? "No saved OpenCode sessions were found for this working directory."
-        : "No saved sessions were found for this working directory.";
+        : adapter === "pi"
+          ? "No saved Pi sessions were found for this working directory."
+          : "No saved Claude sessions were found for this working directory.";
   }
 
-  const title = adapter === "codex" ? "Recent Codex threads:" : adapter === "opencode" ? "Recent OpenCode sessions:" : "Recent sessions:";
-  const resumeTargetLabel = adapter === "codex" ? "threadId" : "sessionId";
+  const title =
+    adapter === "codex"
+      ? "Recent Codex threads:"
+      : adapter === "opencode"
+        ? "Recent OpenCode sessions:"
+        : adapter === "pi"
+          ? "Recent Pi sessions:"
+          : "Recent Claude sessions:";
   return [
     title,
     ...candidates.map((candidate, index) => {
@@ -812,7 +835,7 @@ export function formatResumeSessionList(params: {
         currentSessionId && candidate.sessionId === currentSessionId ? " [current]" : "";
       return `${index + 1}. ${candidate.title} (${candidate.lastUpdatedAt}, ${candidate.sessionId.slice(0, 12)})${marker}`;
     }),
-    `Reply with /resume <number> or /resume <${resumeTargetLabel}>.`,
+    "Reply with /resume <number> or /resume <unique-id-prefix>.",
   ].join("\n");
 }
 

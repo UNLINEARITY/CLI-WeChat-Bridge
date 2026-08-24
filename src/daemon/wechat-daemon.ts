@@ -57,6 +57,11 @@ import {
   truncatePreview,
 } from "../bridge/bridge-utils.ts";
 import {
+  ResumeSessionCoordinator,
+  isWechatResumeEnabled,
+  shouldForwardSessionSwitchEvent,
+} from "../bridge/bridge-session-resume.ts";
+import {
   WECHAT_SEND_MAX_ATTEMPTS,
   computeWechatSendRetryDelayMs,
   formatUserFacingBridgeFatalError,
@@ -87,7 +92,6 @@ import {
   setBinding,
   type EmojiBindingsCommand,
 } from "./emoji-bindings.ts";
-import { formatResumeSessionList } from "../bridge/bridge-utils.ts";
 import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
@@ -141,6 +145,7 @@ type DaemonSlot = {
   outputBatcher: OutputBatcher;
   pendingConfirmations: PendingApproval[];
   pendingUserInput: PendingUserInputRequest | null;
+  resumeCoordinator: ResumeSessionCoordinator;
   activeTask: ActiveTask | null;
   lastOutputAt: number;
 };
@@ -1289,6 +1294,10 @@ class WechatDaemon {
       }),
       pendingConfirmations: [],
       pendingUserInput: null,
+      resumeCoordinator: new ResumeSessionCoordinator({
+        adapter,
+        runtime,
+      }),
       activeTask: null,
       lastOutputAt: 0,
     };
@@ -1471,7 +1480,10 @@ class WechatDaemon {
         appendDaemonLog(
           `session_switched: adapter=${slot.adapter} session=${event.sessionId} source=${event.source} reason=${event.reason}`,
         );
-        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
+        if (
+          shouldForwardSessionSwitchEvent(event.reason) &&
+          shouldForwardBridgeEventToWechat(slot.adapter, event.type)
+        ) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
             await this.queueWechatMessage(
               this.authorizedUserId,
@@ -1493,7 +1505,10 @@ class WechatDaemon {
         appendDaemonLog(
           `thread_switched: adapter=${slot.adapter} thread=${event.threadId} source=${event.source} reason=${event.reason}`,
         );
-        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
+        if (
+          shouldForwardSessionSwitchEvent(event.reason) &&
+          shouldForwardBridgeEventToWechat(slot.adapter, event.type)
+        ) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
             await this.queueWechatMessage(
               this.authorizedUserId,
@@ -1769,48 +1784,31 @@ class WechatDaemon {
         );
         return;
       case "resume": {
-        if (activeSlot.adapter !== "opencode") {
+        if (!isWechatResumeEnabled(activeSlot.adapter)) {
           await this.queueWechatMessage(
             message.senderId,
             `WeChat /resume is disabled for ${activeSlot.adapter} in daemon mode. Use /resume directly inside the visible terminal; WeChat will follow that local session.`,
           );
           return;
         }
-        if (command.type !== "resume") {
-          return;
-        }
         try {
           if (command.target) {
-            await activeSlot.runtime.resumeSession(command.target);
-            await this.queueWechatMessage(
-              message.senderId,
-              prefixDaemonAdapterMessage(
-                activeSlot.adapter,
-                `Resumed OpenCode session ${command.target}.`,
-              ),
-            );
-          } else {
-            const candidates = await activeSlot.runtime.listResumeSessions(8);
-            await this.queueWechatMessage(
-              message.senderId,
-              prefixDaemonAdapterMessage(
-                activeSlot.adapter,
-                formatResumeSessionList({
-                  adapter: activeSlot.adapter,
-                  candidates,
-                  currentSessionId: activeSlot.runtime.getState().sharedSessionId,
-                }),
-              ),
-            );
+            await activeSlot.outputBatcher.flushNow();
           }
+          const result = await activeSlot.resumeCoordinator.execute(command.target);
+          if (result.kind === "resumed") {
+            activeSlot.activeTask = null;
+          }
+          await this.queueWechatMessage(
+            message.senderId,
+            prefixDaemonAdapterMessage(activeSlot.adapter, result.message),
+          );
         } catch (error) {
           await this.queueWechatMessage(
             message.senderId,
             prefixDaemonAdapterMessage(
               activeSlot.adapter,
-              `Failed to resume OpenCode session: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
+              error instanceof Error ? error.message : String(error),
             ),
           );
         }
@@ -1828,6 +1826,7 @@ class WechatDaemon {
         activeSlot.outputBatcher.clear();
         activeSlot.pendingConfirmations = [];
         activeSlot.pendingUserInput = null;
+        activeSlot.resumeCoordinator.clear();
         await activeSlot.runtime.createSession();
         appendDaemonLog(`new_session: adapter=${activeSlot.adapter}`);
         return;
@@ -1849,6 +1848,7 @@ class WechatDaemon {
         activeSlot.outputBatcher.clear();
         activeSlot.pendingConfirmations = [];
         activeSlot.pendingUserInput = null;
+        activeSlot.resumeCoordinator.clear();
         await activeSlot.runtime.reset();
         appendDaemonLog(`reset: adapter=${activeSlot.adapter}`);
         await this.queueWechatMessage(

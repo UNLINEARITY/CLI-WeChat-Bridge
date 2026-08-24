@@ -313,13 +313,14 @@ wechat-claude --model sonnet --dangerously-skip-permissions
 | `/stop` | 中断当前任务 |
 | `/reset` | 重建当前本地会话 |
 | `/new` 或 `/new-session` | OpenCode 或 Pi 模式下新建 session |
+| `/resume` / `/resume <编号或 ID 前缀>` | OpenCode 或 Pi 模式下列出并恢复当前工作目录的最近 session；编号在列表显示后 5 分钟内有效 |
 | `/confirm` / `/deny` | 处理 CLI 权限请求；需要一次性 code 的请求会在消息中提示具体确认格式 |
 | `/daemon-stop` | daemon 模式下停止常驻进程 |
 | `/bindings` | 查看当前所有表情绑定 |
 | `/bind [表情] /命令` | 绑定表情到指定命令 |
 | `/unbind [表情]` | 解除指定表情的绑定 |
 
-说明：微信侧 `/resume` 目前暂时保持禁用；需要切换 Codex / Claude / OpenCode / Pi 会话时，优先在本地 companion 中使用 `/new` 或对应 CLI 的会话命令，微信会跟随本地活动会话。
+说明：微信侧 `/resume` 当前支持 OpenCode 和 Pi，并且只列出 daemon/bridge 启动目录内的最近 session。实际恢复会等待当前任务进入 idle；有任务、审批或待回答问题时请先处理，或使用 `/stop`。Codex 和 Claude Code 暂时仍需在可见 companion 中执行各自的 `/resume`，微信会继续跟随本地活动会话。
 
 ### 表情绑定
 

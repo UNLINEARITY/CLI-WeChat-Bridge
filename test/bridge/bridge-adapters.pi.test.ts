@@ -361,4 +361,120 @@ describe("Pi TUI lifecycle", () => {
     extensionSocket?.destroy();
     expect(killedPids).toEqual([4242]);
   });
+
+  test("resumes a verified same-workspace session through the visible extension", async () => {
+    const cwd = makeTempDirectory();
+    const sessionDir = makeTempDirectory();
+    const sessionPath = path.join(sessionDir, "target.jsonl");
+    fs.writeFileSync(
+      sessionPath,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "pi-session-target",
+        cwd,
+      })}\n`,
+      "utf8",
+    );
+    const previousSessionDir = process.env.PI_CODING_AGENT_SESSION_DIR;
+    process.env.PI_CODING_AGENT_SESSION_DIR = sessionDir;
+
+    const child = new FakePiProcess();
+    const commands: Array<Record<string, unknown>> = [];
+    const events: BridgeEvent[] = [];
+    let extensionSocket: net.Socket | null = null;
+    const adapter = new PiTuiAdapter(
+      {
+        kind: "pi",
+        command: "pi",
+        cwd,
+        renderMode: "companion",
+      },
+      {
+        spawnProcess: ((_file: string, _args: string[], options: Record<string, unknown>) => {
+          const env = options.env as Record<string, string>;
+          const socket = net.connect({
+            host: "127.0.0.1",
+            port: Number(env.CLI_BRIDGE_PI_TUI_PORT),
+          });
+          extensionSocket = socket;
+          socket.once("connect", () => {
+            socket.write(
+              `${JSON.stringify({ type: "hello", token: env.CLI_BRIDGE_PI_TUI_TOKEN })}\n`,
+            );
+          });
+          attachPiTuiJsonlReader(
+            socket,
+            (frame) => {
+              commands.push(frame);
+              socket.write(
+                `${JSON.stringify({
+                  type: "response",
+                  id: frame.id,
+                  success: true,
+                  data: {
+                    cancelled: false,
+                    sessionId: "pi-session-target",
+                    sessionFile: sessionPath,
+                  },
+                })}\n`,
+              );
+            },
+            () => undefined,
+          );
+          return child;
+        }) as never,
+        killProcessTree: () => undefined,
+      },
+    );
+    adapter.setEventSink((event) => events.push(event));
+
+    try {
+      await adapter.start();
+      await waitForCondition(() => adapter.getState().status === "idle");
+      extensionSocket?.write(
+        `${JSON.stringify({
+          type: "session_state",
+          sessionId: "pi-session-current",
+          sessionFile: path.join(sessionDir, "current.jsonl"),
+        })}\n`,
+      );
+      await waitForCondition(
+        () => adapter.getState().sharedSessionId === "pi-session-current",
+      );
+
+      await adapter.resumeSession("pi-session-target");
+
+      expect(commands).toContainEqual(
+        expect.objectContaining({
+          type: "switch_session",
+          sessionPath,
+          sessionId: "pi-session-target",
+          cwd,
+        }),
+      );
+      expect(adapter.getState().sharedSessionId).toBe("pi-session-target");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session_switched",
+          sessionId: "pi-session-target",
+          source: "wechat",
+          reason: "wechat_resume",
+        }),
+      );
+
+      fs.rmSync(sessionPath);
+      await expect(adapter.resumeSession("pi-session-target")).rejects.toThrow(
+        "Pi session not found for this workspace",
+      );
+    } finally {
+      await adapter.dispose();
+      extensionSocket?.destroy();
+      if (previousSessionDir === undefined) {
+        delete process.env.PI_CODING_AGENT_SESSION_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_SESSION_DIR = previousSessionDir;
+      }
+    }
+  });
 });

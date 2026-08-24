@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 
 type PiSessionManager = {
   getSessionFile(): string | undefined;
@@ -46,6 +48,8 @@ type BridgeCommand = {
   type?: string;
   text?: string;
   sessionPath?: string;
+  sessionId?: string;
+  cwd?: string;
 };
 
 const BRIDGE_HOST = "127.0.0.1";
@@ -170,8 +174,43 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
         return;
       }
       try {
+        if (!context.isIdle()) {
+          throw new Error("Pi TUI is already processing a turn.");
+        }
+        let request: { sessionPath?: unknown; sessionId?: unknown; cwd?: unknown };
+        try {
+          request = JSON.parse(parsed.value) as {
+            sessionPath?: unknown;
+            sessionId?: unknown;
+            cwd?: unknown;
+          };
+        } catch {
+          throw new Error("The Pi session switch request is malformed.");
+        }
+        if (
+          typeof request.sessionPath !== "string" ||
+          typeof request.sessionId !== "string" ||
+          typeof request.cwd !== "string" ||
+          !fs.existsSync(request.sessionPath)
+        ) {
+          throw new Error("The requested Pi session is no longer available.");
+        }
+        const firstLine = fs
+          .readFileSync(request.sessionPath, "utf8")
+          .split(/\r?\n/)
+          .find((line) => line.trim());
+        const header = firstLine ? JSON.parse(firstLine) as unknown : null;
+        if (
+          !isRecord(header) ||
+          header.type !== "session" ||
+          header.id !== request.sessionId ||
+          typeof header.cwd !== "string" ||
+          path.resolve(header.cwd) !== path.resolve(request.cwd)
+        ) {
+          throw new Error("The requested Pi session no longer matches this workspace.");
+        }
         let sessionState: Record<string, unknown> = {};
-        const result = await context.switchSession(parsed.value, {
+        const result = await context.switchSession(request.sessionPath, {
           withSession: async (nextContext) => {
             writeSessionState(nextContext, "resume");
             sessionState = {
@@ -215,10 +254,19 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
       } else if (
         command.type === "switch_session" &&
         typeof command.id === "string" &&
-        typeof command.sessionPath === "string"
+        typeof command.sessionPath === "string" &&
+        typeof command.sessionId === "string" &&
+        typeof command.cwd === "string"
       ) {
+        if (!latestContext?.isIdle()) {
+          throw new Error("Pi TUI is already processing a turn.");
+        }
         pi.sendUserMessage(
-          `/${INTERNAL_SWITCH_COMMAND} ${command.id} ${command.sessionPath}`,
+          `/${INTERNAL_SWITCH_COMMAND} ${command.id} ${JSON.stringify({
+            sessionPath: command.sessionPath,
+            sessionId: command.sessionId,
+            cwd: command.cwd,
+          })}`,
           { expandPromptTemplates: true },
         );
       }

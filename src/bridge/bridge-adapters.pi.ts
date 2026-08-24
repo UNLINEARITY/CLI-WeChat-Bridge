@@ -408,9 +408,19 @@ export class PiTuiAdapter implements BridgeAdapter {
     if (!sessionPath) {
       throw new Error(`Pi session not found for this workspace: ${sessionId}`);
     }
+    const verifiedSession = summarizePiSessionFile(sessionPath, this.options.cwd);
+    if (!verifiedSession || verifiedSession.sessionId !== sessionId) {
+      throw new Error(
+        `Pi session changed or became unavailable before it could be resumed: ${sessionId}`,
+      );
+    }
     this.pendingSessionSwitch = { source: "wechat", reason: "wechat_resume" };
     try {
-      const response = await this.sendCommand("switch_session", { sessionPath });
+      const response = await this.sendCommand("switch_session", {
+        sessionPath,
+        sessionId,
+        cwd: this.options.cwd,
+      });
       this.applySessionState(response.data, "wechat", "wechat_resume", true);
       if (isRecord(response.data) && response.data.cancelled === true) {
         throw new Error("Pi session switch was cancelled by an extension.");

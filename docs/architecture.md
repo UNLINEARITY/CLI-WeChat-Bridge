@@ -162,6 +162,8 @@ pi --approve --extension <bridge-extension>
   /new / resume → extension command context.newSession() / switchSession()
 ```
 
+微信 `/resume` 在 OpenCode 和 Pi 中使用同一套控制语义：首次调用列出当前工作目录最近 8 个根 session，并保存 5 分钟的编号快照；随后可用编号、完整 ID 或唯一 ID 前缀恢复。编号解析位于共享 bridge 控制层，adapter 只接收经过解析的真实 session ID。实际切换必须处于 idle 且没有待处理审批或用户输入；OpenCode 先等待 `tui.selectSession` 成功再提交 shared session，Pi 以 extension `switchSession()` 的响应和 session state 作为确认。
+
 可见 companion 托管唯一 Pi TUI 子进程，本地键盘和微信输入共享同一 session。微信 turn 才会生成微信 `final_reply`；本地 turn 保持在原生 TUI 中，并只向 bridge 镜像必要的输入和会话状态，避免把本地回答误发给微信。
 
 ### 权限与交互

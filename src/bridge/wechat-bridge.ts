@@ -10,6 +10,11 @@ import { t } from "../i18n/index.ts";
 import { BridgeController } from "./bridge-controller.ts";
 import { forwardWechatFinalReply } from "./bridge-final-reply.ts";
 import {
+  ResumeSessionCoordinator,
+  isWechatResumeEnabled,
+  shouldForwardSessionSwitchEvent,
+} from "./bridge-session-resume.ts";
+import {
   WECHAT_SEND_MAX_ATTEMPTS,
   computeWechatSendRetryDelayMs,
   formatUserFacingBridgeFatalError,
@@ -49,7 +54,6 @@ import {
   formatPendingUserInputReminder,
   formatDuration,
   formatMirroredUserInputMessage,
-  formatResumeSessionList,
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
@@ -427,6 +431,10 @@ async function main(): Promise<void> {
       stateStore.getState().sharedSessionId ?? stateStore.getState().sharedThreadId,
     initialResumeConversationId: stateStore.getState().resumeConversationId,
     initialTranscriptPath: stateStore.getState().transcriptPath,
+  });
+  const resumeCoordinator = new ResumeSessionCoordinator({
+    adapter: options.adapter,
+    runtime: adapter,
   });
   const controller = new BridgeController(adapter, options.cwd);
   controller.clearLocalClientEndpoint();
@@ -891,8 +899,12 @@ async function main(): Promise<void> {
             options,
             stateStore,
             adapter,
+            resumeCoordinator,
             queueWechatMessage,
             outputBatcher,
+            clearActiveTask: () => {
+              activeTask = null;
+            },
             deferInboundMessage: async (nextMessage) => {
               deferredInboundMessages.push({
                 message: nextMessage,
@@ -1137,7 +1149,10 @@ function wireAdapterEvents(params: {
         stateStore.appendLog(
           `session_switched: ${event.sessionId} source=${event.source} reason=${event.reason}`,
         );
-        if (shouldForwardBridgeEventToWechat(options.adapter, event.type)) {
+        if (
+          shouldForwardSessionSwitchEvent(event.reason) &&
+          shouldForwardBridgeEventToWechat(options.adapter, event.type)
+        ) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(
               authorizedUserId,
@@ -1156,7 +1171,10 @@ function wireAdapterEvents(params: {
         stateStore.appendLog(
           `thread_switched: ${event.threadId} source=${event.source} reason=${event.reason}`,
         );
-        if (shouldForwardBridgeEventToWechat(options.adapter, event.type)) {
+        if (
+          shouldForwardSessionSwitchEvent(event.reason) &&
+          shouldForwardBridgeEventToWechat(options.adapter, event.type)
+        ) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(
               authorizedUserId,
@@ -1235,12 +1253,14 @@ async function handleInboundMessage(params: {
   options: BridgeCliOptions;
   stateStore: BridgeStateStore;
   adapter: BridgeAdapter;
+  resumeCoordinator: ResumeSessionCoordinator;
   queueWechatMessage: (
     senderId: string,
     text: string,
     context?: WechatSendContext,
   ) => Promise<boolean>;
   outputBatcher: OutputBatcher;
+  clearActiveTask: () => void;
   deferInboundMessage: (message: InboundWechatMessage) => Promise<void>;
 }): Promise<ActiveTask | null> {
   let {
@@ -1250,8 +1270,10 @@ async function handleInboundMessage(params: {
     options,
     stateStore,
     adapter,
+    resumeCoordinator,
     queueWechatMessage,
     outputBatcher,
+    clearActiveTask,
     deferInboundMessage,
   } = params;
   const state = stateStore.getState();
@@ -1315,54 +1337,28 @@ async function handleInboundMessage(params: {
       );
       return null;
     case "resume": {
-      if (options.adapter === "codex") {
+      if (!isWechatResumeEnabled(options.adapter)) {
         await queueWechatMessage(
           message.senderId,
-          'WeChat /resume is disabled in codex mode. Use /resume directly inside "wechat-codex"; WeChat will follow the active local thread.',
+          `WeChat /resume is disabled in ${options.adapter} mode. Use /resume directly inside "wechat-${options.adapter}"; WeChat will follow the active local session.`,
         );
         return null;
       }
-      if (options.adapter === "claude") {
-        await queueWechatMessage(
-          message.senderId,
-          'WeChat /resume is disabled in claude mode. Use /resume directly inside "wechat-claude"; WeChat will follow the active local session.',
-        );
-        return null;
-      }
-      if (options.adapter === "opencode") {
-        try {
-          if (systemCommand.target) {
-            await adapter.resumeSession(systemCommand.target);
-            await queueWechatMessage(
-              message.senderId,
-              `Resumed OpenCode session ${systemCommand.target}.`,
-            );
-          } else {
-            const candidates = await adapter.listResumeSessions(8);
-            await queueWechatMessage(
-              message.senderId,
-              formatResumeSessionList({
-                adapter: options.adapter,
-                candidates,
-                currentSessionId: adapter.getState().sharedSessionId,
-              }),
-            );
-          }
-        } catch (error) {
-          await queueWechatMessage(
-            message.senderId,
-            `Failed to resume OpenCode session: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
+      try {
+        if (systemCommand.target) {
+          await outputBatcher.flushNow();
         }
-        return null;
+        const result = await resumeCoordinator.execute(systemCommand.target);
+        if (result.kind === "resumed") {
+          clearActiveTask();
+        }
+        await queueWechatMessage(message.senderId, result.message);
+      } catch (error) {
+        await queueWechatMessage(
+          message.senderId,
+          error instanceof Error ? error.message : String(error),
+        );
       }
-
-      await queueWechatMessage(
-        message.senderId,
-        `/resume is not available in ${options.adapter} mode.`,
-      );
       return null;
     }
     case "new_session": {
@@ -1378,6 +1374,7 @@ async function handleInboundMessage(params: {
       stateStore.clearPendingConfirmation();
       stateStore.clearPendingUserInput();
       stateStore.clearSharedSessionId();
+      resumeCoordinator.clear();
       await adapter.createSession();
       stateStore.appendLog(`New ${options.adapter} session requested by owner.`);
       return null;
@@ -1398,6 +1395,7 @@ async function handleInboundMessage(params: {
       stateStore.clearPendingConfirmation();
       stateStore.clearPendingUserInput();
       stateStore.clearSharedSessionId();
+      resumeCoordinator.clear();
       await adapter.reset();
       stateStore.appendLog("Worker reset by owner.");
       await queueWechatMessage(message.senderId, "Worker session has been reset.");

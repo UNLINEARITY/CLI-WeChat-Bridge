@@ -1,11 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 
 import piTuiBridgeExtension from "../../src/companion/pi-tui-bridge-extension.ts";
 
 type PiExtensionApi = Parameters<typeof piTuiBridgeExtension>[0];
 type PiEventHandler = Parameters<PiExtensionApi["on"]>[1];
 type PiExtensionContext = Parameters<PiEventHandler>[1];
+type PiCommandHandler = Parameters<PiExtensionApi["registerCommand"]>[1]["handler"];
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -21,7 +25,9 @@ async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<voi
 describe("Pi TUI bridge extension", () => {
   test("queues bridge commands until Pi publishes its session context", async () => {
     const handlers = new Map<string, PiEventHandler>();
+    const registeredCommands = new Map<string, PiCommandHandler>();
     const sentMessages: string[] = [];
+    const switchedSessionPaths: string[] = [];
     const frames: Record<string, unknown>[] = [];
     let clientSocket: net.Socket | null = null;
     let buffer = "";
@@ -58,8 +64,9 @@ describe("Pi TUI bridge extension", () => {
     process.env.CLI_BRIDGE_PI_TUI_PORT = String(address.port);
     process.env.CLI_BRIDGE_PI_TUI_TOKEN = "test-token";
 
+    let idle = true;
     const context: PiExtensionContext = {
-      isIdle: () => true,
+      isIdle: () => idle,
       abort: () => undefined,
       sessionManager: {
         getSessionId: () => "pi-session-new",
@@ -70,6 +77,7 @@ describe("Pi TUI bridge extension", () => {
         return { cancelled: false };
       },
       switchSession: async (_sessionPath, options) => {
+        switchedSessionPaths.push(_sessionPath);
         await options?.withSession?.(context);
         return { cancelled: false };
       },
@@ -78,7 +86,9 @@ describe("Pi TUI bridge extension", () => {
     try {
       piTuiBridgeExtension({
         on: (event, handler) => handlers.set(event, handler),
-        registerCommand: () => undefined,
+        registerCommand: (name, options) => {
+          registeredCommands.set(name, options.handler);
+        },
         sendUserMessage: (content) => sentMessages.push(content),
       });
 
@@ -104,6 +114,71 @@ describe("Pi TUI bridge extension", () => {
           success: true,
         }),
       );
+
+      idle = false;
+      clientSocket?.write(
+        `${JSON.stringify({
+          id: "switch-while-busy",
+          type: "switch_session",
+          sessionPath: "C:\\pi\\old-session.jsonl",
+          sessionId: "pi-session-old",
+          cwd: "C:\\pi",
+        })}\n`,
+      );
+      await waitFor(() => frames.some((frame) => frame.id === "switch-while-busy"));
+      expect(sentMessages).toEqual(["hello"]);
+      expect(frames).toContainEqual(
+        expect.objectContaining({
+          type: "response",
+          id: "switch-while-busy",
+          success: false,
+          error: "Pi TUI is already processing a turn.",
+        }),
+      );
+
+      idle = true;
+      const sessionCwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-extension-resume-"));
+      const sessionPath = path.join(sessionCwd, "session.jsonl");
+      fs.writeFileSync(
+        sessionPath,
+        `${JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "pi-session-old",
+          cwd: sessionCwd,
+        })}\n`,
+        "utf8",
+      );
+      try {
+        clientSocket?.write(
+          `${JSON.stringify({
+            id: "switch-valid",
+            type: "switch_session",
+            sessionPath,
+            sessionId: "pi-session-old",
+            cwd: sessionCwd,
+          })}\n`,
+        );
+        await waitFor(() => sentMessages.length === 2);
+        const switchCommand = sentMessages[1] ?? "";
+        const commandPrefix = "/__cli_bridge_switch ";
+        expect(switchCommand.startsWith(commandPrefix)).toBe(true);
+        const handler = registeredCommands.get("__cli_bridge_switch");
+        expect(handler).toBeDefined();
+        await handler?.(switchCommand.slice(commandPrefix.length), context);
+        await waitFor(() => frames.some((frame) => frame.id === "switch-valid"));
+
+        expect(switchedSessionPaths).toEqual([sessionPath]);
+        expect(frames).toContainEqual(
+          expect.objectContaining({
+            type: "response",
+            id: "switch-valid",
+            success: true,
+          }),
+        );
+      } finally {
+        fs.rmSync(sessionCwd, { recursive: true, force: true });
+      }
     } finally {
       clientSocket?.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));

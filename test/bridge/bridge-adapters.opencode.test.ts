@@ -3386,6 +3386,325 @@ describe("OpenCode dispose", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/*  WeChat session resume                                              */
+/* ------------------------------------------------------------------ */
+
+describe("OpenCode WeChat session resume", () => {
+  test("lists recent root sessions with explicit directory routing", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const listParameters: Record<string, unknown>[] = [];
+    const older = createSdkSessionRecord("ses_older", { title: "Older" });
+    older.time.updated = 1_000;
+    const newer = createSdkSessionRecord("ses_newer", { title: "Newer" });
+    newer.time.updated = 2_000;
+    const child = {
+      ...createSdkSessionRecord("ses_child"),
+      parentID: "ses_newer",
+    };
+    const internal = adapter as unknown as {
+      client: unknown;
+    };
+    internal.client = {
+      session: {
+        list: async (parameters: Record<string, unknown>) => {
+          listParameters.push(parameters);
+          return {
+            data: [older, child, newer],
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    const candidates = await adapter.listResumeSessions(8);
+
+    expect(listParameters).toEqual([
+      {
+        directory: process.cwd(),
+        workspace: undefined,
+        roots: true,
+        limit: 8,
+      },
+    ]);
+    expect(candidates.map((candidate) => candidate.sessionId)).toEqual([
+      "ses_newer",
+      "ses_older",
+    ]);
+  });
+
+  test("reports session listing failures instead of returning an empty list", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as { client: unknown };
+    internal.client = {
+      session: {
+        list: async () => ({
+          data: undefined,
+          error: new Error("authentication failed"),
+          request: {},
+          response: {},
+        }),
+      },
+    };
+
+    await expect(adapter.listResumeSessions()).rejects.toThrow(
+      "Failed to list OpenCode sessions: SDK error: authentication failed",
+    );
+  });
+
+  test("rejects resume while the active OpenCode turn is busy", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      client: unknown;
+      state: { status: string };
+    };
+    internal.client = {};
+    internal.state.status = "busy";
+
+    await expect(adapter.resumeSession("ses_target")).rejects.toThrow(
+      "OpenCode is still working",
+    );
+  });
+
+  test("requires pending approvals and questions to be settled before resume", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      client: unknown;
+      state: { status: string };
+      pendingPermission: unknown;
+      pendingQuestion: unknown;
+    };
+    internal.client = {};
+    internal.state.status = "awaiting_approval";
+    internal.pendingPermission = {};
+
+    await expect(adapter.resumeSession("ses_target")).rejects.toThrow(
+      "An OpenCode approval request is pending",
+    );
+
+    internal.pendingPermission = null;
+    internal.pendingQuestion = {};
+    internal.state.status = "awaiting_input";
+    await expect(adapter.resumeSession("ses_target")).rejects.toThrow(
+      "OpenCode is waiting for user input",
+    );
+  });
+
+  test("checks target status and commits shared state only after visible selection", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const selectedSessionIds: string[] = [];
+    const events: Array<{ type: string; sessionId?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as { type: string; sessionId?: string; reason?: string });
+    });
+    const target = createSdkSessionRecord("ses_target");
+    const internal = adapter as unknown as {
+      client: unknown;
+      activeSessionId: string | null;
+      state: {
+        status: string;
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+      };
+    };
+    internal.activeSessionId = "ses_current";
+    internal.state.status = "idle";
+    internal.state.sharedSessionId = "ses_current";
+    internal.state.sharedThreadId = "ses_current";
+    internal.state.activeRuntimeSessionId = "ses_current";
+    internal.client = {
+      session: {
+        get: async () => ({
+          data: target,
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+        status: async () => ({
+          data: { ses_target: { type: "idle" } },
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+      },
+      tui: {
+        selectSession: async (parameters: { sessionID?: string }) => {
+          selectedSessionIds.push(parameters.sessionID ?? "");
+          expect(internal.state.sharedSessionId).toBe("ses_current");
+          return {
+            data: true,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    await adapter.resumeSession("ses_target");
+
+    expect(selectedSessionIds).toEqual(["ses_target"]);
+    expect(adapter.getState()).toEqual(
+      expect.objectContaining({
+        status: "idle",
+        sharedSessionId: "ses_target",
+        activeRuntimeSessionId: "ses_target",
+      }),
+    );
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "ses_target",
+        reason: "wechat_resume",
+      }),
+    ]);
+  });
+
+  test("keeps the current session when visible selection fails", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const target = createSdkSessionRecord("ses_target");
+    const internal = adapter as unknown as {
+      client: unknown;
+      activeSessionId: string | null;
+      state: {
+        status: string;
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+      };
+      selectVisibleSessionForResume: () => Promise<void>;
+    };
+    internal.activeSessionId = "ses_current";
+    internal.state.status = "idle";
+    internal.state.sharedSessionId = "ses_current";
+    internal.state.sharedThreadId = "ses_current";
+    internal.client = {
+      session: {
+        get: async () => ({
+          data: target,
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+        status: async () => ({
+          data: { ses_target: { type: "idle" } },
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+      },
+    };
+    internal.selectVisibleSessionForResume = async () => {
+      throw new Error("visible selection failed");
+    };
+
+    await expect(adapter.resumeSession("ses_target")).rejects.toThrow(
+      "visible selection failed",
+    );
+    expect(internal.activeSessionId).toBe("ses_current");
+    expect(internal.state.sharedSessionId).toBe("ses_current");
+  });
+
+  test("rejects a target session that is still retrying", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const target = createSdkSessionRecord("ses_target");
+    const internal = adapter as unknown as {
+      client: unknown;
+      state: { status: string };
+    };
+    internal.state.status = "idle";
+    internal.client = {
+      session: {
+        get: async () => ({
+          data: target,
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+        status: async () => ({
+          data: { ses_target: { type: "retry", attempt: 2 } },
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+      },
+    };
+
+    await expect(adapter.resumeSession("ses_target")).rejects.toThrow(
+      "is still retrying",
+    );
+  });
+
+  test("clears stale shared state when the active session is deleted", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      activeSessionId: string | null;
+      state: {
+        status: string;
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+      };
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+    internal.activeSessionId = "ses_deleted";
+    internal.state.status = "idle";
+    internal.state.sharedSessionId = "ses_deleted";
+    internal.state.sharedThreadId = "ses_deleted";
+    internal.state.activeRuntimeSessionId = "ses_deleted";
+
+    internal.handleSseEvent({
+      type: "session.deleted",
+      properties: { info: { id: "ses_deleted" } },
+    });
+
+    expect(internal.activeSessionId).toBeNull();
+    expect(internal.state.sharedSessionId).toBeUndefined();
+    expect(internal.state.sharedThreadId).toBeUndefined();
+    expect(internal.state.activeRuntimeSessionId).toBeUndefined();
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /*  Shared utilities                                                   */
 /* ------------------------------------------------------------------ */
 
