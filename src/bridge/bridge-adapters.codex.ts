@@ -17,6 +17,7 @@ import {
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import * as shared from "./bridge-adapters.shared.ts";
+import { requestCodexVisibleThreadSwitch } from "../companion/codex-visible-client-link.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   CODEX_REMOTE_AUTH_TOKEN_ENV,
@@ -44,6 +45,9 @@ type CodexPendingThreadAnnouncement = {
   reason: BridgeThreadSwitchReason;
   signals: Set<CodexThreadAnnouncementSignal>;
   timer: ReturnType<typeof setTimeout> | null;
+};
+type CodexPendingVisibleResume = {
+  targetThreadId: string;
 };
 
 const {
@@ -96,6 +100,56 @@ const {
 const CODEX_LOCAL_THREAD_ANNOUNCE_SETTLE_MS = 150;
 const CODEX_NON_BLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
 
+function getCodexThreadStatusType(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  return isRecord(value) && typeof value.type === "string" ? value.type : null;
+}
+
+function getCodexThreadTitle(thread: Record<string, unknown>): string {
+  const name = typeof thread.name === "string" ? normalizeOutput(thread.name).trim() : "";
+  const preview =
+    typeof thread.preview === "string" ? normalizeOutput(thread.preview).trim() : "";
+  const threadId = typeof thread.id === "string" ? thread.id : "";
+  return truncatePreview(name || preview || `Codex thread ${threadId.slice(0, 8)}`, 120);
+}
+
+export function buildCodexResumeCandidatesFromThreadList(
+  response: unknown,
+  cwd: string,
+  limit: number,
+): BridgeResumeSessionCandidate[] {
+  if (!isRecord(response) || !Array.isArray(response.data)) {
+    throw new Error("Codex returned an invalid thread/list response.");
+  }
+  const currentCwd = normalizeComparablePath(cwd);
+  return response.data
+    .filter((thread): thread is Record<string, unknown> => isRecord(thread))
+    .filter((thread) => typeof thread.id === "string")
+    .filter((thread) => {
+      const threadCwd = typeof thread.cwd === "string" ? thread.cwd : "";
+      return threadCwd && normalizeComparablePath(threadCwd) === currentCwd;
+    })
+    .filter((thread) => typeof thread.parentThreadId !== "string")
+    .map((thread) => {
+      const updatedAt =
+        typeof thread.updatedAt === "number" && Number.isFinite(thread.updatedAt)
+          ? thread.updatedAt * 1_000
+          : 0;
+      const threadId = thread.id as string;
+      return {
+        sessionId: threadId,
+        threadId,
+        title: getCodexThreadTitle(thread),
+        lastUpdatedAt: new Date(updatedAt).toISOString(),
+        source: "codex",
+      } satisfies BridgeResumeSessionCandidate;
+    })
+    .sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt))
+    .slice(0, Math.max(1, limit));
+}
+
 export class CodexPtyAdapter extends AbstractPtyAdapter {
   readonly runtimeKind = "codex_runtime_host" as const;
 
@@ -123,6 +177,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private pendingTurnThreadId: string | null = null;
   private interruptPendingTurnStart = false;
   private pendingThreadFollowId: string | null = null;
+  private pendingVisibleResume: CodexPendingVisibleResume | null = null;
   private pendingApprovalRequests: CodexPendingApprovalRequest[] = [];
   private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
   private pendingUserInputTimer: ReturnType<typeof setTimeout> | null = null;
@@ -269,16 +324,19 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
+    if (this.usesRpcTurnTransport()) {
+      return await this.listAppServerResumeSessions(limit);
+    }
     return listCodexResumeSessions(this.options.cwd, limit);
   }
 
   override async resumeSession(threadId: string): Promise<void> {
-    if (this.isNativePanelMode()) {
+    if (!this.isHeadlessRuntimeMode()) {
       throw new Error(
-        'WeChat /resume is disabled in codex mode. Use /resume directly inside "wechat-codex"; WeChat will follow the active local thread.',
+        'WeChat /resume requires the managed "wechat-codex" visible client.',
       );
     }
-    await this.resumeSharedThread(threadId);
+    await this.resumeVisibleSharedThread(threadId);
   }
 
   override async interrupt(): Promise<boolean> {
@@ -413,6 +471,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       profile: this.options.profile,
       sharedSessionId: this.state.sharedSessionId,
       sharedThreadId: this.state.sharedThreadId,
+      codexVisibleThreadId: this.state.sharedThreadId,
       resumeConversationId: this.state.resumeConversationId,
       transcriptPath: this.state.transcriptPath,
       startedAt: this.state.startedAt ?? nowIso(),
@@ -785,7 +844,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         return;
       }
 
-      if (!this.activeTurn || this.activeTurn.threadId === candidate.threadId) {
+      if (
+        !this.activeTurn ||
+        this.activeTurn.threadId === candidate.threadId ||
+        this.activeTurn.origin === "wechat"
+      ) {
         this.trackLocalSharedThread(candidate.threadId, {
           reason: "local_session_fallback",
           signal: "session_fallback",
@@ -1627,6 +1690,179 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
   }
 
+  private async listAppServerResumeSessions(
+    limit: number,
+  ): Promise<BridgeResumeSessionCandidate[]> {
+    const boundedLimit = Math.max(1, Math.min(100, limit));
+    const baseParams = {
+      limit: boundedLimit,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+      sourceKinds: ["cli", "vscode"],
+      archived: false,
+      cwd: this.options.cwd,
+    };
+
+    try {
+      const fastResponse = await this.sendRpcRequest("thread/list", {
+        ...baseParams,
+        useStateDbOnly: true,
+      });
+      const fastCandidates = buildCodexResumeCandidatesFromThreadList(
+        fastResponse,
+        this.options.cwd,
+        boundedLimit,
+      );
+      if (fastCandidates.length > 0) {
+        return fastCandidates;
+      }
+    } catch {
+      // Older supported app-server builds may not understand useStateDbOnly.
+      // The scan-and-repair request below is also the authoritative fallback.
+    }
+
+    const response = await this.sendRpcRequest("thread/list", baseParams);
+    return buildCodexResumeCandidatesFromThreadList(
+      response,
+      this.options.cwd,
+      boundedLimit,
+    );
+  }
+
+  private validateCodexResumeThread(
+    response: unknown,
+    targetThreadId: string,
+  ): Record<string, unknown> {
+    if (!isRecord(response) || !isRecord(response.thread)) {
+      throw new Error("Codex returned an invalid thread response.");
+    }
+    const thread = response.thread;
+    if (thread.id !== targetThreadId) {
+      throw new Error(
+        `Codex opened ${String(thread.id)}, expected ${targetThreadId}.`,
+      );
+    }
+    if (
+      typeof thread.cwd !== "string" ||
+      normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)
+    ) {
+      throw new Error(`Codex thread ${targetThreadId} does not belong to ${this.options.cwd}.`);
+    }
+    if (typeof thread.parentThreadId === "string") {
+      throw new Error(`Codex thread ${targetThreadId} is a subagent thread and cannot be resumed.`);
+    }
+    if (thread.ephemeral === true) {
+      throw new Error(`Codex thread ${targetThreadId} is ephemeral and cannot be resumed.`);
+    }
+    if (getCodexThreadStatusType(thread.status) === "active") {
+      throw new Error(
+        `Codex thread ${targetThreadId} is still active. Stop its running task before resuming it from WeChat.`,
+      );
+    }
+    return thread;
+  }
+
+  private async resumeVisibleSharedThread(threadId: string): Promise<void> {
+    const targetThreadId = threadId.trim();
+    if (!targetThreadId) {
+      throw new Error("A thread id is required to resume a Codex thread.");
+    }
+    if (this.pendingVisibleResume) {
+      throw new Error("Codex is already switching visible threads.");
+    }
+    if (this.pendingApproval || this.pendingApprovalRequests.length > 0) {
+      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
+    }
+    if (this.pendingUserInputRequest || this.state.pendingUserInput) {
+      throw new Error("Codex is waiting for user input. Reply with /answer or use /stop.");
+    }
+    if (
+      this.pendingTurnStart ||
+      this.activeTurn ||
+      this.state.status === "busy" ||
+      this.state.status === "awaiting_approval" ||
+      this.state.status === "awaiting_input"
+    ) {
+      throw new Error("codex is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.state.status !== "idle") {
+      throw new Error(`Codex cannot switch threads while its status is ${this.state.status}.`);
+    }
+
+    const readResponse = await this.sendRpcRequest("thread/read", {
+      threadId: targetThreadId,
+      includeTurns: false,
+    });
+    this.validateCodexResumeThread(readResponse, targetThreadId);
+
+    const previousThreadId = this.sharedThreadId;
+    let targetSubscribed = false;
+    this.pendingVisibleResume = { targetThreadId };
+    this.setStatus("starting", `Switching Codex to thread ${targetThreadId.slice(0, 12)}...`);
+
+    try {
+      this.rememberBridgeOwnedThreadSignal(targetThreadId);
+      const resumeResponse = await this.sendRpcRequest("thread/resume", {
+        threadId: targetThreadId,
+        approvalPolicy: "on-request",
+        approvalsReviewer: "user",
+        sandbox: "workspace-write",
+        excludeTurns: true,
+      });
+      targetSubscribed = true;
+      this.validateCodexResumeThread(resumeResponse, targetThreadId);
+      this.subscribedThreadIds.add(targetThreadId);
+
+      const visibleThreadId = await this.switchVisibleCodexThread(targetThreadId);
+      if (visibleThreadId !== targetThreadId) {
+        throw new Error(
+          `The visible Codex client opened ${visibleThreadId}, expected ${targetThreadId}.`,
+        );
+      }
+
+      this.sessionFilePath = null;
+      this.sessionReadOffset = 0;
+      this.sessionPartialLine = "";
+      this.sessionFinalText = null;
+      this.pendingThreadFollowId = null;
+      this.updateSharedThread(targetThreadId, {
+        source: "wechat",
+        reason: "wechat_resume",
+        notify: true,
+      });
+      this.setStatus("idle");
+
+      if (previousThreadId && previousThreadId !== targetThreadId) {
+        await this.unsubscribeCodexThreadBestEffort(previousThreadId);
+      }
+    } catch (error) {
+      if (targetSubscribed && targetThreadId !== previousThreadId) {
+        await this.unsubscribeCodexThreadBestEffort(targetThreadId);
+      }
+      this.setStatus("idle");
+      throw error;
+    } finally {
+      this.pendingVisibleResume = null;
+    }
+  }
+
+  private async switchVisibleCodexThread(threadId: string): Promise<string> {
+    return await requestCodexVisibleThreadSwitch({
+      cwd: this.options.cwd,
+      instanceId: this.localClientInstanceId,
+      threadId,
+    });
+  }
+
+  private async unsubscribeCodexThreadBestEffort(threadId: string): Promise<void> {
+    try {
+      await this.sendRpcRequest("thread/unsubscribe", { threadId });
+      this.subscribedThreadIds.delete(threadId);
+    } catch {
+      // A failed unsubscribe must not undo an otherwise successful visible switch.
+    }
+  }
+
   private async resumeSharedThread(
     threadId: string,
     options: { startup?: boolean } = {},
@@ -1990,6 +2226,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       signal: CodexThreadAnnouncementSignal;
     },
   ): void {
+    if (this.pendingVisibleResume) {
+      return;
+    }
+
+    this.interruptWechatTurnForLocalThreadSwitch(threadId);
+
     if (!this.isNativePanelMode()) {
       this.updateSharedThread(threadId, {
         source: "local",
@@ -2036,6 +2278,40 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.schedulePendingThreadAnnouncement();
+  }
+
+  private interruptWechatTurnForLocalThreadSwitch(nextThreadId: string): void {
+    const activeTurn = this.activeTurn;
+    if (
+      !activeTurn ||
+      activeTurn.origin !== "wechat" ||
+      activeTurn.threadId === nextThreadId
+    ) {
+      return;
+    }
+
+    const interruptedTurnId = activeTurn.turnId;
+    void this.sendRpcRequest("turn/interrupt", {
+      threadId: activeTurn.threadId,
+      turnId: interruptedTurnId,
+    }).catch(() => undefined);
+
+    this.clearInterruptTimer();
+    this.clearFinalReplyCompletionTimerForTurn(interruptedTurnId);
+    this.clearPendingApprovalState();
+    this.clearPendingUserInputState();
+    this.pendingThreadFollowId = null;
+    this.cleanupTurnArtifacts(interruptedTurnId);
+    this.rememberCompletedTurn(interruptedTurnId);
+    this.bridgeOwnedTurnIds.add(interruptedTurnId);
+    this.setActiveTurn(null);
+    this.setStatus("idle");
+    this.emit({
+      type: "task_failed",
+      message:
+        "The active WeChat task was interrupted because the local Codex terminal switched threads.",
+      timestamp: nowIso(),
+    });
   }
 
   private rememberBridgeOwnedThreadSignal(threadId: string): void {
@@ -2675,7 +2951,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    if (!this.activeTurn || this.activeTurn.threadId === threadId) {
+    if (
+      !this.activeTurn ||
+      this.activeTurn.threadId === threadId ||
+      this.activeTurn.origin === "wechat"
+    ) {
       this.trackLocalSharedThread(threadId, {
         reason: "local_follow",
         signal: "status_changed",
@@ -2704,7 +2984,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       }
     }
 
-    if (!this.activeTurn || this.activeTurn.threadId === threadId) {
+    if (
+      !this.activeTurn ||
+      this.activeTurn.threadId === threadId ||
+      this.activeTurn.origin === "wechat"
+    ) {
       this.trackLocalSharedThread(threadId, {
         reason: "local_follow",
         signal: "thread_started",
@@ -2725,7 +3009,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       trackedTurn.origin === "local" &&
       trackedTurn.threadId !== this.sharedThreadId
     ) {
-      if (!this.activeTurn || this.activeTurn.threadId === trackedTurn.threadId) {
+      if (
+        !this.activeTurn ||
+        this.activeTurn.threadId === trackedTurn.threadId ||
+        this.activeTurn.origin === "wechat"
+      ) {
         this.trackLocalSharedThread(trackedTurn.threadId, {
           reason: "local_turn",
           signal: "turn_started",

@@ -141,6 +141,12 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
     serverUrl: typeof record.serverUrl === "string" ? record.serverUrl : undefined,
     remoteAuthTokenEnv:
       typeof record.remoteAuthTokenEnv === "string" ? record.remoteAuthTokenEnv : undefined,
+    codexControlPort:
+      typeof record.codexControlPort === "number" ? record.codexControlPort : undefined,
+    codexControlToken:
+      typeof record.codexControlToken === "string" ? record.codexControlToken : undefined,
+    codexVisibleThreadId:
+      typeof record.codexVisibleThreadId === "string" ? record.codexVisibleThreadId : undefined,
     cwd: record.cwd,
     command: record.command,
     profile: typeof record.profile === "string" ? record.profile : undefined,
@@ -296,6 +302,9 @@ export function clearLocalCompanionOccupancy(
       companionStatus: undefined,
       companionLastStateAt: undefined,
       companionWorkerPid: undefined,
+      codexControlPort: undefined,
+      codexControlToken: undefined,
+      codexVisibleThreadId: undefined,
     });
   } catch {
     // Best effort cleanup.
@@ -359,6 +368,36 @@ export function updateLocalCompanionOccupancy(
     });
   } catch {
     // Best effort cleanup.
+  }
+}
+
+export function updateCodexVisibleControl(
+  cwd: string,
+  patch: {
+    codexControlPort?: number;
+    codexControlToken?: string;
+    codexVisibleThreadId?: string;
+  },
+  instanceId?: string,
+): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
+    if (!endpoint || endpoint.kind !== "codex") {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      codexControlPort: patch.codexControlPort,
+      codexControlToken: patch.codexControlToken,
+      codexVisibleThreadId: patch.codexVisibleThreadId,
+    });
+  } catch {
+    // Best effort visible Codex control metadata update.
   }
 }
 

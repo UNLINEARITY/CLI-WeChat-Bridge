@@ -1798,16 +1798,27 @@ class WechatDaemon {
           return;
         }
         try {
-          if (command.target) {
-            await activeSlot.outputBatcher.flushNow();
+          let resumeSlot = activeSlot;
+          if (activeSlot.adapter === "codex" && command.target) {
+            const visible = await this.ensureSlot("codex", {
+              openVisible: true,
+              reuseExistingVisible: true,
+            });
+            if (!visible.activated) {
+              throw new Error(formatDaemonSwitchResultDetail(visible));
+            }
+            resumeSlot = this.slots.get("codex") ?? activeSlot;
           }
-          const result = await activeSlot.resumeCoordinator.execute(command.target);
+          if (command.target) {
+            await resumeSlot.outputBatcher.flushNow();
+          }
+          const result = await resumeSlot.resumeCoordinator.execute(command.target);
           if (result.kind === "resumed") {
-            activeSlot.activeTask = null;
+            resumeSlot.activeTask = null;
           }
           await this.queueWechatMessage(
             message.senderId,
-            prefixDaemonAdapterMessage(activeSlot.adapter, result.message),
+            prefixDaemonAdapterMessage(resumeSlot.adapter, result.message),
           );
         } catch (error) {
           await this.queueWechatMessage(

@@ -8,6 +8,7 @@ import {
   clearLocalCompanionEndpoint,
   clearLocalCompanionOccupancy,
   readLocalCompanionEndpoint,
+  updateCodexVisibleControl,
   updateLocalCompanionHealth,
   updateLocalCompanionOccupancy,
   writeLocalCompanionEndpoint,
@@ -131,6 +132,9 @@ describe("local companion endpoint occupancy", () => {
       buildEndpoint(cwd, {
         companionPid: 456,
         companionConnectedAt: "2026-03-28T00:01:00.000Z",
+        codexControlPort: 9123,
+        codexControlToken: "control-token",
+        codexVisibleThreadId: "thread-visible",
       }),
     );
 
@@ -139,10 +143,13 @@ describe("local companion endpoint occupancy", () => {
       cwd,
       companionPid: 456,
       companionConnectedAt: "2026-03-28T00:01:00.000Z",
+      codexControlPort: 9123,
+      codexControlToken: "control-token",
+      codexVisibleThreadId: "thread-visible",
     });
   });
 
-  test("clearLocalCompanionOccupancy removes only visible client and health metadata", () => {
+  test("clearLocalCompanionOccupancy removes visible client, health, and control metadata", () => {
     const cwd = makeTempCwd();
 
     writeLocalCompanionEndpoint(
@@ -152,6 +159,9 @@ describe("local companion endpoint occupancy", () => {
         companionStatus: "stopped",
         companionLastStateAt: "2026-03-28T00:04:00.000Z",
         companionWorkerPid: 4321,
+        codexControlPort: 9123,
+        codexControlToken: "control-token",
+        codexVisibleThreadId: "thread-visible",
       }),
     );
 
@@ -169,6 +179,9 @@ describe("local companion endpoint occupancy", () => {
     expect(endpoint?.companionStatus).toBeUndefined();
     expect(endpoint?.companionLastStateAt).toBeUndefined();
     expect(endpoint?.companionWorkerPid).toBeUndefined();
+    expect(endpoint?.codexControlPort).toBeUndefined();
+    expect(endpoint?.codexControlToken).toBeUndefined();
+    expect(endpoint?.codexVisibleThreadId).toBeUndefined();
   });
 
   test("updateLocalCompanionOccupancy stores visible client metadata", () => {
@@ -202,6 +215,23 @@ describe("local companion endpoint occupancy", () => {
       companionStatus: "stopped",
       companionLastStateAt: "2026-03-28T00:07:00.000Z",
       companionWorkerPid: 4321,
+    });
+  });
+
+  test("updateCodexVisibleControl stores authenticated supervisor metadata", () => {
+    const cwd = makeTempCwd();
+    writeLocalCompanionEndpoint(buildEndpoint(cwd));
+
+    updateCodexVisibleControl(cwd, {
+      codexControlPort: 9123,
+      codexControlToken: "control-token",
+      codexVisibleThreadId: "thread-visible",
+    });
+
+    expect(readLocalCompanionEndpoint(cwd)).toMatchObject({
+      codexControlPort: 9123,
+      codexControlToken: "control-token",
+      codexVisibleThreadId: "thread-visible",
     });
   });
 });

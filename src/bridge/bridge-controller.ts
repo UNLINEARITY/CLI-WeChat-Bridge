@@ -41,6 +41,10 @@ export class BridgeController {
             companionStatus: adapterState.status,
             companionLastStateAt: new Date().toISOString(),
             companionWorkerPid: adapterState.pid,
+            codexControlPort: endpoint.codexControlPort ?? existing.codexControlPort,
+            codexControlToken: endpoint.codexControlToken ?? existing.codexControlToken,
+            codexVisibleThreadId:
+              endpoint.codexVisibleThreadId ?? existing.codexVisibleThreadId,
           }
         : {
             ...endpoint,

@@ -22,6 +22,9 @@ export type LocalClientEndpoint = {
   serverPort?: number;
   serverUrl?: string;
   remoteAuthTokenEnv?: string;
+  codexControlPort?: number;
+  codexControlToken?: string;
+  codexVisibleThreadId?: string;
   cwd: string;
   command: string;
   profile?: string;

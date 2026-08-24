@@ -156,4 +156,43 @@ describe("BridgeController local client endpoint sync", () => {
       companionStatus: "idle",
     });
   });
+
+  test("preserves Codex visible supervisor metadata while syncing runtime state", () => {
+    const cwd = makeTempCwd();
+    const endpoint = buildEndpoint(cwd, {
+      runtimeKind: "codex_runtime_host",
+      instanceId: "codex-runtime-1",
+      kind: "codex",
+      port: 9123,
+      token: "codex-token",
+      command: "codex",
+      serverPort: 9123,
+      serverUrl: "ws://127.0.0.1:9123",
+    });
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionPid: 44_001,
+      codexControlPort: 9234,
+      codexControlToken: "visible-control-token",
+      codexVisibleThreadId: "thread-visible",
+    });
+    const adapter = {
+      ...buildAdapter({
+        kind: "codex",
+        status: "idle",
+        cwd,
+        command: "codex",
+      }),
+      getLocalClientEndpoint: () => endpoint,
+    };
+
+    new BridgeController(adapter, cwd).syncLocalClientEndpoint();
+
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "codex" })).toMatchObject({
+      companionPid: 44_001,
+      codexControlPort: 9234,
+      codexControlToken: "visible-control-token",
+      codexVisibleThreadId: "thread-visible",
+    });
+  });
 });

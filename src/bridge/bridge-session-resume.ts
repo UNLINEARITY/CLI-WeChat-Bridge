@@ -58,7 +58,12 @@ function adapterSessionNoun(adapter: BridgeAdapterKind): string {
 }
 
 export function isWechatResumeEnabled(adapter: BridgeAdapterKind): boolean {
-  return adapter === "claude" || adapter === "opencode" || adapter === "pi";
+  return (
+    adapter === "codex" ||
+    adapter === "claude" ||
+    adapter === "opencode" ||
+    adapter === "pi"
+  );
 }
 
 export function shouldForwardSessionSwitchEvent(
