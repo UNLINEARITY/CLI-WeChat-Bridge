@@ -165,7 +165,7 @@ npm pack --dry-run --json
 | `src/companion/pi-tui-bridge-extension.ts` | 注入 Pi TUI 的本地 bridge extension |
 | `src/companion/local-companion.ts` | `wechat-claude` / `wechat-opencode` / `wechat-pi` 本地 companion 入口 |
 | `src/companion/codex-remote-client.ts` | `wechat-codex` 本地客户端入口 |
-| `src/companion/local-companion-start.ts` | 四个直接命令及其一版过渡 `*-start` aliases 共用的智能启动入口 |
+| `src/companion/local-companion-start.ts` | 四个直接命令共用的智能启动入口 |
 | `src/wechat/wechat-transport.ts` | iLink 消息收发 |
 | `src/bridge/bridge-state.ts` | bridge 状态、锁与日志 |
 | `src/wechat/setup.ts` | 登录与凭据初始化 |

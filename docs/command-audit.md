@@ -1,7 +1,7 @@
 # CLI WeChat Bridge 指令、入口与协议审计
 
 > 审计日期：2026-08-22
-> 审计基线：`cli-wechat-bridge` 1.1.3 及当前 `main`
+> 审计基线：`cli-wechat-bridge` 1.1.5 及当前 `main`
 > 文档用途：核查哪些入口属于核心功能、兼容入口、高级调试、历史遗留、可选便利层或内部协议。
 > 重要：本文同时记录审计事实和已经确认的命令面决策；未列入“已确认决策”的候选项仍不代表授权删除。
 
@@ -40,7 +40,7 @@
 
 | 类别 | 数量 | 主要重叠或风险 |
 | --- | ---: | --- |
-| npm 全局 CLI | 11（过渡版本） | 四个直接命令、四个弃用 aliases、daemon、setup、update-check |
+| npm 全局 CLI | 7 | 四个直接命令、daemon、setup、update-check |
 | 全局 CLI 内部包装器 | 1 | `_run-entry.mjs` 是所有发布命令共用的 Node 入口，不是用户命令 |
 | 微信斜杠命令与斜杠别名 | 19 | `/resume` 已为 Codex、Claude Code、OpenCode 和 Pi 提供当前工作目录内的双向安全恢复 |
 | 审批 bare-text 别名 | 4 | 仅有待审批时拦截 `confirm`、`yes`、`deny`、`no` |
@@ -56,15 +56,15 @@
 | 项目 | 已确认决策 | 兼容策略 |
 | --- | --- | --- |
 | 四个直接命令 | `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 成为智能启动器 | 无 daemon 时创建内部 runtime；有 daemon 时委托 |
-| 四个 `*-start` | 暂时与直接命令功能一致 | 输出弃用提示，保留一个版本，下一版本删除 |
+| 四个 `*-start` | 1.1.5 已删除 | 使用对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` |
 | 全部 `wechat-bridge*` | 从 npm bin 和 `bin/` 立即删除 | 内部 `wechat-bridge.ts` runtime 继续存在 |
 | 手动双终端用户流程 | 删除 | 维护者仍可使用源码 `bridge:*` 与 companion scripts 调试 |
 | Shell adapter | 完整删除 | 旧 shell lock/endpoint 只保留 legacy 读取和清理 |
 | 默认会话 | Codex restore；Claude、OpenCode、Pi new | 沿用已验证的 starter 行为 |
 
-## 5. 过渡版本公开 CLI
+## 5. 当前公开 CLI
 
-过渡版本从原来的 17 个 npm bin 收敛为 11 个。
+公开命令已经从原来的 17 个 npm bin 收敛为 7 个；1.1.4 保留的四个 `*-start` 过渡别名已在 1.1.5 删除。
 
 | 命令 | 状态 | 行为 | 后续 |
 | --- | --- | --- | --- |
@@ -75,10 +75,6 @@
 | `wechat-claude` | 新主入口 | 智能确保 runtime；Claude 默认新会话 | 长期保留 |
 | `wechat-opencode` | 新主入口 | 智能确保 runtime；OpenCode 默认新会话 | 长期保留 |
 | `wechat-pi` | 新主入口 | 智能确保 runtime；Pi 默认新会话 | 长期保留 |
-| `wechat-codex-start` | 弃用 alias | 与 `wechat-codex` 完全相同，并输出提示 | 下一版本删除 |
-| `wechat-claude-start` | 弃用 alias | 与 `wechat-claude` 完全相同，并输出提示 | 下一版本删除 |
-| `wechat-opencode-start` | 弃用 alias | 与 `wechat-opencode` 完全相同，并输出提示 | 下一版本删除 |
-| `wechat-pi-start` | 弃用 alias | 与 `wechat-pi` 完全相同，并输出提示 | 下一版本删除 |
 
 ### 5.1 已删除的公共命令
 
@@ -90,6 +86,7 @@
 | `wechat-bridge-opencode` | 同上 | 内部 transient bridge |
 | `wechat-bridge-pi` | 同上 | 内部 transient bridge |
 | `wechat-bridge-shell` | Shell adapter 整体退出产品范围 | 无公开替代 |
+| `wechat-*-start` | 一版弃用周期结束，功能已完全并入四个直接命令 | 使用对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` |
 
 ### 5.2 当前运行模型
 
@@ -99,13 +96,13 @@
 | 直接启动 | 四个 `wechat-*` | 优先委托同 cwd daemon；否则启动 companion-bound transient bridge，再打开可见 CLI |
 | 维护者调试 | `npm run bridge:*` 与 companion scripts | 直接观察 bridge/companion IPC，不属于发布的用户命令 |
 
-`bin/_run-entry.mjs` 仍是所有发布命令共用的 Node wrapper，不是用户指令；它同时负责 `*-start` alias 的统一弃用提示。
+`bin/_run-entry.mjs` 仍是所有发布命令共用的 Node wrapper，不是用户指令。
 
 ## 6. CLI 参数审计
 
 ### 6.1 四个直接命令
 
-适用：`wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`，以及过渡期对应的 `*-start` aliases。
+适用：`wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`。
 
 | 参数 | 行为 | 评级 |
 | --- | --- | --- |
@@ -114,7 +111,7 @@
 | `--timeout-ms <ms>` | endpoint 等待上限，至少 1000 ms | 高级保留 |
 | `--session-start-mode <restore\|new>` | 覆盖默认会话策略 | 高级保留 |
 | `--doctor` | 只运行所选 adapter/workspace 的 doctor，不启动 CLI | 核心保留 |
-| `--help`、`-h` | 输出直接命令 usage 和 alias 弃用说明 | 核心保留 |
+| `--help`、`-h` | 输出直接命令 usage | 核心保留 |
 | 其他未知参数 | 原样透传给可见底层 CLI | 必须保留 |
 
 ### 6.2 Daemon 参数
@@ -189,10 +186,10 @@ standalone 模式按以下顺序处理：
 
 | 命令 | 模式 | 行为 | 重叠关系 | 初步评级 |
 | --- | --- | --- | --- | --- |
-| `/codex [prompt]` | daemon | 激活/复用 Codex；有 prompt 时只转发剩余文本 | 对应 `wechat-codex-start`，但这是微信远程切换 | 核心保留 |
+| `/codex [prompt]` | daemon | 激活/复用 Codex；有 prompt 时只转发剩余文本 | 与本地 `wechat-codex` 入口互补 | 核心保留 |
 | `/claude [prompt]` | daemon | 激活/复用 Claude Code；可立即转发 prompt | 同上 | 核心保留 |
 | `/opencode [prompt]` | daemon | 激活/复用 OpenCode；可立即转发 prompt | 同上 | 核心保留 |
-| `/pi [prompt]` | daemon | 激活/复用现有 Pi TUI；不会像 `wechat-pi-start` 那样强制新 session | 同上，但 fresh-session 语义不同 | 核心保留 |
+| `/pi [prompt]` | daemon | 激活/复用现有 Pi TUI；本地 `wechat-pi` 默认请求新 session | 同上，但 fresh-session 语义不同 | 核心保留 |
 
 在 standalone 模式中，这四个命令不是 bridge 控制命令，可能被当作普通文本或底层 CLI 命令转发。
 
@@ -347,7 +344,7 @@ standalone 模式按以下顺序处理：
 
 | command | 调用方 | 用途 | 评级 |
 | --- | --- | --- | --- |
-| `ensure_slot` | `wechat-*-start` 等 | 确保指定 adapter slot 存在，可选打开 visible CLI | 内部勿动 |
+| `ensure_slot` | 四个直接 launcher 等 | 确保指定 adapter slot 存在，可选打开 visible CLI | 内部勿动 |
 | `switch_adapter` | daemon 客户端/控制流程 | 激活指定 adapter | 内部勿动 |
 | `status` | starter、doctor、健康检查 | 查询 daemon 状态和 slot 列表 | 内部勿动 |
 | `shutdown` | daemon 重启/清理流程 | 请求优雅关闭 daemon | 内部勿动 |
@@ -423,18 +420,12 @@ Pi extension 还注册内部命令 `__cli_bridge_new` 和 `__cli_bridge_switch`�
 ### 本批已完成
 
 1. 四个直接命令统一为智能 launcher；
-2. 四个 `*-start` 变为带警告的一版过渡 aliases；
+2. 四个 `*-start` 在 1.1.4 提供一版弃用周期后，于 1.1.5 从 npm bin 与 `bin/` 删除；
 3. 删除全部公开 `wechat-bridge*` bins；
 4. 删除 ShellAdapter、shell npm script、专属测试和公开文档；
 5. README 删除手动双终端工作流；
 6. 内部 bridge/companion runtime 和维护者调试 scripts 保留；
 7. 旧 shell lock/endpoint 继续可读并可清理。
-
-### 下一版本已确定
-
-- 从 npm bin 删除四个 `wechat-*-start` aliases；
-- 删除 alias wrappers 和弃用提示测试；
-- README、help 和审计文档移除过渡说明。
 
 ### 仍待后续确认
 
@@ -463,7 +454,7 @@ Pi extension 还注册内部命令 `__cli_bridge_new` 和 `__cli_bridge_switch`�
 
 ## 14. 当前审计结论
 
-1. 用户命令面已经从 17 个收敛到过渡期 11 个；下一版本删除四个 start aliases 后将剩 7 个。
+1. 用户命令面已经从 17 个收敛为 7 个；四个 `*-start` 过渡别名已按计划删除。
 2. `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 现在同时覆盖 daemon 委托和无 daemon 智能启动，不再要求用户理解 bridge/companion 双终端。
 3. 公开 bridge bins 已删除，但内部 bridge runtime 仍是微信连接、锁、状态、审批和转发的必要组件。
 4. Shell adapter 已退出产品范围；仅保留旧状态识别，避免升级后留下无法清理的 shell lock/endpoint。

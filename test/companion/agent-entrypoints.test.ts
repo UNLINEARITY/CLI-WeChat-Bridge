@@ -10,7 +10,7 @@ function readRepoFile(relativePath: string): string {
 }
 
 describe("agent CLI entrypoints", () => {
-  test("publishes the smart launchers and one-release start aliases", () => {
+  test("publishes only the supported smart launchers", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as {
       bin?: Record<string, string>;
       scripts?: Record<string, string>;
@@ -19,14 +19,10 @@ describe("agent CLI entrypoints", () => {
     expect(Object.keys(packageJson.bin ?? {}).sort()).toEqual([
       "wechat-check-update",
       "wechat-claude",
-      "wechat-claude-start",
       "wechat-codex",
-      "wechat-codex-start",
       "wechat-daemon",
       "wechat-opencode",
-      "wechat-opencode-start",
       "wechat-pi",
-      "wechat-pi-start",
       "wechat-setup",
     ]);
     expect(packageJson.scripts?.["bridge:shell"]).toBeUndefined();
@@ -40,15 +36,6 @@ describe("agent CLI entrypoints", () => {
       expect(source).toContain(`"--adapter", "${agent}"`);
     });
 
-    test(`wechat-${agent}-start is a deprecated alias`, () => {
-      const source = readRepoFile(`bin/wechat-${agent}-start.mjs`);
-
-      expect(source).toContain("runDeprecatedJsEntry(");
-      expect(source).toContain(`"wechat-${agent}-start"`);
-      expect(source).toContain(`"wechat-${agent}"`);
-      expect(source).toContain('"dist/companion/local-companion-start.js"');
-      expect(source).toContain(`"--adapter", "${agent}"`);
-    });
   }
 
   test("removes every public bridge wrapper", () => {
@@ -64,10 +51,9 @@ describe("agent CLI entrypoints", () => {
     }
   });
 
-  test("centralizes the transition warning", () => {
-    const source = readRepoFile("bin/_run-entry.mjs");
-
-    expect(source).toContain("export function runDeprecatedJsEntry");
-    expect(source).toContain("This alias will be removed in the next release.");
+  test("removes every expired start alias", () => {
+    for (const agent of AGENTS) {
+      expect(fs.existsSync(path.join(REPO_ROOT, "bin", `wechat-${agent}-start.mjs`))).toBe(false);
+    }
   });
 });

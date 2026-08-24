@@ -235,7 +235,6 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
           "Use --doctor to check the selected adapter and workspace without starting it.",
           "Without a daemon, the transient runtime is companion-bound and stops when the visible CLI closes.",
           "Unknown arguments are forwarded to the visible CLI client.",
-          `Deprecated alias: ${commandName}-start.`,
           "",
         ].join("\n"),
       );

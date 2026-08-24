@@ -136,7 +136,7 @@ function printHelp() {
 function isSafeSmokeCommand(commandName) {
   return (
     commandName === "wechat-daemon" ||
-    /^wechat-(?:codex|claude|opencode|pi)(?:-start)?$/.test(commandName)
+    /^wechat-(?:codex|claude|opencode|pi)$/.test(commandName)
   );
 }
 

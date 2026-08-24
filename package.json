@@ -1,6 +1,6 @@
 {
   "name": "cli-wechat-bridge",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and Pi over WeChat",
   "type": "module",
   "files": [
@@ -35,13 +35,9 @@
   },
   "bin": {
     "wechat-codex": "bin/wechat-codex.mjs",
-    "wechat-codex-start": "bin/wechat-codex-start.mjs",
     "wechat-claude": "bin/wechat-claude.mjs",
-    "wechat-claude-start": "bin/wechat-claude-start.mjs",
     "wechat-opencode": "bin/wechat-opencode.mjs",
-    "wechat-opencode-start": "bin/wechat-opencode-start.mjs",
     "wechat-pi": "bin/wechat-pi.mjs",
-    "wechat-pi-start": "bin/wechat-pi-start.mjs",
     "wechat-daemon": "bin/wechat-daemon.mjs",
     "wechat-setup": "bin/wechat-setup.mjs",
     "wechat-check-update": "bin/wechat-check-update.mjs"

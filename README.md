@@ -157,8 +157,6 @@ cd D:\work\your-project
 - 如果检测到可见端仍在运行但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
 - 在其他目录执行会显式切换活动工作区。
 
-`wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start`、`wechat-pi-start` 暂时保留为过渡别名，功能与直接命令一致，但会输出弃用提示，并将在下一版本移除。
-
 ### 6. 常驻 daemon 模式（支持多 CLI 切换）
 
 如果你希望微信连接长期保持在线，并在 Codex / Claude Code / OpenCode / Pi 之间来回切换，可以在项目目录启动统一 daemon：
@@ -253,7 +251,7 @@ OpenCode 模式下，微信侧支持 `/new` 或 `/new-session` 创建新 session
 | OpenCode | `wechat-opencode` |
 | Pi | `wechat-pi` |
 
-`wechat-*-start` 暂时作为弃用别名保留一个版本。公开的 `wechat-bridge*` 命令和 Shell adapter 已移除；内部 bridge runtime 仍由直接命令和 daemon 自动管理。
+1.1.5 已移除完成弃用周期的 `wechat-*-start` 别名；请直接使用 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`。公开的 `wechat-bridge*` 命令和 Shell adapter 也已移除；内部 bridge runtime 仍由直接命令和 daemon 自动管理。
 
 ### Daemon CLI 参数
 

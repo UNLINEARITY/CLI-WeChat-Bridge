@@ -101,7 +101,7 @@ Add focused regression coverage when changing:
 For release-facing changes, run `npm run quality` plus package/smoke checks. For narrow fixes, run the smallest focused test first, then expand to the relevant suite.
 
 ## Daemon And Bridge Behavior
-`wechat-daemon` is the preferred user workflow. It binds to its startup cwd; v1 does not switch to a different local project directory from WeChat. If a same-cwd daemon is live, the four direct launchers should delegate to the daemon instead of replacing it. The `wechat-*-start` names are one-release deprecated aliases for the same launcher behavior.
+`wechat-daemon` is the preferred user workflow. It binds to its startup cwd; v1 does not switch to a different local project directory from WeChat. If a same-cwd daemon is live, the four direct launchers should delegate to the daemon instead of replacing it. The expired `wechat-*-start` compatibility aliases were removed in 1.1.5; use the four direct launchers.
 
 Daemon startup should clean stale or still-running single-bridge state automatically when possible. Do not push cleanup work onto the user if the code can safely detect and clear stale locks, dead endpoints, peer bridge processes, or orphan OpenCode processes. When changing cleanup logic, update daemon tests and make logs explicit enough to diagnose what was cleaned.
 

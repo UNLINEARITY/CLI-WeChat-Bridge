@@ -4,6 +4,10 @@
 
 ## 版本列表
 
+### [v1.1.5](./1.1.5.md) / [中文说明](./1.1.5_CN.md)
+**四个 adapter 双向 `/resume` + 启动命令迁移完成**
+微信 `/resume` 统一支持 Codex、Claude Code、OpenCode 与 Pi：列出当前目录最近 8 个根 thread/session，通过编号、完整 ID 或唯一前缀恢复，并在电脑端主动切换后继续跟随可见 TUI；运行中的旧微信任务会先中断结算。Codex 使用持久 app-server 与 token 鉴权的 visible supervisor，Claude 使用 SessionEnd/SessionStart Hook，OpenCode 使用临时 route reporter，Pi 使用原生 extension。完成 1.1.4 宣布的迁移，删除四个 `wechat-*-start` 公共别名，统一改用 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`。统计：46 个文件，新增 4,394 行，删除 339 行。
+
 ### [v1.1.4](./1.1.4.md) / [中文说明](./1.1.4_CN.md)
 **启动收拢为四条命令 + 全面审查的稳定性修复 + OpenCode 问答与会话恢复**
 启动方式收拢为 `wechat-codex` / `wechat-claude` / `wechat-opencode` / `wechat-pi` 四条命令，统一完成微信凭据校验、daemon 委托与本地桥接拉起；`wechat-bridge*` 命令全部移除，`wechat-*-start` 保留至 1.1.5。全面代码审查的二十余处修复集中落地：进程号复用不再导致启动失败或误终止无关进程（并修复 Windows 进程扫描自首个版本起从未生效的缺陷）、daemon 并发保护与委托超时修正、各适配器断连与中断后的恢复、共享状态原子写入与网络请求超时完整覆盖。OpenCode 补齐微信 `/answer` 直接作答 agent 提问与 `/resume` 恢复历史会话，每个启动的服务器注入一次性随机密码。统计：73 个文件，新增 2,272 行，删除 2,106 行。
