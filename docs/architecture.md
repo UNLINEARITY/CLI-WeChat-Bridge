@@ -162,9 +162,11 @@ pi --approve --extension <bridge-extension>
   /new / resume → extension command context.newSession() / switchSession()
 ```
 
-微信 `/resume` 在 OpenCode 和 Pi 中使用同一套控制语义：首次调用列出当前工作目录最近 8 个根 session，并保存 5 分钟的编号快照；随后可用编号、完整 ID 或唯一 ID 前缀恢复。编号解析位于共享 bridge 控制层，adapter 只接收经过解析的真实 session ID。实际切换必须处于 idle 且没有待处理审批或用户输入；OpenCode 先等待 `tui.selectSession` 成功再提交 shared session，Pi 以 extension `switchSession()` 的响应和 session state 作为确认。
+微信 `/resume` 在 Claude Code、OpenCode 和 Pi 中使用同一套控制语义：首次调用列出当前工作目录最近 8 个根 session，并保存 5 分钟的编号快照；随后可用编号、完整 ID 或唯一 ID 前缀恢复。编号解析位于共享 bridge 控制层，adapter 只接收经过解析的真实 session ID。实际切换必须处于 idle 且没有待处理审批或用户输入；Claude 等待 `SessionEnd(reason=resume)` 和目标 `SessionStart(source=resume)`，OpenCode 等待 `tui.selectSession` 与 route reporter，Pi 以 extension `switchSession()` 的响应和 session state 作为确认。
 
 双向同步以可见 TUI 为最终事实来源。OpenCode companion 通过仅在本次进程生效的临时 TUI plugin 观察 `route.current`，并经带随机 token 的 localhost JSONL 通道报告可见 session；它不修改用户的永久 OpenCode 配置。Pi 直接复用 extension 的 `session_start` 状态。电脑端主动切换会使 resume 编号快照失效；若旧 session 中仍有微信任务，adapter 先中止并结算旧任务，再提交新的 shared session 和本地切换通知。
+
+Claude companion 不需要额外插件：交互式 `/resume` 会先触发旧 session 的 `SessionEnd(reason=resume)`，再为目标 transcript 触发 `SessionStart(source=resume)`。bridge 用 transcript 文件名校验目标 UUID，区分微信恢复、本地恢复与启动恢复。历史列表优先读取 `sessions-index.json`，缺失时只读取 JSONL 头尾的有界窗口；sidechain、跨 cwd 与仍在运行的 background session 均不接管。
 
 可见 companion 托管唯一 Pi TUI 子进程，本地键盘和微信输入共享同一 session。微信 turn 与本地 turn 都会在 `agent_settled` 后生成微信 `final_reply`；本地输入先以 `mirrored_user_input` 标明来源，随后再转发对应的最终回答，因此电脑与微信可以观察同一条完整对话链路，同时避免把历史回放误认成新回答。
 

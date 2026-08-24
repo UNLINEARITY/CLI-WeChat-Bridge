@@ -45,6 +45,7 @@ describe("buildClaudeHookSettings", () => {
 
     expect(Object.keys(settings.hooks)).toEqual([
       "SessionStart",
+      "SessionEnd",
       "UserPromptSubmit",
       "PermissionRequest",
       "Notification",

@@ -2,6 +2,7 @@
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { buildLocalCompanionToken } from "../companion/local-companion-link.ts";
 import { t } from "../i18n/index.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
@@ -65,6 +66,42 @@ const CLAUDE_BRACKETED_PASTE_START = "\u001b[200~";
 const CLAUDE_BRACKETED_PASTE_END = "\u001b[201~";
 const CLAUDE_REMOTE_ENTER_DELAY_MS = 40;
 const CLAUDE_STARTUP_OUTPUT_BUFFER_LIMIT = 4_000;
+const CLAUDE_SESSION_METADATA_READ_BYTES = 64 * 1024;
+const CLAUDE_MAX_SANITIZED_PROJECT_PATH = 200;
+const CLAUDE_RESUME_TIMEOUT_MS = 30_000;
+const CLAUDE_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+type ClaudeSessionIndexEntry = {
+  sessionId?: string;
+  fullPath?: string;
+  firstPrompt?: string;
+  created?: string;
+  modified?: string;
+  projectPath?: string;
+  isSidechain?: boolean;
+  customTitle?: string;
+  summary?: string;
+};
+
+type ClaudeSessionMetadata = {
+  cwd?: string;
+  isSidechain?: boolean;
+  customTitle?: string;
+  aiTitle?: string;
+  lastPrompt?: string;
+  summary?: string;
+  firstPrompt?: string;
+  lastTimestampMs: number;
+};
+
+type ClaudePendingResume = {
+  targetConversationId: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+  sessionEndObserved: boolean;
+};
 
 function isClaudeWorkspaceTrustPrompt(text: string): boolean {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -78,6 +115,281 @@ function isClaudeWorkspaceTrustPrompt(text: string): boolean {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function expandHomePath(value: string): string {
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function normalizeComparablePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isSameClaudePath(left: string, right: string): boolean {
+  return normalizeComparablePath(left) === normalizeComparablePath(right);
+}
+
+function getClaudeConfigDirectory(
+  env: Record<string, string | undefined>,
+): string {
+  const custom = env.CLAUDE_CONFIG_DIR;
+  return custom
+    ? path.resolve(expandHomePath(custom))
+    : path.join(env.USERPROFILE || env.HOME || os.homedir(), ".claude");
+}
+
+function sanitizeClaudeProjectPath(cwd: string): string {
+  return path.resolve(cwd).replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+export function buildClaudeProjectSessionDirectory(
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.join(
+    getClaudeConfigDirectory(env),
+    "projects",
+    sanitizeClaudeProjectPath(cwd),
+  );
+}
+
+function readClaudeSessionSegments(filePath: string): string[] {
+  const stat = fs.statSync(filePath);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const headLength = Math.min(stat.size, CLAUDE_SESSION_METADATA_READ_BYTES);
+    const headBuffer = Buffer.alloc(headLength);
+    fs.readSync(fd, headBuffer, 0, headLength, 0);
+    const tailStart = Math.max(0, stat.size - CLAUDE_SESSION_METADATA_READ_BYTES);
+    const tailLength = stat.size - tailStart;
+    const tailBuffer = Buffer.alloc(tailLength);
+    fs.readSync(fd, tailBuffer, 0, tailLength, tailStart);
+    return [headBuffer.toString("utf8"), tailBuffer.toString("utf8")];
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function extractClaudeUserMessageText(value: unknown): string {
+  if (typeof value === "string") {
+    return normalizeOutput(value).trim();
+  }
+  if (!Array.isArray(value)) {
+    return "";
+  }
+  return normalizeOutput(
+    value
+      .filter((item): item is Record<string, unknown> => isRecord(item))
+      .filter((item) => item.type === "text" && typeof item.text === "string")
+      .map((item) => item.text as string)
+      .join("\n"),
+  ).trim();
+}
+
+function readClaudeSessionMetadata(filePath: string): ClaudeSessionMetadata {
+  const metadata: ClaudeSessionMetadata = { lastTimestampMs: 0 };
+  const seenLines = new Set<string>();
+  for (const segment of readClaudeSessionSegments(filePath)) {
+    for (const rawLine of segment.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || seenLines.has(line)) {
+        continue;
+      }
+      seenLines.add(line);
+      try {
+        const entry = JSON.parse(line) as unknown;
+        if (!isRecord(entry)) {
+          continue;
+        }
+        if (typeof entry.cwd === "string") {
+          metadata.cwd = entry.cwd;
+        }
+        if (entry.isSidechain === false) {
+          metadata.isSidechain = false;
+        } else if (entry.isSidechain === true && metadata.isSidechain === undefined) {
+          metadata.isSidechain = true;
+        }
+        if (entry.type === "custom-title" && typeof entry.customTitle === "string") {
+          metadata.customTitle = normalizeOutput(entry.customTitle).trim();
+        } else if (entry.type === "ai-title" && typeof entry.aiTitle === "string") {
+          metadata.aiTitle = normalizeOutput(entry.aiTitle).trim();
+        } else if (entry.type === "last-prompt" && typeof entry.lastPrompt === "string") {
+          metadata.lastPrompt = normalizeOutput(entry.lastPrompt).trim();
+        } else if (entry.type === "summary" && typeof entry.summary === "string") {
+          metadata.summary = normalizeOutput(entry.summary).trim();
+        } else if (
+          !metadata.firstPrompt &&
+          entry.type === "user" &&
+          isRecord(entry.message)
+        ) {
+          metadata.firstPrompt = extractClaudeUserMessageText(entry.message.content);
+        }
+        if (typeof entry.timestamp === "string") {
+          const timestampMs = Date.parse(entry.timestamp);
+          if (Number.isFinite(timestampMs)) {
+            metadata.lastTimestampMs = Math.max(metadata.lastTimestampMs, timestampMs);
+          }
+        }
+      } catch {
+        // Head/tail segments can begin or end with a partial JSONL line.
+      }
+    }
+  }
+  return metadata;
+}
+
+function readClaudeSessionIndex(
+  projectDir: string,
+  cwd: string,
+): Map<string, ClaudeSessionIndexEntry> {
+  const indexPath = path.join(projectDir, "sessions-index.json");
+  if (!fs.existsSync(indexPath)) {
+    return new Map();
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8")) as unknown;
+    if (!isRecord(parsed)) {
+      return new Map();
+    }
+    if (typeof parsed.originalPath === "string" && !isSameClaudePath(parsed.originalPath, cwd)) {
+      return new Map();
+    }
+    const entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+    return new Map(
+      entries
+        .filter((entry): entry is ClaudeSessionIndexEntry => isRecord(entry))
+        .filter((entry) => typeof entry.sessionId === "string")
+        .map((entry) => [entry.sessionId!, entry]),
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function findClaudeProjectSessionDirectories(
+  cwd: string,
+  env: Record<string, string | undefined>,
+): string[] {
+  const projectsDir = path.join(getClaudeConfigDirectory(env), "projects");
+  const direct = buildClaudeProjectSessionDirectory(cwd, env);
+  const results = new Set<string>();
+  if (fs.existsSync(direct)) {
+    results.add(direct);
+  }
+  const sanitized = sanitizeClaudeProjectPath(cwd);
+  if (sanitized.length <= CLAUDE_MAX_SANITIZED_PROJECT_PATH || !fs.existsSync(projectsDir)) {
+    return [...results];
+  }
+  const prefix = sanitized.slice(0, CLAUDE_MAX_SANITIZED_PROJECT_PATH);
+  for (const entry of fs.readdirSync(projectsDir, { withFileTypes: true })) {
+    if (entry.isDirectory() && entry.name.startsWith(`${prefix}-`)) {
+      results.add(path.join(projectsDir, entry.name));
+    }
+  }
+  return [...results];
+}
+
+function summarizeClaudeSessionFile(
+  filePath: string,
+  cwd: string,
+  indexEntry?: ClaudeSessionIndexEntry,
+): BridgeResumeSessionCandidate | null {
+  const sessionId = path.basename(filePath, ".jsonl");
+  if (!CLAUDE_SESSION_ID_RE.test(sessionId)) {
+    return null;
+  }
+  try {
+    const metadata = readClaudeSessionMetadata(filePath);
+    const belongsToCwd =
+      (typeof indexEntry?.projectPath === "string" &&
+        isSameClaudePath(indexEntry.projectPath, cwd)) ||
+      (typeof metadata.cwd === "string" && isSameClaudePath(metadata.cwd, cwd));
+    if (!belongsToCwd || indexEntry?.isSidechain === true || metadata.isSidechain === true) {
+      return null;
+    }
+    const indexedModifiedMs =
+      typeof indexEntry?.modified === "string" ? Date.parse(indexEntry.modified) : 0;
+    const updatedMs =
+      metadata.lastTimestampMs ||
+      (Number.isFinite(indexedModifiedMs) ? indexedModifiedMs : 0) ||
+      fs.statSync(filePath).mtimeMs;
+    const title =
+      metadata.customTitle ||
+      indexEntry?.customTitle ||
+      metadata.aiTitle ||
+      metadata.lastPrompt ||
+      indexEntry?.summary ||
+      metadata.summary ||
+      indexEntry?.firstPrompt ||
+      metadata.firstPrompt;
+    if (!title) {
+      return null;
+    }
+    return {
+      sessionId,
+      title: truncatePreview(title, 120),
+      lastUpdatedAt: new Date(updatedMs).toISOString(),
+      source: "claude",
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function listClaudeResumeSessions(
+  cwd: string,
+  limit = 10,
+  env: Record<string, string | undefined> = process.env,
+): BridgeResumeSessionCandidate[] {
+  const candidates: BridgeResumeSessionCandidate[] = [];
+  for (const projectDir of findClaudeProjectSessionDirectories(cwd, env)) {
+    const index = readClaudeSessionIndex(projectDir, cwd);
+    for (const entry of fs.readdirSync(projectDir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".jsonl")) {
+        continue;
+      }
+      const sessionId = path.basename(entry.name, ".jsonl");
+      const candidate = summarizeClaudeSessionFile(
+        path.join(projectDir, entry.name),
+        cwd,
+        index.get(sessionId),
+      );
+      if (candidate) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates
+    .sort((left, right) => Date.parse(right.lastUpdatedAt) - Date.parse(left.lastUpdatedAt))
+    .slice(0, Math.max(1, limit));
+}
+
+function findClaudeResumeSessionFile(
+  cwd: string,
+  sessionId: string,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  for (const projectDir of findClaudeProjectSessionDirectories(cwd, env)) {
+    const filePath = path.join(projectDir, `${sessionId}.jsonl`);
+    if (
+      fs.existsSync(filePath) &&
+      summarizeClaudeSessionFile(
+        filePath,
+        cwd,
+        readClaudeSessionIndex(projectDir, cwd).get(sessionId),
+      )
+    ) {
+      return filePath;
+    }
+  }
+  return null;
 }
 
 export function normalizeClaudeProjectConfigKey(cwd: string): string {
@@ -168,6 +480,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private transcriptPollTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptTailOffset = 0;
   private polledTranscriptSessionId: string | null = null;
+  private pendingResume: ClaudePendingResume | null = null;
+  private localResumeSessionEndObserved = false;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -263,16 +577,122 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.armWechatWorkingNotice();
   }
 
-  override async listResumeSessions(_limit = 10): Promise<BridgeResumeSessionCandidate[]> {
-    throw new Error(
-      'WeChat /resume is disabled in claude mode. Use /resume directly inside "wechat-claude"; WeChat will follow the active local session.',
-    );
+  override async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
+    return listClaudeResumeSessions(this.options.cwd, limit);
   }
 
-  override async resumeSession(_threadId: string): Promise<void> {
-    throw new Error(
-      'WeChat /resume is disabled in claude mode. Use /resume directly inside "wechat-claude"; WeChat will follow the active local session.',
-    );
+  override async resumeSession(sessionId: string): Promise<void> {
+    if (!this.pty) {
+      throw new Error("Claude is not running yet.");
+    }
+    if (this.pendingResume) {
+      throw new Error("Claude is already switching sessions.");
+    }
+    if (this.pendingApproval) {
+      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
+    }
+    if (this.state.status === "busy" || this.state.status === "awaiting_approval") {
+      throw new Error("Claude is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.state.status !== "idle") {
+      throw new Error(`Claude cannot switch sessions while its status is ${this.state.status}.`);
+    }
+
+    const targetConversationId = sessionId.trim();
+    if (!CLAUDE_SESSION_ID_RE.test(targetConversationId)) {
+      throw new Error(`Invalid Claude session ID: ${targetConversationId}`);
+    }
+    if (!this.resolveClaudeResumeSessionFile(targetConversationId)) {
+      throw new Error(
+        `No Claude session ${targetConversationId} was found for ${this.options.cwd}.`,
+      );
+    }
+    if (this.isClaudeSessionActiveElsewhere(targetConversationId)) {
+      throw new Error(
+        `Claude session ${targetConversationId} is active in another Claude process. Stop it before resuming from WeChat.`,
+      );
+    }
+
+    this.setStatus("starting", `Switching Claude to session ${targetConversationId.slice(0, 12)}...`);
+    const completion = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingResume?.targetConversationId !== targetConversationId) {
+          return;
+        }
+        const phase = this.pendingResume.sessionEndObserved
+          ? " after the previous session ended"
+          : "";
+        this.pendingResume = null;
+        this.setStatus("idle");
+        reject(
+          new Error(
+            `Timed out waiting for Claude to resume session ${targetConversationId}${phase}.`,
+          ),
+        );
+      }, CLAUDE_RESUME_TIMEOUT_MS);
+      this.pendingResume = {
+        targetConversationId,
+        resolve,
+        reject,
+        timer,
+        sessionEndObserved: false,
+      };
+    });
+
+    this.writeToPty(`/resume ${targetConversationId}`);
+    await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
+    this.writeToPty("\r");
+    await completion;
+  }
+
+  private isClaudeSessionActiveElsewhere(sessionId: string): boolean {
+    if (sessionId === this.resumeConversationId) {
+      return false;
+    }
+    try {
+      const env = shared.buildCliEnvironment("claude");
+      const target = shared.resolveSpawnTarget(this.options.command, "claude", { env });
+      const result = spawnSync(
+        target.file,
+        [...target.args, "agents", "--json", "--cwd", this.options.cwd],
+        {
+          cwd: this.options.cwd,
+          env,
+          encoding: "utf8",
+          windowsHide: true,
+          timeout: 5_000,
+        },
+      );
+      if (result.status !== 0 || !result.stdout.trim()) {
+        return false;
+      }
+      const parsed = JSON.parse(result.stdout) as unknown;
+      const sessions = Array.isArray(parsed)
+        ? parsed
+        : isRecord(parsed) && Array.isArray(parsed.sessions)
+          ? parsed.sessions
+          : [];
+      return sessions.some((session) => {
+        if (!isRecord(session)) {
+          return false;
+        }
+        const candidateId =
+          typeof session.id === "string"
+            ? session.id
+            : typeof session.sessionId === "string"
+              ? session.sessionId
+              : typeof session.session_id === "string"
+                ? session.session_id
+                : "";
+        return candidateId === sessionId;
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  private resolveClaudeResumeSessionFile(sessionId: string): string | null {
+    return findClaudeResumeSessionFile(this.options.cwd, sessionId);
   }
 
   override async interrupt(): Promise<boolean> {
@@ -307,6 +727,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async reset(): Promise<void> {
+    this.rejectPendingResume(new Error("Claude was reset during session switching."));
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.runtimeSessionId = null;
@@ -387,6 +808,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async dispose(): Promise<void> {
+    this.rejectPendingResume(new Error("Claude is shutting down during session switching."));
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
@@ -421,6 +843,21 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     const text = normalizeOutput(rawText);
     if (!text) {
+      return;
+    }
+
+    if (
+      this.pendingResume &&
+      (isClaudeInvalidResumeError(text) ||
+        /Session .+ was not found|Found \d+ sessions matching|Failed to resume/i.test(text))
+    ) {
+      const failureLine = text
+        .split("\n")
+        .map((line) => line.trim())
+        .find((line) => /not found|matching|failed to resume/i.test(line));
+      this.rejectPendingResume(
+        new Error(failureLine || "Claude could not resume the requested session."),
+      );
       return;
     }
 
@@ -494,6 +931,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
+    this.rejectPendingResume(
+      new Error("Claude exited before the requested session switch completed."),
+    );
     void this.stopHookServer();
     if (this.recoveringInvalidResume && !this.shuttingDown) {
       this.clearCompletionTimer();
@@ -965,6 +1405,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         this.handleClaudeSessionStart(payload);
         this.respondToClaudeHook(params.socket, params.requestId);
         return;
+      case "SessionEnd":
+        this.handleClaudeSessionEnd(payload);
+        this.respondToClaudeHook(params.socket, params.requestId);
+        return;
       case "UserPromptSubmit":
         this.handleClaudeUserPromptSubmit(payload);
         this.respondToClaudeHook(params.socket, params.requestId);
@@ -1037,6 +1481,24 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     const nextResumeConversationId = extractClaudeResumeConversationId(
       nextTranscriptPath ?? undefined,
     );
+    const resumedConversationId = nextResumeConversationId ?? payload.session_id;
+    const pendingResume = this.pendingResume;
+    const pendingResumeMatches =
+      payload.source === "resume" &&
+      pendingResume !== null &&
+      pendingResume.targetConversationId === resumedConversationId;
+    const isInteractiveResume =
+      payload.source === "resume" && Boolean(previousRuntimeSessionId);
+
+    if (
+      isInteractiveResume &&
+      !pendingResumeMatches &&
+      !this.localResumeSessionEndObserved
+    ) {
+      this.failClaudeTurn(
+        "The active WeChat task was interrupted because the local Claude terminal switched sessions.",
+      );
+    }
 
     const compactedByTranscriptRotation =
       Boolean(this.transcriptPath) &&
@@ -1067,18 +1529,44 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.transcriptPath = nextTranscriptPath ?? undefined;
     this.startTranscriptThinkingWatch();
 
-    if (previousRuntimeSessionId === payload.session_id) {
-      return;
-    }
-
     const timestamp = nowIso();
-    const isRestore =
+    const isStartupRestore =
       !previousRuntimeSessionId &&
       (payload.source === "resume" ||
         (nextResumeConversationId !== null &&
           nextResumeConversationId === previousResumeConversationId));
-    const source: BridgeThreadSwitchSource = isRestore ? "restore" : "local";
-    const reason: BridgeThreadSwitchReason = isRestore ? "startup_restore" : "local_follow";
+    const source: BridgeThreadSwitchSource = pendingResumeMatches
+      ? "wechat"
+      : isStartupRestore
+        ? "restore"
+        : "local";
+    const reason: BridgeThreadSwitchReason = pendingResumeMatches
+      ? "wechat_resume"
+      : isStartupRestore
+        ? "startup_restore"
+        : "local_follow";
+
+    this.localResumeSessionEndObserved = false;
+
+    if (
+      pendingResume &&
+      payload.source === "resume" &&
+      !pendingResumeMatches
+    ) {
+      this.rejectPendingResume(
+        new Error(
+          `Claude resumed unexpected session ${resumedConversationId}; expected ${pendingResume.targetConversationId}.`,
+        ),
+      );
+    }
+
+    if (previousRuntimeSessionId === payload.session_id) {
+      if (pendingResumeMatches) {
+        this.resolvePendingResume();
+      }
+      return;
+    }
+
     this.state.lastSessionSwitchAt = timestamp;
     this.state.lastSessionSwitchSource = source;
     this.state.lastSessionSwitchReason = reason;
@@ -1089,6 +1577,45 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       reason,
       timestamp,
     });
+    if (pendingResumeMatches) {
+      this.resolvePendingResume();
+    }
+  }
+
+  private handleClaudeSessionEnd(payload: { reason?: string }): void {
+    if (payload.reason !== "resume") {
+      return;
+    }
+    if (this.pendingResume) {
+      this.pendingResume.sessionEndObserved = true;
+      return;
+    }
+    this.localResumeSessionEndObserved = true;
+    this.failClaudeTurn(
+      "The active WeChat task was interrupted because the local Claude terminal switched sessions.",
+    );
+  }
+
+  private resolvePendingResume(): void {
+    const pending = this.pendingResume;
+    if (!pending) {
+      return;
+    }
+    this.pendingResume = null;
+    clearTimeout(pending.timer);
+    this.setStatus("idle");
+    pending.resolve();
+  }
+
+  private rejectPendingResume(error: Error): void {
+    const pending = this.pendingResume;
+    if (!pending) {
+      return;
+    }
+    this.pendingResume = null;
+    clearTimeout(pending.timer);
+    this.setStatus("idle");
+    pending.reject(error);
   }
 
   private handleClaudeUserPromptSubmit(payload: { prompt?: string }): void {
@@ -1275,7 +1802,24 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     );
   }
 
-  private handleClaudeStop(payload: { last_assistant_message?: string }): void {
+  private handleClaudeStop(payload: {
+    session_id?: string;
+    last_assistant_message?: string;
+  }): void {
+    if (
+      payload.session_id &&
+      this.runtimeSessionId &&
+      payload.session_id !== this.runtimeSessionId
+    ) {
+      return;
+    }
+    if (
+      !this.hasAcceptedInput &&
+      this.state.activeTurnOrigin === undefined &&
+      this.currentPreview === "(idle)"
+    ) {
+      return;
+    }
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.lastAutoApprovedPayload = null;
@@ -1301,10 +1845,18 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private handleClaudeStopFailure(payload: {
+    session_id?: string;
     error?: string;
     error_details?: string;
     last_assistant_message?: string;
   }): void {
+    if (
+      payload.session_id &&
+      this.runtimeSessionId &&
+      payload.session_id !== this.runtimeSessionId
+    ) {
+      return;
+    }
     this.lastAutoApprovedPayload = null;
     this.stopTranscriptThinkingWatch();
     this.failClaudeTurn(buildClaudeFailureMessage(payload));

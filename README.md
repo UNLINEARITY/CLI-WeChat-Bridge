@@ -313,16 +313,18 @@ wechat-claude --model sonnet --dangerously-skip-permissions
 | `/stop` | 中断当前任务 |
 | `/reset` | 重建当前本地会话 |
 | `/new` 或 `/new-session` | OpenCode 或 Pi 模式下新建 session |
-| `/resume` / `/resume <编号或 ID 前缀>` | OpenCode 或 Pi 模式下列出并恢复当前工作目录的最近 session；编号在列表显示后 5 分钟内有效 |
+| `/resume` / `/resume <编号或 ID 前缀>` | Claude Code、OpenCode 或 Pi 模式下列出并恢复当前工作目录的最近 session；编号在列表显示后 5 分钟内有效 |
 | `/confirm` / `/deny` | 处理 CLI 权限请求；需要一次性 code 的请求会在消息中提示具体确认格式 |
 | `/daemon-stop` | daemon 模式下停止常驻进程 |
 | `/bindings` | 查看当前所有表情绑定 |
 | `/bind [表情] /命令` | 绑定表情到指定命令 |
 | `/unbind [表情]` | 解除指定表情的绑定 |
 
-说明：微信侧 `/resume` 当前支持 OpenCode 和 Pi，并且只列出 daemon/bridge 启动目录内的最近 session。实际恢复会等待当前任务进入 idle；有任务、审批或待回答问题时请先处理，或使用 `/stop`。Codex 和 Claude Code 暂时仍需在可见 companion 中执行各自的 `/resume`，微信会继续跟随本地活动会话。
+说明：微信侧 `/resume` 当前支持 Claude Code、OpenCode 和 Pi，并且只列出 daemon/bridge 启动目录内的最近 root session。实际恢复会等待当前任务进入 idle；有任务、审批或待回答问题时请先处理，或使用 `/stop`。仍在运行的 Claude background session 不允许从微信恢复。Codex 暂时仍需在可见 companion 中执行 `/resume`，微信会继续跟随本地活动 thread。
 
 OpenCode 和 Pi 的本地可见 TUI 会反向同步 session：在电脑端通过 picker、`/resume` 或新建会话切换后，微信自动跟随新的 session，并使之前显示的 `/resume` 编号列表失效。如果本地切换发生在微信任务仍在执行时，bridge 会中断旧任务、报告中断原因，再确认已经跟随新的本地 session，避免回复继续落入不可见的旧会话。
+
+Claude Code 使用官方 Hook 完成同样的双向确认：微信恢复会向当前 PTY提交精确 `/resume <UUID>`，并等待 `SessionEnd(reason=resume)` 与目标 `SessionStart(source=resume)`；电脑端 picker 或 `/resume` 产生相同 Hook 序列，bridge 会跟随新的 transcript。Claude 的本地输入和最终回答继续同步微信。
 
 Pi 的电脑端输入和最终回答都会同步到微信：微信先显示本地输入提示，再在 Pi `agent_settled` 后收到该 turn 的最终结果；微信发起的 Pi turn 仍只发送一次最终回复。
 

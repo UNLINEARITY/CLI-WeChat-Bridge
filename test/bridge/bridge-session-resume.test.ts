@@ -54,8 +54,8 @@ describe("ResumeSessionCoordinator", () => {
   test("enables WeChat resume only for the first-stage adapters", () => {
     expect(isWechatResumeEnabled("opencode")).toBe(true);
     expect(isWechatResumeEnabled("pi")).toBe(true);
+    expect(isWechatResumeEnabled("claude")).toBe(true);
     expect(isWechatResumeEnabled("codex")).toBe(false);
-    expect(isWechatResumeEnabled("claude")).toBe(false);
   });
 
   test("suppresses the adapter event for a WeChat-acknowledged switch", () => {

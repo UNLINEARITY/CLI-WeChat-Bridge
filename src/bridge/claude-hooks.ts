@@ -11,6 +11,7 @@ import {
 
 export type ClaudeHookEventName =
   | "SessionStart"
+  | "SessionEnd"
   | "UserPromptSubmit"
   | "PermissionRequest"
   | "Notification"
@@ -40,6 +41,7 @@ export type ClaudeHookPayload = {
   error?: string;
   error_details?: string;
   stop_hook_active?: boolean;
+  reason?: string;
 };
 
 export type PendingInjectedClaudePrompt = {
@@ -137,6 +139,7 @@ export function buildClaudeHookSettings(command: string): Record<string, unknown
   return {
     hooks: {
       SessionStart: [hook],
+      SessionEnd: [hook],
       UserPromptSubmit: [hook],
       PermissionRequest: [hook],
       Notification: [
