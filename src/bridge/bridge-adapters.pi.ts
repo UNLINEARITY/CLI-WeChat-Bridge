@@ -591,6 +591,16 @@ export class PiTuiAdapter implements BridgeAdapter {
     switch (frame.type) {
       case "session_state": {
         const pending = this.pendingSessionSwitch;
+        const nextSessionId =
+          typeof frame.sessionId === "string" ? frame.sessionId : undefined;
+        const isLocalSessionSwitch =
+          !pending &&
+          Boolean(nextSessionId) &&
+          Boolean(this.state.sharedSessionId) &&
+          nextSessionId !== this.state.sharedSessionId;
+        if (isLocalSessionSwitch) {
+          this.prepareForLocalSessionSwitch();
+        }
         this.applySessionState(
           frame,
           pending?.source ?? "local",
@@ -636,6 +646,20 @@ export class PiTuiAdapter implements BridgeAdapter {
     });
   }
 
+  private prepareForLocalSessionSwitch(): void {
+    if (this.state.activeTurnOrigin === "wechat") {
+      this.emit({
+        type: "task_failed",
+        message: "The active WeChat task was interrupted because the local Pi terminal switched sessions.",
+        timestamp: nowIso(),
+      });
+    }
+    this.currentAssistantText = "";
+    this.currentTurnError = "";
+    this.clearActiveTurn();
+    this.setStatus("idle");
+  }
+
   private beginTurn(origin: BridgeTurnOrigin): void {
     this.currentAssistantText = "";
     this.currentTurnError = "";
@@ -650,13 +674,10 @@ export class PiTuiAdapter implements BridgeAdapter {
       return;
     }
     this.finalizingTurn = true;
-    const origin = this.state.activeTurnOrigin;
     try {
       if (this.currentTurnError) {
-        if (origin === "wechat") {
-          this.emit({ type: "task_failed", message: this.currentTurnError, timestamp: nowIso() });
-        }
-      } else if (origin === "wechat" && this.currentAssistantText) {
+        this.emit({ type: "task_failed", message: this.currentTurnError, timestamp: nowIso() });
+      } else if (this.currentAssistantText) {
         this.emit({ type: "final_reply", text: this.currentAssistantText, timestamp: nowIso() });
       }
       this.state.lastOutputAt = nowIso();

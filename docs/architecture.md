@@ -164,7 +164,9 @@ pi --approve --extension <bridge-extension>
 
 微信 `/resume` 在 OpenCode 和 Pi 中使用同一套控制语义：首次调用列出当前工作目录最近 8 个根 session，并保存 5 分钟的编号快照；随后可用编号、完整 ID 或唯一 ID 前缀恢复。编号解析位于共享 bridge 控制层，adapter 只接收经过解析的真实 session ID。实际切换必须处于 idle 且没有待处理审批或用户输入；OpenCode 先等待 `tui.selectSession` 成功再提交 shared session，Pi 以 extension `switchSession()` 的响应和 session state 作为确认。
 
-可见 companion 托管唯一 Pi TUI 子进程，本地键盘和微信输入共享同一 session。微信 turn 才会生成微信 `final_reply`；本地 turn 保持在原生 TUI 中，并只向 bridge 镜像必要的输入和会话状态，避免把本地回答误发给微信。
+双向同步以可见 TUI 为最终事实来源。OpenCode companion 通过仅在本次进程生效的临时 TUI plugin 观察 `route.current`，并经带随机 token 的 localhost JSONL 通道报告可见 session；它不修改用户的永久 OpenCode 配置。Pi 直接复用 extension 的 `session_start` 状态。电脑端主动切换会使 resume 编号快照失效；若旧 session 中仍有微信任务，adapter 先中止并结算旧任务，再提交新的 shared session 和本地切换通知。
+
+可见 companion 托管唯一 Pi TUI 子进程，本地键盘和微信输入共享同一 session。微信 turn 与本地 turn 都会在 `agent_settled` 后生成微信 `final_reply`；本地输入先以 `mirrored_user_input` 标明来源，随后再转发对应的最终回答，因此电脑与微信可以观察同一条完整对话链路，同时避免把历史回放误认成新回答。
 
 ### 权限与交互
 

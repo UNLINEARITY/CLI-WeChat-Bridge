@@ -1,5 +1,9 @@
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import net from "node:net";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   type AdapterOptions,
@@ -33,6 +37,7 @@ import type {
   UserInputRequest,
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
+import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   buildOneTimeCode,
@@ -228,6 +233,11 @@ const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
 const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 const OPENCODE_MINIMUM_SUPPORTED_VERSION = "1.18.0";
 const OPENCODE_MAXIMUM_SUPPORTED_MAJOR = 2;
+const OPENCODE_TUI_ROUTE_READY_TIMEOUT_MS = 10_000;
+const OPENCODE_TUI_ROUTE_MAX_BUFFER_SIZE = 1024 * 1024;
+const MODULE_FILE = fileURLToPath(import.meta.url);
+const MODULE_DIR = path.dirname(MODULE_FILE);
+const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".js";
 
 /* ------------------------------------------------------------------ */
 /*  Adapter                                                            */
@@ -282,6 +292,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   >();
   private suppressedTuiSessionSelect: { sessionId: string; setAtMs: number } | null =
     null;
+  private tuiRouteServer: net.Server | null = null;
+  private tuiRouteSocket: net.Socket | null = null;
+  private tuiRouteToken = "";
+  private tuiRoutePort = 0;
+  private tuiRouteConfigDir: string | null = null;
+  private tuiRouteConfigPath: string | null = null;
+  private visibleTuiSessionId: string | null = null;
+  private tuiRouteStateReceived = false;
+  private expectedVisibleTuiSessionId: string | null = null;
+  private localSessionFollowChain = Promise.resolve();
   private lastMirroredLocalPrompt: { text: string; createdAtMs: number } | null = null;
   private pendingLocalSessionCreateFollowUntilMs = 0;
 
@@ -336,7 +356,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       await this.initializeSessions();
       this.startSseListener();
       if (this.options.renderMode === "companion") {
+        await this.startTuiRouteBridge();
         await this.startNativeClient();
+        await this.waitForTuiRouteBridgeReady();
         await this.syncVisibleSessionToShared({ force: true, retry: true });
       } else {
         this.state.pid = serverProcess.pid;
@@ -704,6 +726,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       }
     }
 
+    await this.stopTuiRouteBridge();
+
     if (this.serverProcess) {
       const proc = this.serverProcess;
       this.serverProcess = null;
@@ -726,6 +750,200 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   /* ---- Server management ---- */
+
+  private async startTuiRouteBridge(): Promise<void> {
+    this.tuiRouteToken = randomBytes(24).toString("hex");
+    this.tuiRouteStateReceived = false;
+    this.visibleTuiSessionId = null;
+
+    const server = net.createServer((socket) => this.acceptTuiRouteSocket(socket));
+    this.tuiRouteServer = server;
+    this.tuiRoutePort = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, OPENCODE_SERVER_HOST, () => {
+        server.removeListener("error", reject);
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("OpenCode TUI route bridge did not expose a local port."));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+
+    const workspaceDir = ensureWorkspaceChannelDir(this.options.cwd).workspaceDir;
+    const configDir = fs.mkdtempSync(path.join(workspaceDir, "opencode-tui-route-"));
+    const configPath = path.join(configDir, "tui.json");
+    const pluginPath = path.join(
+      MODULE_DIR,
+      "..",
+      "companion",
+      `opencode-tui-bridge-plugin${RUNTIME_ENTRY_EXTENSION}`,
+    );
+    if (!fs.existsSync(pluginPath)) {
+      throw new Error(`OpenCode TUI bridge plugin was not found: ${pluginPath}`);
+    }
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          plugin: [
+            [
+              pluginPath,
+              {
+                port: this.tuiRoutePort,
+                token: this.tuiRouteToken,
+              },
+            ],
+          ],
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    this.tuiRouteConfigDir = configDir;
+    this.tuiRouteConfigPath = configPath;
+  }
+
+  private acceptTuiRouteSocket(socket: net.Socket): void {
+    socket.setEncoding("utf8");
+    socket.setNoDelay(true);
+    let buffer = "";
+    let authenticated = false;
+
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      if (buffer.length > OPENCODE_TUI_ROUTE_MAX_BUFFER_SIZE) {
+        socket.destroy();
+        return;
+      }
+      while (true) {
+        const newlineIndex = buffer.indexOf("\n");
+        if (newlineIndex < 0) {
+          return;
+        }
+        const line = buffer.slice(0, newlineIndex).replace(/\r$/, "");
+        buffer = buffer.slice(newlineIndex + 1);
+        if (!line.trim()) {
+          continue;
+        }
+        try {
+          const frame = JSON.parse(line) as unknown;
+          if (!isRecord(frame)) {
+            continue;
+          }
+          if (!authenticated) {
+            if (frame.type !== "hello" || frame.token !== this.tuiRouteToken) {
+              socket.destroy();
+              return;
+            }
+            authenticated = true;
+            const previousSocket = this.tuiRouteSocket;
+            this.tuiRouteSocket = socket;
+            if (previousSocket && previousSocket !== socket) {
+              previousSocket.destroy();
+            }
+            continue;
+          }
+          this.handleTuiRouteFrame(frame);
+        } catch {
+          // Ignore malformed plugin frames and keep the visible TUI alive.
+        }
+      }
+    });
+    socket.once("close", () => {
+      if (this.tuiRouteSocket === socket) {
+        this.tuiRouteSocket = null;
+      }
+    });
+    socket.once("error", () => {
+      // Close handling owns route observer cleanup.
+    });
+  }
+
+  private handleTuiRouteFrame(frame: Record<string, unknown>): void {
+    if (frame.type !== "route_state") {
+      return;
+    }
+    const sessionId = typeof frame.sessionId === "string" ? frame.sessionId : null;
+    this.tuiRouteStateReceived = true;
+    this.visibleTuiSessionId = sessionId;
+    if (
+      !sessionId ||
+      sessionId === this.activeSessionId ||
+      sessionId === this.expectedVisibleTuiSessionId
+    ) {
+      return;
+    }
+    this.queueLocalVisibleSessionFollow(sessionId);
+  }
+
+  private async waitForTuiRouteBridgeReady(): Promise<void> {
+    const deadline = Date.now() + OPENCODE_TUI_ROUTE_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (this.tuiRouteSocket && this.tuiRouteStateReceived) {
+        return;
+      }
+      await delay(100);
+    }
+    throw new Error(
+      "The OpenCode TUI route bridge did not become ready. OpenCode 1.18 or newer with TUI plugin support is required.",
+    );
+  }
+
+  private async waitForVisibleTuiSession(sessionId: string): Promise<void> {
+    const deadline = Date.now() + OPENCODE_TUI_ROUTE_READY_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (!this.tuiRouteSocket) {
+        throw new Error("The visible OpenCode TUI route bridge disconnected.");
+      }
+      if (this.visibleTuiSessionId === sessionId) {
+        return;
+      }
+      await delay(100);
+    }
+    throw new Error(
+      `The visible OpenCode TUI did not confirm session ${sessionId} before the timeout.`,
+    );
+  }
+
+  private async stopTuiRouteBridge(): Promise<void> {
+    this.tuiRouteSocket?.destroy();
+    this.tuiRouteSocket = null;
+    if (this.tuiRouteServer) {
+      const server = this.tuiRouteServer;
+      this.tuiRouteServer = null;
+      if (server.listening) {
+        await new Promise<void>((resolve) => {
+          try {
+            server.close(() => resolve());
+          } catch {
+            resolve();
+          }
+        });
+      }
+    }
+    const configDir = this.tuiRouteConfigDir;
+    this.tuiRouteConfigDir = null;
+    this.tuiRouteConfigPath = null;
+    this.tuiRoutePort = 0;
+    this.tuiRouteToken = "";
+    this.tuiRouteStateReceived = false;
+    this.visibleTuiSessionId = null;
+    this.expectedVisibleTuiSessionId = null;
+    if (configDir) {
+      const workspaceDir = ensureWorkspaceChannelDir(this.options.cwd).workspaceDir;
+      const resolvedConfigDir = path.resolve(configDir);
+      const resolvedWorkspaceDir = path.resolve(workspaceDir);
+      const isManagedConfigDir =
+        resolvedConfigDir.startsWith(`${resolvedWorkspaceDir}${path.sep}`) &&
+        path.basename(resolvedConfigDir).startsWith("opencode-tui-route-");
+      if (isManagedConfigDir) {
+        fs.rmSync(resolvedConfigDir, { recursive: true, force: true });
+      }
+    }
+  }
 
   private async startServerProcess(): Promise<ChildProcess> {
     const env = buildCliEnvironment(this.options.kind);
@@ -843,6 +1061,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   private async buildNativeAttachArgs(): Promise<string[]> {
+    if ((this.options.extraCliArgs ?? []).includes("--pure")) {
+      throw new Error(
+        "OpenCode --pure cannot be used with the WeChat bridge because local session following requires the managed TUI plugin.",
+      );
+    }
     const args = ["attach", this.getServerUrl()];
     args.push("--dir", this.options.cwd);
     const sessionId = this.activeSessionId;
@@ -855,6 +1078,18 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private buildNativeClientEnv(): Record<string, string> {
     const env = buildCliEnvironment(this.options.kind);
+    if (this.tuiRouteConfigDir && this.tuiRouteConfigPath) {
+      if (env.OPENCODE_CONFIG_DIR && env.OPENCODE_TUI_CONFIG) {
+        throw new Error(
+          "OpenCode cannot inject the managed TUI session plugin while both OPENCODE_CONFIG_DIR and OPENCODE_TUI_CONFIG are set.",
+        );
+      }
+      if (env.OPENCODE_CONFIG_DIR) {
+        env.OPENCODE_TUI_CONFIG = this.tuiRouteConfigPath;
+      } else {
+        env.OPENCODE_CONFIG_DIR = this.tuiRouteConfigDir;
+      }
+    }
     if (this.serverPassword) {
       env.OPENCODE_SERVER_PASSWORD = this.serverPassword;
     }
@@ -1781,13 +2016,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.logDebug(`[opencode-adapter:local-follow] session.created ${session.id}`);
-    this.switchSharedSession(session, {
-      source: "local",
-      reason: "local_follow",
-      notify: true,
-      clearTrackedTurn: true,
-      syncVisible: true,
-    });
+    this.queueLocalVisibleSessionFollow(session.id, session.workspaceID);
   }
 
   private handleSessionUpdated(properties: unknown): void {
@@ -2313,18 +2542,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.localPromptNoticeSent = false;
     this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.logDebug(`[opencode-adapter:local-follow] tui.session.select ${sessionId}`);
-    this.switchSharedSession(
-      {
-        id: sessionId,
-        workspaceID: this.extractWorkspaceId(properties) ?? undefined,
-      },
-      {
-        source: "local",
-        reason: "local_follow",
-        notify: true,
-        clearTrackedTurn: true,
-        syncVisible: true,
-      },
+    this.queueLocalVisibleSessionFollow(
+      sessionId,
+      this.extractWorkspaceId(properties) ?? undefined,
     );
   }
 
@@ -2341,18 +2561,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const sessionId = this.extractSessionId(properties);
     if (sessionId) {
       this.logDebug(`[opencode-adapter:local-follow] command.executed ${name} -> ${sessionId}`);
-      this.switchSharedSession(
-        {
-          id: sessionId,
-          workspaceID: this.extractWorkspaceId(properties) ?? undefined,
-        },
-        {
-          source: "local",
-          reason: "local_follow",
-          notify: true,
-          clearTrackedTurn: true,
-          syncVisible: true,
-        },
+      this.queueLocalVisibleSessionFollow(
+        sessionId,
+        this.extractWorkspaceId(properties) ?? undefined,
       );
       return;
     }
@@ -3021,6 +3232,86 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     );
   }
 
+  private queueLocalVisibleSessionFollow(
+    sessionId: string,
+    workspaceID?: string,
+  ): void {
+    if (!this.client?.session?.get) {
+      this.switchSharedSession(
+        { id: sessionId, workspaceID },
+        {
+          source: "local",
+          reason: "local_follow",
+          notify: true,
+          clearTrackedTurn: true,
+          syncVisible: false,
+        },
+      );
+      return;
+    }
+    const run = this.localSessionFollowChain.then(async () => {
+      await this.followLocalVisibleSession(sessionId, workspaceID);
+    });
+    this.localSessionFollowChain = run.catch((error) => {
+      this.logDebug(
+        `[opencode-adapter:local-follow] failed for ${sessionId}: ${describeUnknownError(error)}`,
+      );
+    });
+  }
+
+  private async followLocalVisibleSession(
+    sessionId: string,
+    workspaceID?: string,
+  ): Promise<void> {
+    if (this.shuttingDown || !this.client || sessionId === this.activeSessionId) {
+      return;
+    }
+    const session = await this.getSessionForCurrentDirectory(sessionId, []);
+    if (!session) {
+      throw new Error(
+        `The locally selected OpenCode session ${sessionId} does not belong to ${this.options.cwd}.`,
+      );
+    }
+    if (workspaceID && !session.workspaceID) {
+      session.workspaceID = workspaceID;
+    }
+
+    const previousSessionId = this.activeSessionId;
+    const interruptedWechatTurn =
+      Boolean(previousSessionId) &&
+      this.state.activeTurnOrigin === "wechat" &&
+      this.hasTrackedTurnState();
+    if (interruptedWechatTurn && previousSessionId) {
+      try {
+        const result = await this.client.session.abort({
+          sessionID: previousSessionId,
+          directory: this.options.cwd,
+          workspace: this.activeWorkspaceId ?? undefined,
+        });
+        if (result.error !== undefined) {
+          throw result.error;
+        }
+      } catch (error) {
+        this.logDebug(
+          `[opencode-adapter:local-follow] failed to abort ${previousSessionId}: ${describeUnknownError(error)}`,
+        );
+      }
+      this.failTrackedTurn(
+        "The active WeChat task was interrupted because the local OpenCode terminal switched sessions.",
+      );
+    } else {
+      this.clearTrackedTurnForLocalSessionSwitch();
+    }
+
+    this.switchSharedSession(session, {
+      source: "local",
+      reason: "local_follow",
+      notify: true,
+      clearTrackedTurn: false,
+      syncVisible: false,
+    });
+  }
+
   private async selectVisibleSessionForResume(
     session: { id: string; workspaceID?: string },
   ): Promise<void> {
@@ -3032,22 +3323,40 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       sessionId: session.id,
       setAtMs: Date.now(),
     };
+    this.expectedVisibleTuiSessionId = session.id;
     let lastError: unknown;
-    for (const delayMs of [0, ...OPENCODE_TUI_SELECT_RETRY_DELAYS_MS]) {
-      if (delayMs > 0) {
-        await delay(delayMs);
+    let confirmed = false;
+    try {
+      let selected = false;
+      for (const delayMs of [0, ...OPENCODE_TUI_SELECT_RETRY_DELAYS_MS]) {
+        if (delayMs > 0) {
+          await delay(delayMs);
+        }
+        try {
+          await this.sendVisibleSessionSelection(session);
+          selected = true;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
       }
-      try {
-        await this.sendVisibleSessionSelection(session);
+      if (selected) {
+        await this.waitForVisibleTuiSession(session.id);
+        confirmed = true;
         return;
-      } catch (error) {
-        lastError = error;
+      }
+    } finally {
+      if (this.expectedVisibleTuiSessionId === session.id) {
+        this.expectedVisibleTuiSessionId = null;
+      }
+      if (
+        !confirmed &&
+        this.suppressedTuiSessionSelect?.sessionId === session.id
+      ) {
+        this.suppressedTuiSessionSelect = null;
       }
     }
 
-    if (this.suppressedTuiSessionSelect?.sessionId === session.id) {
-      this.suppressedTuiSessionSelect = null;
-    }
     throw new Error(
       `Failed to switch the visible OpenCode session: ${describeUnknownError(lastError)}`,
       { cause: lastError },

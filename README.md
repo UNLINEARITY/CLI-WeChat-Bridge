@@ -322,6 +322,10 @@ wechat-claude --model sonnet --dangerously-skip-permissions
 
 说明：微信侧 `/resume` 当前支持 OpenCode 和 Pi，并且只列出 daemon/bridge 启动目录内的最近 session。实际恢复会等待当前任务进入 idle；有任务、审批或待回答问题时请先处理，或使用 `/stop`。Codex 和 Claude Code 暂时仍需在可见 companion 中执行各自的 `/resume`，微信会继续跟随本地活动会话。
 
+OpenCode 和 Pi 的本地可见 TUI 会反向同步 session：在电脑端通过 picker、`/resume` 或新建会话切换后，微信自动跟随新的 session，并使之前显示的 `/resume` 编号列表失效。如果本地切换发生在微信任务仍在执行时，bridge 会中断旧任务、报告中断原因，再确认已经跟随新的本地 session，避免回复继续落入不可见的旧会话。
+
+Pi 的电脑端输入和最终回答都会同步到微信：微信先显示本地输入提示，再在 Pi `agent_settled` 后收到该 turn 的最终结果；微信发起的 Pi turn 仍只发送一次最终回复。
+
 ### 表情绑定
 
 Daemon 模式支持将微信表情映射为命令，在微信中发送表情即可快速触发操作。（不过注意，第一次启动相关cli的时候，最好不要带消息，等启动完成再“表情+文本”快速给指定 cli 发送消息。

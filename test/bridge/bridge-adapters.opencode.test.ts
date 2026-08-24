@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import { describe, expect, test } from "bun:test";
 
 import {
@@ -125,6 +127,49 @@ describe("OpenCodeServerAdapter initial state", () => {
     });
 
     expect(adapter.getState().profile).toBe("wechat");
+  });
+
+  test("injects the managed route plugin through a temporary TUI config", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      tuiRouteConfigDir: string | null;
+      tuiRouteConfigPath: string | null;
+      startTuiRouteBridge(): Promise<void>;
+      stopTuiRouteBridge(): Promise<void>;
+      buildNativeClientEnv(): Record<string, string>;
+    };
+
+    try {
+      await internal.startTuiRouteBridge();
+      const configPath = internal.tuiRouteConfigPath;
+      expect(configPath).not.toBeNull();
+      const config = JSON.parse(fs.readFileSync(configPath!, "utf8")) as {
+        plugin?: Array<[string, { port?: number; token?: string }]>;
+      };
+      expect(config.plugin?.[0]?.[0]).toMatch(/opencode-tui-bridge-plugin\.ts$/);
+      expect(config.plugin?.[0]?.[1]).toEqual(
+        expect.objectContaining({
+          port: expect.any(Number),
+          token: expect.any(String),
+        }),
+      );
+      const env = internal.buildNativeClientEnv();
+      expect(
+        env.OPENCODE_CONFIG_DIR === internal.tuiRouteConfigDir ||
+          env.OPENCODE_TUI_CONFIG === internal.tuiRouteConfigPath,
+      ).toBe(true);
+    } finally {
+      const configDir = internal.tuiRouteConfigDir;
+      await internal.stopTuiRouteBridge();
+      if (configDir) {
+        expect(fs.existsSync(configDir)).toBe(false);
+      }
+    }
   });
 
   test("appends extra CLI args only to the visible attach command", async () => {
@@ -723,7 +768,7 @@ describe("OpenCode visible TUI session sync", () => {
     ]);
   });
 
-  test("drives the visible TUI when a local session switch becomes authoritative", async () => {
+  test("does not echo a local session switch back into the visible TUI", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
       command: "opencode",
@@ -771,13 +816,7 @@ describe("OpenCode visible TUI session sync", () => {
     });
     await wait(0);
 
-    expect(selectSessionCalls).toEqual([
-      expect.objectContaining({
-        directory: process.cwd(),
-        sessionID: "session_selected_local",
-        workspace: "workspace_1",
-      }),
-    ]);
+    expect(selectSessionCalls).toEqual([]);
     expect(events.filter((event) => event.type === "session_switched")).toEqual([
       expect.objectContaining({
         sessionId: "session_selected_local",
@@ -3527,18 +3566,21 @@ describe("OpenCode WeChat session resume", () => {
     const internal = adapter as unknown as {
       client: unknown;
       activeSessionId: string | null;
+      tuiRouteSocket: unknown;
       state: {
         status: string;
         sharedSessionId?: string;
         sharedThreadId?: string;
         activeRuntimeSessionId?: string;
       };
+      handleTuiRouteFrame(frame: Record<string, unknown>): void;
     };
     internal.activeSessionId = "ses_current";
     internal.state.status = "idle";
     internal.state.sharedSessionId = "ses_current";
     internal.state.sharedThreadId = "ses_current";
     internal.state.activeRuntimeSessionId = "ses_current";
+    internal.tuiRouteSocket = {};
     internal.client = {
       session: {
         get: async () => ({
@@ -3558,6 +3600,10 @@ describe("OpenCode WeChat session resume", () => {
         selectSession: async (parameters: { sessionID?: string }) => {
           selectedSessionIds.push(parameters.sessionID ?? "");
           expect(internal.state.sharedSessionId).toBe("ses_current");
+          internal.handleTuiRouteFrame({
+            type: "route_state",
+            sessionId: parameters.sessionID,
+          });
           return {
             data: true,
             error: undefined,
@@ -3701,6 +3747,92 @@ describe("OpenCode WeChat session resume", () => {
     expect(internal.state.sharedSessionId).toBeUndefined();
     expect(internal.state.sharedThreadId).toBeUndefined();
     expect(internal.state.activeRuntimeSessionId).toBeUndefined();
+  });
+
+  test("aborts a WeChat turn and follows a local visible route switch", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const events: Array<{ type: string; message?: string; sessionId?: string; source?: string }> = [];
+    const abortedSessionIds: string[] = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as {
+          type: string;
+          message?: string;
+          sessionId?: string;
+          source?: string;
+        },
+      );
+    });
+    const target = createSdkSessionRecord("ses_local_target");
+    const internal = adapter as unknown as {
+      client: unknown;
+      activeSessionId: string | null;
+      hasAcceptedInput: boolean;
+      currentPreview: string;
+      state: {
+        status: string;
+        activeTurnOrigin?: string;
+        activeTurnId?: string;
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+      };
+      handleTuiRouteFrame(frame: Record<string, unknown>): void;
+    };
+    internal.activeSessionId = "ses_wechat_old";
+    internal.hasAcceptedInput = true;
+    internal.currentPreview = "Old WeChat task";
+    internal.state.status = "busy";
+    internal.state.activeTurnOrigin = "wechat";
+    internal.state.activeTurnId = "turn_old";
+    internal.state.sharedSessionId = "ses_wechat_old";
+    internal.state.sharedThreadId = "ses_wechat_old";
+    internal.client = {
+      session: {
+        get: async () => ({
+          data: target,
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+        abort: async (parameters: { sessionID: string }) => {
+          abortedSessionIds.push(parameters.sessionID);
+          return {
+            data: true,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    internal.handleTuiRouteFrame({
+      type: "route_state",
+      sessionId: "ses_local_target",
+    });
+    await wait(0);
+
+    expect(abortedSessionIds).toEqual(["ses_wechat_old"]);
+    expect(internal.activeSessionId).toBe("ses_local_target");
+    expect(internal.state.status).toBe("idle");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "task_failed",
+        message: expect.stringContaining("local OpenCode terminal switched sessions"),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session_switched",
+        sessionId: "ses_local_target",
+        source: "local",
+      }),
+    );
   });
 });
 

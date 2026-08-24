@@ -202,7 +202,7 @@ standalone 模式按以下顺序处理：
 | --- | --- | --- | --- | --- |
 | 普通文本 | daemon、standalone | 转发给 active adapter；daemon 会先确保可见 CLI 存活 | 产品核心数据路径 | 核心保留 |
 | `/status` | daemon、standalone | daemon 返回工作区、active adapter 和所有 slot；standalone 返回当前 bridge/adapter 状态 | 两种模式输出粒度不同 | 核心保留 |
-| `/resume [target]` | daemon、standalone | OpenCode/Pi：无 target 时列出最近 8 条并缓存 5 分钟，target 可用编号、完整 ID 或唯一 ID 前缀；busy/审批/待回答状态拒绝切换。Codex/Claude Code 仍提示在可见 CLI 内恢复 | 仅限当前工作目录；成功回执在可见 TUI 控制调用完成后发送 | 核心会话命令；后续阶段补齐 Codex/Claude Code |
+| `/resume [target]` | daemon、standalone | OpenCode/Pi：无 target 时列出最近 8 条并缓存 5 分钟，target 可用编号、完整 ID 或唯一 ID 前缀；busy/审批/待回答状态拒绝切换。电脑端主动切换会反向更新 shared session、清除旧编号快照；若微信任务仍在运行则先中断旧任务。Codex/Claude Code 仍提示在可见 CLI 内恢复 | 仅限当前工作目录；成功回执在可见 TUI 控制调用完成后发送 | 核心会话命令；后续阶段补齐 Codex/Claude Code |
 | `/new` | daemon、standalone | 调用 adapter `createSession()`；不支持时返回提示 | 与 `/reset` 容易混淆 | 高级保留 |
 | `/new-session` | daemon、standalone | `/new` 的完全别名 | 增加命令面但语义清晰 | 候选合并；保留 `/new` 即可满足功能 |
 | `/stop` | daemon、standalone | 中断当前 active turn；OpenCode 会先拒绝待回答 question | 与 emoji `[闭嘴]` 重叠 | 核心保留 |

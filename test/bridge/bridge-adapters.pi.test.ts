@@ -200,6 +200,64 @@ describe("Pi sessions", () => {
 });
 
 describe("Pi TUI lifecycle", () => {
+  test("interrupts a WeChat turn when the local Pi TUI switches sessions", async () => {
+    const adapter = new PiTuiAdapter({
+      kind: "pi",
+      command: "pi",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const events: BridgeEvent[] = [];
+    adapter.setEventSink((event) => events.push(event));
+    const internal = adapter as unknown as {
+      state: {
+        status: string;
+        activeTurnId?: string;
+        activeTurnOrigin?: string;
+        sharedSessionId?: string;
+      };
+      currentAssistantText: string;
+      handleFrame(frame: Record<string, unknown>, socket: net.Socket): void;
+    };
+    internal.state.status = "busy";
+    internal.state.activeTurnId = "pi-turn-old";
+    internal.state.activeTurnOrigin = "wechat";
+    internal.state.sharedSessionId = "pi-session-old";
+    internal.currentAssistantText = "partial old answer";
+
+    internal.handleFrame(
+      {
+        type: "session_state",
+        sessionId: "pi-session-local",
+        sessionFile: "C:\\pi\\local.jsonl",
+      },
+      {} as net.Socket,
+    );
+
+    const state = adapter.getState();
+    expect(state).toEqual(
+      expect.objectContaining({
+        status: "idle",
+        sharedSessionId: "pi-session-local",
+      }),
+    );
+    expect(state.activeTurnId).toBeUndefined();
+    expect(state.activeTurnOrigin).toBeUndefined();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "task_failed",
+        message: expect.stringContaining("local Pi terminal switched sessions"),
+      }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session_switched",
+        sessionId: "pi-session-local",
+        source: "local",
+      }),
+    );
+  });
+
   test("keeps a slow native TUI alive while its extension is still loading", async () => {
     const child = new FakePiProcess();
     const killedPids: number[] = [];
@@ -230,7 +288,7 @@ describe("Pi TUI lifecycle", () => {
     expect(killedPids).toEqual([4242]);
   });
 
-  test("inherits the visible terminal and forwards only WeChat-owned final replies", async () => {
+  test("inherits the visible terminal and forwards both WeChat and local final replies", async () => {
     const child = new FakePiProcess();
     const events: BridgeEvent[] = [];
     const spawnCalls: Array<{
@@ -355,7 +413,10 @@ describe("Pi TUI lifecycle", () => {
         text: "Local request",
       }),
     );
-    expect(events.filter((event) => event.type === "final_reply")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "final_reply")).toEqual([
+      expect.objectContaining({ text: "Done" }),
+      expect.objectContaining({ text: "Local answer" }),
+    ]);
 
     await adapter.dispose();
     extensionSocket?.destroy();

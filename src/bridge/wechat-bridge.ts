@@ -753,6 +753,7 @@ async function main(): Promise<void> {
   try {
     wireAdapterEvents({
       adapter,
+      resumeCoordinator,
       options,
       transport,
       stateStore,
@@ -981,6 +982,7 @@ function syncSharedSessionState(
 
 function wireAdapterEvents(params: {
   adapter: BridgeAdapter;
+  resumeCoordinator: ResumeSessionCoordinator;
   options: BridgeCliOptions;
   transport: WeChatTransport;
   stateStore: BridgeStateStore;
@@ -1000,6 +1002,7 @@ function wireAdapterEvents(params: {
 }): void {
   const {
     adapter,
+    resumeCoordinator,
     options,
     transport,
     stateStore,
@@ -1146,6 +1149,9 @@ function wireAdapterEvents(params: {
         }
         break;
       case "session_switched":
+        if (event.source === "local") {
+          resumeCoordinator.clear();
+        }
         stateStore.appendLog(
           `session_switched: ${event.sessionId} source=${event.source} reason=${event.reason}`,
         );
@@ -1168,6 +1174,9 @@ function wireAdapterEvents(params: {
         }
         break;
       case "thread_switched":
+        if (event.source === "local") {
+          resumeCoordinator.clear();
+        }
         stateStore.appendLog(
           `thread_switched: ${event.threadId} source=${event.source} reason=${event.reason}`,
         );

@@ -1477,6 +1477,9 @@ class WechatDaemon {
         }
         break;
       case "session_switched":
+        if (event.source === "local") {
+          slot.resumeCoordinator.clear();
+        }
         appendDaemonLog(
           `session_switched: adapter=${slot.adapter} session=${event.sessionId} source=${event.source} reason=${event.reason}`,
         );
@@ -1502,6 +1505,9 @@ class WechatDaemon {
         }
         break;
       case "thread_switched":
+        if (event.source === "local") {
+          slot.resumeCoordinator.clear();
+        }
         appendDaemonLog(
           `thread_switched: adapter=${slot.adapter} thread=${event.threadId} source=${event.source} reason=${event.reason}`,
         );
