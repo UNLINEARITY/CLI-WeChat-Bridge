@@ -58,6 +58,51 @@ npm install -g cli-wechat-bridge@latest
 
 如果命令仍不存在，请检查 npm 全局 bin 目录是否已加入 `PATH`。使用源码仓库提供全局命令的方式见 [开发说明](development.md#全局命令开发验证)。
 
+## npm 阻止安装脚本（Linux / 较新 npm）
+
+如果全局安装看似完成，但出现类似警告：
+
+```text
+npm warn install-scripts cli-wechat-bridge@1.1.5 ... blocked because ... allowScripts
+npm warn install-scripts node-pty@1.1.0 ... blocked because ... allowScripts
+```
+
+说明 npm 没有运行 bridge 的 `postinstall`，也没有运行 `node-pty` 的原生模块安装脚本。安装命令可能仍以成功状态退出，但 Claude Code 等依赖 PTY 的路径可能无法正常工作，macOS/Linux 上的 `spawn-helper` 执行权限修复也不会生效。
+
+请执行干净重装，并在同一条安装命令中同时指定包名和允许的脚本包：
+
+```bash
+npm uninstall -g cli-wechat-bridge
+npm install -g cli-wechat-bridge@latest --allow-scripts=cli-wechat-bridge,node-pty
+```
+
+如果希望后续升级继续使用该信任配置，可以写入用户级 npm 配置，再正常安装：
+
+```bash
+npm config set allow-scripts=cli-wechat-bridge,node-pty --location=user
+npm install -g cli-wechat-bridge@latest
+```
+
+不要省略安装包名。以下命令是错误的：
+
+```bash
+npm install -g --allow-scripts=cli-wechat-bridge,node-pty
+```
+
+没有 `cli-wechat-bridge@latest` 时，npm 会尝试把当前目录作为待安装项目，并读取当前目录的 `package.json`；在用户主目录执行时通常会报：
+
+```text
+ENOENT: no such file or directory, open '/home/<user>/package.json'
+```
+
+重装完成后运行：
+
+```bash
+wechat-daemon --doctor
+```
+
+确认 `node-pty` 显示为已加载，再重新启动 daemon 和可见 CLI。
+
 ## PTY 不可用 / 回退模式
 
 启动 bridge 后如果看到以下警告：

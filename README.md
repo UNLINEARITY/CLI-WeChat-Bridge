@@ -71,6 +71,21 @@ npm install -g cli-wechat-bridge@latest
 
 本项目使用 `node-pty` 为 CLI 适配器提供完整终端模拟。**Claude Code 适配器当前通过 PTY 交互模式工作**，node-pty 不可用时会回退到兼容模式，但 Claude Code 在此模式下可能无法正常桥接；Codex 适配器主要通过 WebSocket RPC 通信，通常不受影响；OpenCode 适配器不依赖 node-pty；Pi 直接继承可见 companion 的真实终端，也不需要 node-pty 模拟。
 
+**较新 npm 在 Linux 上阻止安装脚本：** 如果安装输出提示 `cli-wechat-bridge` 和 `node-pty` 的 install/postinstall scripts 未被 `allowScripts` 允许，请执行一次干净重装：
+
+```bash
+npm uninstall -g cli-wechat-bridge
+npm install -g cli-wechat-bridge@latest --allow-scripts=cli-wechat-bridge,node-pty
+```
+
+`cli-wechat-bridge@latest` 必须写在同一条安装命令中。不要只运行 `npm install -g --allow-scripts=...`；缺少包名时，npm 会尝试读取当前目录的 `package.json`，并可能报 `ENOENT /home/<user>/package.json`。
+
+如需让后续全局升级继续允许这两个已确认的脚本，可以先写入用户级配置：
+
+```bash
+npm config set allow-scripts=cli-wechat-bridge,node-pty --location=user
+```
+
 **Linux 用户**（最常见）：需要原生模块编译工具：
 
 ```bash
@@ -82,7 +97,7 @@ sudo dnf groupinstall "Development Tools" && sudo dnf install python3
 apk add build-base python3
 ```
 
-安装编译工具后重新安装：`npm install -g cli-wechat-bridge@latest`
+安装编译工具后，使用上面的 `--allow-scripts=cli-wechat-bridge,node-pty` 命令重新安装。
 
 **macOS 用户**：如遇编译问题，安装 Xcode 命令行工具：`xcode-select --install`
 
