@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  isSupportedNodeVersion,
+  MIN_NODE_VERSION_TEXT,
+} from "../../bin/_run-entry.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..");
 const AGENTS = ["codex", "claude", "opencode", "pi"] as const;
@@ -10,6 +14,17 @@ function readRepoFile(relativePath: string): string {
 }
 
 describe("agent CLI entrypoints", () => {
+  test("requires the supported Node.js floor", () => {
+    expect(MIN_NODE_VERSION_TEXT).toBe("22.13.0");
+    expect(isSupportedNodeVersion("22.13.0")).toBe(true);
+    expect(isSupportedNodeVersion("22.13.1")).toBe(true);
+    expect(isSupportedNodeVersion("23.0.0")).toBe(true);
+    expect(isSupportedNodeVersion("24.0.0")).toBe(true);
+    expect(isSupportedNodeVersion("22.12.9")).toBe(false);
+    expect(isSupportedNodeVersion("20.19.0")).toBe(false);
+    expect(isSupportedNodeVersion("not-a-version")).toBe(false);
+  });
+
   test("publishes only the supported smart launchers", () => {
     const packageJson = JSON.parse(readRepoFile("package.json")) as {
       bin?: Record<string, string>;

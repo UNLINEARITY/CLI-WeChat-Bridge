@@ -6,7 +6,7 @@
 
 需要：
 
-- [Node.js](https://nodejs.org/en/download) `>= 24.0.0`
+- [Node.js](https://nodejs.org/en/download) `>= 22.13.0`
 - [Bun](https://bun.sh/docs/installation) `>= 1.0.0`
 - 至少一个本地 CLI：Codex、Claude Code、OpenCode 或 Pi
 
@@ -18,7 +18,7 @@ cd CLI-WeChat-Bridge
 bun install
 ```
 
-源码模式依赖 Node 24 的 TypeScript strip-types 能力；发布包仍然需要先构建 `dist/*.js`。
+源码模式依赖 Node 22.13 的 TypeScript strip-types 能力；发布包仍然需要先构建 `dist/*.js`。
 
 ## 源码模式命令
 

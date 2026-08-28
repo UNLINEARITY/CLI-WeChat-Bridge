@@ -47,7 +47,7 @@
 
 ### 1. 环境要求
 
-- [Node.js](https://nodejs.org/en/download) `>= 24.0.0`（建议直接安装官网 LTS 版本）
+- [Node.js](https://nodejs.org/en/download) `>= 22.13.0`（建议直接安装官网 LTS 版本）
 - 已安装以下任意一种本地 CLI，并尽量保持最新版本：
   - [Codex](https://github.com/openai/codex)
   - [Claude Code](https://code.claude.com/docs/en/overview)
