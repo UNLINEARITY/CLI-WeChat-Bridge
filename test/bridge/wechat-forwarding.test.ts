@@ -8,6 +8,7 @@ import {
   formatWechatContextTokenStaleLogEntry,
   formatWechatSendFailureLogEntry,
   formatWechatSendRetryLogEntry,
+  isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
 } from "../../src/bridge/wechat-forwarding.ts";
@@ -87,6 +88,20 @@ describe("wechat forwarding helpers", () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  test("recognizes missing and stale WeChat context as recoverable send state", () => {
+    expect(
+      isWechatContextUnavailableError(
+        new Error("No cached context token for owner@im.wechat."),
+      ),
+    ).toBe(true);
+    expect(
+      isWechatContextUnavailableError(
+        new WechatApiResponseError({ endpoint: "sendmessage", ret: -2 }),
+      ),
+    ).toBe(true);
+    expect(isWechatContextUnavailableError(new Error("HTTP 401: unauthorized"))).toBe(false);
   });
 
   test("formats OpenCode companion disconnects as a cleaner user-facing message", () => {

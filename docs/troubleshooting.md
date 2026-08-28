@@ -215,6 +215,8 @@ chmod +x "$PKG/prebuilds/darwin-arm64/spawn-helper" \
 
 如果冷启动或长时间闲置后直接从本地终端先发消息，本地 CLI 可能已经完成任务，但微信出站发送会因为旧 `context_token` 失效而失败。此时先从微信侧发一条新消息，再继续后续任务。
 
+当前版本会把因 context token 缺失或过期而未能发送的文本暂存到当前工作区的 `pending-wechat-messages.json`，下一条成功收到的微信消息刷新 token 后自动按顺序补发。若 bridge 在补发前退出，重启同一工作区的 bridge 或 daemon 后仍会继续尝试。
+
 ## `wechat_send_failed` 或 `UND_ERR_CONNECT_TIMEOUT`
 
 如果本地 CLI 已经完成任务，但微信仍没有收到回复，请检查：

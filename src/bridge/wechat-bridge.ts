@@ -22,6 +22,7 @@ import {
   formatWechatContextTokenStaleLogEntry,
   formatWechatSendFailureLogEntry,
   formatWechatSendRetryLogEntry,
+  isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
   type WechatSendContext,
@@ -75,6 +76,10 @@ import {
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
 import {
+  getPendingWechatMessagesFile,
+  PendingWechatMessageStore,
+} from "./wechat-outbound-queue.ts";
+import {
   checkForUpdate,
   formatUpdateMessage,
 } from "../utils/version-checker.ts";
@@ -112,6 +117,11 @@ type ActiveTask = {
 type DeferredInboundMessage = {
   message: InboundWechatMessage;
 };
+
+type WechatSendResult =
+  | { status: "sent" }
+  | { status: "context_unavailable"; error: unknown }
+  | { status: "failed" };
 
 const POLL_RETRY_BASE_MS = 1_000;
 const POLL_RETRY_MAX_MS = 30_000;
@@ -432,6 +442,9 @@ async function main(): Promise<void> {
     initialResumeConversationId: stateStore.getState().resumeConversationId,
     initialTranscriptPath: stateStore.getState().transcriptPath,
   });
+  const pendingWechatMessages = new PendingWechatMessageStore(
+    getPendingWechatMessagesFile(options.cwd),
+  );
   const resumeCoordinator = new ResumeSessionCoordinator({
     adapter: options.adapter,
     runtime: adapter,
@@ -466,63 +479,114 @@ async function main(): Promise<void> {
     return run;
   };
 
+  const sendWechatMessageNow = async (
+    senderId: string,
+    text: string,
+    context: WechatSendContext = "message",
+  ): Promise<WechatSendResult> => {
+    for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await transport.sendText(senderId, text);
+        return { status: "sent" };
+      } catch (err) {
+        if (isWechatContextUnavailableError(err)) {
+          if (isWechatContextTokenStaleError(err)) {
+            transport.clearCachedContextToken(senderId);
+          }
+          const hint =
+            "WeChat conversation context is stale or unavailable. Ask the WeChat owner to send any message first, then local terminal replies can sync back to WeChat.";
+          logError(`Failed to send WeChat ${context}: ${hint}`);
+          stateStore.appendLog(
+            isWechatContextTokenStaleError(err)
+              ? formatWechatContextTokenStaleLogEntry({
+                  context,
+                  recipientId: senderId,
+                  error: err,
+                })
+              : formatWechatSendFailureLogEntry({
+                  context,
+                  recipientId: senderId,
+                  error: err,
+                }),
+          );
+          return { status: "context_unavailable", error: err };
+        }
+
+        if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(err)) {
+          const delayMs = computeWechatSendRetryDelayMs(attempt);
+          logError(
+            `Failed to send WeChat ${context} (attempt ${attempt}). Retrying in ${formatDuration(delayMs)}. ${describeWechatTransportError(err)}`,
+          );
+          stateStore.appendLog(
+            formatWechatSendRetryLogEntry({
+              context,
+              recipientId: senderId,
+              attempt,
+              delayMs,
+              error: err,
+            }),
+          );
+          await delay(delayMs);
+          continue;
+        }
+
+        logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(err)}`);
+        stateStore.appendLog(
+          formatWechatSendFailureLogEntry({
+            context,
+            recipientId: senderId,
+            error: err,
+          }),
+        );
+        return { status: "failed" };
+      }
+    }
+
+    return { status: "failed" };
+  };
+
   const queueWechatMessage = (
     senderId: string,
     text: string,
     context: WechatSendContext = "message",
   ) => {
     return queueWechatTextAction(async () => {
-      for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
-        try {
-          await transport.sendText(senderId, text);
-          return true;
-        } catch (err) {
-          if (isWechatContextTokenStaleError(err)) {
-            transport.clearCachedContextToken(senderId);
-            const hint =
-              "WeChat conversation context is stale. Ask the WeChat owner to send any message first, then local terminal replies can sync back to WeChat.";
-            logError(`Failed to send WeChat ${context}: ${hint}`);
-            stateStore.appendLog(
-              formatWechatContextTokenStaleLogEntry({
-                context,
-                recipientId: senderId,
-                error: err,
-              }),
-            );
-            return false;
-          }
-
-          if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(err)) {
-            const delayMs = computeWechatSendRetryDelayMs(attempt);
-            logError(
-              `Failed to send WeChat ${context} (attempt ${attempt}). Retrying in ${formatDuration(delayMs)}. ${describeWechatTransportError(err)}`,
-            );
-            stateStore.appendLog(
-              formatWechatSendRetryLogEntry({
-                context,
-                recipientId: senderId,
-                attempt,
-                delayMs,
-                error: err,
-              }),
-            );
-            await delay(delayMs);
-            continue;
-          }
-
-          logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(err)}`);
+      const result = await sendWechatMessageNow(senderId, text, context);
+      if (result.status === "context_unavailable") {
+        const pending = pendingWechatMessages.enqueue(senderId, text, context);
+        if (pending) {
           stateStore.appendLog(
-            formatWechatSendFailureLogEntry({
-              context,
-              recipientId: senderId,
-              error: err,
-            }),
+            `wechat_send_queued: id=${pending.id} context=${context} recipient=${senderId} pending=${pendingWechatMessages.list().length}`,
           );
-          return false;
         }
       }
+      return result.status === "sent";
+    });
+  };
 
-      return false;
+  const flushPendingWechatMessages = () => {
+    return queueWechatTextAction(async () => {
+      for (const pending of pendingWechatMessages.list()) {
+        const result = await sendWechatMessageNow(
+          pending.recipientId,
+          pending.text,
+          pending.context,
+        );
+        if (result.status === "sent") {
+          pendingWechatMessages.remove(pending.id);
+          stateStore.appendLog(
+            `wechat_pending_sent: id=${pending.id} context=${pending.context} recipient=${pending.recipientId}`,
+          );
+          continue;
+        }
+        if (result.status === "context_unavailable") {
+          break;
+        }
+        stateStore.appendLog(
+          `wechat_pending_retryable_failure: id=${pending.id} context=${pending.context} recipient=${pending.recipientId}`,
+        );
+        break;
+      }
     });
   };
 
@@ -867,6 +931,10 @@ async function main(): Promise<void> {
         consecutivePollFailures = 0;
         log(`WeChat long poll recovered after ${recoveredFailures} transient error(s).`);
         stateStore.appendLog(`poll_recovered: failures=${recoveredFailures}`);
+      }
+
+      if (pollResult.messages.length > 0 && pendingWechatMessages.list().length > 0) {
+        await flushPendingWechatMessages();
       }
 
       if (pollResult.ignoredBacklogCount > 0) {

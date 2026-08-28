@@ -113,6 +113,13 @@ export function isRetryableWechatSendError(error: unknown): boolean {
     !/errcode=-14\b.*session timeout/i.test(details);
 }
 
+export function isWechatContextUnavailableError(error: unknown): boolean {
+  return (
+    isWechatContextTokenStaleError(error) ||
+    (error instanceof Error && /No cached context token(?: is available| for )/i.test(error.message))
+  );
+}
+
 export function computeWechatSendRetryDelayMs(attempt: number): number {
   return WECHAT_SEND_RETRY_BASE_MS * attempt;
 }

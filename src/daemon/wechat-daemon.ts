@@ -68,6 +68,7 @@ import {
   formatUserFacingInboundError,
   formatWechatContextTokenStaleLogEntry,
   formatWechatSendFailureLogEntry,
+  isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
   type WechatSendContext,
@@ -100,6 +101,10 @@ import {
   WeChatTransport,
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
+import {
+  getPendingWechatMessagesFile,
+  PendingWechatMessageStore,
+} from "../bridge/wechat-outbound-queue.ts";
 import {
   createRuntimeHost,
 } from "../runtime/create-runtime-host.ts";
@@ -149,6 +154,11 @@ type DaemonSlot = {
   activeTask: ActiveTask | null;
   lastOutputAt: number;
 };
+
+type WechatSendResult =
+  | { status: "sent" }
+  | { status: "context_unavailable"; error: unknown }
+  | { status: "failed" };
 
 const MODULE_FILE = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_FILE);
@@ -777,6 +787,7 @@ class WechatDaemon {
   private textSendChain = Promise.resolve();
   private attachmentSendChain = Promise.resolve();
   private readonly pendingWechatForwardTasks = new Set<Promise<void>>();
+  private readonly pendingWechatMessages: PendingWechatMessageStore;
   private shutdownPromise: Promise<void> | null = null;
   private ipcServer: net.Server | null = null;
   private endpointToken = "";
@@ -791,6 +802,9 @@ class WechatDaemon {
     this.profile = params.profile;
     this.authorizedUserId = params.authorizedUserId;
     this.transport = params.transport;
+    this.pendingWechatMessages = new PendingWechatMessageStore(
+      getPendingWechatMessagesFile(this.cwd),
+    );
   }
 
   async startIpcServer(): Promise<void> {
@@ -931,6 +945,10 @@ class WechatDaemon {
         log(`WeChat long poll recovered after ${consecutivePollFailures} transient error(s).`);
         appendDaemonLog(`poll_recovered: failures=${consecutivePollFailures}`);
         consecutivePollFailures = 0;
+      }
+
+      if (pollResult.messages.length > 0 && this.pendingWechatMessages.list().length > 0) {
+        await this.flushPendingWechatMessages();
       }
 
       if (pollResult.ignoredBacklogCount > 0) {
@@ -2091,51 +2109,102 @@ class WechatDaemon {
     return run;
   }
 
+  private async sendWechatMessageNow(
+    senderId: string,
+    text: string,
+    context: WechatSendContext = "message",
+  ): Promise<WechatSendResult> {
+    for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
+      try {
+        await this.transport.sendText(senderId, text);
+        return { status: "sent" };
+      } catch (error) {
+        if (isWechatContextUnavailableError(error)) {
+          if (isWechatContextTokenStaleError(error)) {
+            this.transport.clearCachedContextToken(senderId);
+          }
+          appendDaemonLog(
+            isWechatContextTokenStaleError(error)
+              ? formatWechatContextTokenStaleLogEntry({
+                  context,
+                  recipientId: senderId,
+                  error,
+                })
+              : formatWechatSendFailureLogEntry({
+                  context,
+                  recipientId: senderId,
+                  error,
+                }),
+          );
+          return { status: "context_unavailable", error };
+        }
+
+        if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(error)) {
+          const delayMs = computeWechatSendRetryDelayMs(attempt);
+          appendDaemonLog(
+            `wechat_send_retry: context=${context} recipient=${senderId} attempt=${attempt} delay_ms=${delayMs} error=${truncatePreview(describeWechatTransportError(error), 400)}`,
+          );
+          await delay(delayMs);
+          continue;
+        }
+
+        logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(error)}`);
+        appendDaemonLog(
+          formatWechatSendFailureLogEntry({
+            context,
+            recipientId: senderId,
+            error,
+          }),
+        );
+        return { status: "failed" };
+      }
+    }
+
+    return { status: "failed" };
+  }
+
   private queueWechatMessage(
     senderId: string,
     text: string,
     context: WechatSendContext = "message",
   ): Promise<boolean> {
     return this.queueWechatTextAction(async () => {
-      for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
-        try {
-          await this.transport.sendText(senderId, text);
-          return true;
-        } catch (error) {
-          if (isWechatContextTokenStaleError(error)) {
-            this.transport.clearCachedContextToken(senderId);
-            appendDaemonLog(
-              formatWechatContextTokenStaleLogEntry({
-                context,
-                recipientId: senderId,
-                error,
-              }),
-            );
-            return false;
-          }
-
-          if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(error)) {
-            const delayMs = computeWechatSendRetryDelayMs(attempt);
-            appendDaemonLog(
-              `wechat_send_retry: context=${context} recipient=${senderId} attempt=${attempt} delay_ms=${delayMs} error=${truncatePreview(describeWechatTransportError(error), 400)}`,
-            );
-            await delay(delayMs);
-            continue;
-          }
-
-          logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(error)}`);
+      const result = await this.sendWechatMessageNow(senderId, text, context);
+      if (result.status === "context_unavailable") {
+        const pending = this.pendingWechatMessages.enqueue(senderId, text, context);
+        if (pending) {
           appendDaemonLog(
-            formatWechatSendFailureLogEntry({
-              context,
-              recipientId: senderId,
-              error,
-            }),
+            `wechat_send_queued: id=${pending.id} context=${context} recipient=${senderId} pending=${this.pendingWechatMessages.list().length}`,
           );
-          return false;
         }
       }
+      return result.status === "sent";
+    });
+  }
 
-      return false;
+  private flushPendingWechatMessages(): Promise<void> {
+    return this.queueWechatTextAction(async () => {
+      for (const pending of this.pendingWechatMessages.list()) {
+        const result = await this.sendWechatMessageNow(
+          pending.recipientId,
+          pending.text,
+          pending.context,
+        );
+        if (result.status === "sent") {
+          this.pendingWechatMessages.remove(pending.id);
+          appendDaemonLog(
+            `wechat_pending_sent: id=${pending.id} context=${pending.context} recipient=${pending.recipientId}`,
+          );
+          continue;
+        }
+        if (result.status === "context_unavailable") {
+          break;
+        }
+        appendDaemonLog(
+          `wechat_pending_retryable_failure: id=${pending.id} context=${pending.context} recipient=${pending.recipientId}`,
+        );
+        break;
+      }
     });
   }
 
