@@ -17,20 +17,28 @@ import type {
   PendingUserInputRequest,
   UserInputRequestQuestion,
 } from "./bridge-types.ts";
+import {
+  parseBridgeControlCommand,
+  type BridgeControlCommand,
+} from "../core/bridge-control.ts";
+import {
+  normalizeOutput,
+  summarizeOutput,
+  truncatePreview,
+} from "../core/text-utils.ts";
+export {
+  buildInstanceId,
+  buildOneTimeCode,
+  formatDuration,
+  normalizeOutput,
+  nowIso,
+  stripAnsi,
+  summarizeOutput,
+  truncatePreview,
+} from "../core/text-utils.ts";
 
-const ANSI_ESCAPE_RE =
-  // eslint-disable-next-line no-control-regex
-  /\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-
-export type SystemCommand =
-  | { type: "status" }
-  | { type: "resume"; target?: string }
-  | { type: "new_session" }
-  | { type: "stop" }
-  | { type: "reset" }
-  | { type: "confirm" }
-  | { type: "deny" }
-  | { type: "answer"; raw: string };
+/** Compatibility alias; canonical command definitions live in src/core. */
+export type SystemCommand = BridgeControlCommand;
 
 // Messages older than bridge start minus this grace window are treated as
 // pre-start backlog and skipped. The window must absorb realistic clock skew
@@ -181,33 +189,6 @@ export type CodexSessionAgentMessage = {
   message: string;
 };
 
-export function nowIso(): string {
-  return new Date().toISOString();
-}
-
-export function stripAnsi(text: string): string {
-  return text.replace(ANSI_ESCAPE_RE, "");
-}
-
-export function normalizeOutput(text: string): string {
-  return stripAnsi(text)
-    // eslint-disable-next-line no-control-regex
-    .replace(/\u0000/g, "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n");
-}
-
-export function truncatePreview(text: string, maxLength = 140): string {
-  const normalized = normalizeOutput(text).trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return "(empty)";
-  }
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
-}
-
 export function isThinkingForwardEnabled(): boolean {
   if (process.env.CLI_BRIDGE_THINKING_FORWARD === "1") {
     return true;
@@ -236,55 +217,8 @@ export function formatThinkingForWechat(text: string, maxLength = 500): string {
   return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
-export function buildOneTimeCode(length = 6): string {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  while (code.length < length) {
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
-  }
-  return code;
-}
-
-export function buildInstanceId(): string {
-  return `bridge-${Date.now().toString(36)}-${buildOneTimeCode(6).toLowerCase()}`;
-}
-
 export function parseSystemCommand(text: string): SystemCommand | null {
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-
-  const [rawCommand, ...rest] = trimmed.split(/\s+/);
-  if (!rawCommand) {
-    return null;
-  }
-  const command = rawCommand.toLowerCase();
-  const argument = rest.join(" ").trim();
-
-  switch (command) {
-    case "/status":
-      return { type: "status" };
-    case "/resume":
-      return argument ? { type: "resume", target: argument } : { type: "resume" };
-    case "/new":
-    case "/new-session":
-      return { type: "new_session" };
-    case "/stop":
-      return { type: "stop" };
-    case "/reset":
-      return { type: "reset" };
-    case "/confirm":
-    case "/yes":
-      return { type: "confirm" };
-    case "/deny":
-    case "/no":
-      return { type: "deny" };
-    case "/answer":
-      return argument ? { type: "answer", raw: argument } : null;
-    default:
-      return null;
-  }
+  return parseBridgeControlCommand(text);
 }
 
 export function parseWechatControlCommand(
@@ -639,40 +573,6 @@ export function detectCliApproval(text: string): ApprovalRequest | null {
     confirmInput: matched.confirmInput,
     denyInput: matched.denyInput,
   };
-}
-
-export function formatDuration(durationMs: number): string {
-  if (!Number.isFinite(durationMs) || durationMs < 0) {
-    return "0s";
-  }
-
-  const totalSeconds = Math.floor(durationMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-
-  if (!minutes) {
-    return `${seconds}s`;
-  }
-
-  return `${minutes}m ${seconds}s`;
-}
-
-export function summarizeOutput(text: string, maxLength = 280): string {
-  const normalized = normalizeOutput(text)
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  if (!normalized.length) {
-    return "(no output)";
-  }
-
-  const summary = normalized.slice(-6).join("\n");
-  if (summary.length <= maxLength) {
-    return summary;
-  }
-
-  return summary.slice(summary.length - maxLength);
 }
 
 export function formatStatusReport(

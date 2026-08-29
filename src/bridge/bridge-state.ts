@@ -16,7 +16,7 @@ import type {
   PendingApproval,
   PendingUserInputRequest,
 } from "./bridge-types.ts";
-import { buildInstanceId } from "./bridge-utils.ts";
+import { buildInstanceId } from "../core/text-utils.ts";
 import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import {
   getProcessRecordByPid,

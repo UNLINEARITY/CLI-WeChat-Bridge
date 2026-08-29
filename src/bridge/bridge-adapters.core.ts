@@ -27,10 +27,8 @@ import type {
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
-  normalizeOutput,
-  nowIso,
-  truncatePreview,
 } from "./bridge-utils.ts";
+import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 import { LOCAL_CLIENT_PROTOCOL_VERSION } from "../runtime/runtime-types.ts";
 

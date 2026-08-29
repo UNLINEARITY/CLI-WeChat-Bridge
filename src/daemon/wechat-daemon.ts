@@ -16,7 +16,6 @@ import {
   quoteWindowsCommandArg,
 } from "../bridge/bridge-adapters.shared.ts";
 import { BridgeController } from "../bridge/bridge-controller.ts";
-import { forwardWechatFinalReply } from "../bridge/bridge-final-reply.ts";
 import {
   readBridgeLockFile,
   type BridgeLockPayload,
@@ -72,7 +71,7 @@ import {
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
   type WechatSendContext,
-} from "../bridge/wechat-forwarding.ts";
+} from "../channels/wechat/wechat-forwarding.ts";
 import {
   BRIDGE_LOCK_FILE,
   BRIDGE_LOG_FILE,
@@ -104,10 +103,14 @@ import {
 import {
   getPendingWechatMessagesFile,
   PendingWechatMessageStore,
-} from "../bridge/wechat-outbound-queue.ts";
+} from "../channels/wechat/wechat-outbound-queue.ts";
 import {
   createRuntimeHost,
 } from "../runtime/create-runtime-host.ts";
+import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
+import { routeBridgeMessage } from "../core/bridge-message-router.ts";
+import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
+import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import {
   clearLocalCompanionEndpoint,
   clearLocalCompanionOccupancy,
@@ -1350,9 +1353,37 @@ class WechatDaemon {
     slot.controller.syncLocalClientEndpoint();
   }
 
+  private createWechatChannelPort(adapter: DaemonAdapterKind): WechatChannelPort {
+    return new WechatChannelPort({
+      sendText: (recipientId, text, context) =>
+        this.queueWechatMessage(recipientId, text, context as WechatSendContext),
+      sendImage: (recipientId, filePath) =>
+        this.queueWechatAttachmentAction(() => this.transport.sendImage(filePath, { recipientId })),
+      sendFile: (recipientId, filePath) =>
+        this.queueWechatAttachmentAction(() => this.transport.sendFile(filePath, { recipientId })),
+      sendVoice: (recipientId, filePath) =>
+        this.queueWechatAttachmentAction(() => this.transport.sendVoice(filePath, recipientId)),
+      sendVideo: (recipientId, filePath) =>
+        this.queueWechatAttachmentAction(() => this.transport.sendVideo(filePath, { recipientId })),
+      prefixText: (currentAdapter, text) =>
+        prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
+      onEmptyVisibleReply: (currentAdapter, rawText) => {
+        appendDaemonLog(
+          `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
+        );
+      },
+      onTextSent: (currentAdapter, text) => {
+        appendDaemonLog(
+          `final_reply_sent: adapter=${currentAdapter ?? adapter} chars=${Array.from(text).length}`,
+        );
+      },
+    });
+  }
+
   private handleSlotEvent(slot: DaemonSlot, event: BridgeEvent): void {
     slot.controller.syncLocalClientEndpoint();
     const adapterState = slot.runtime.getState();
+    const channelPort = this.createWechatChannelPort(slot.adapter);
     if (slot.pendingConfirmations.length > 0 && !adapterState.pendingApproval) {
       slot.pendingConfirmations = [];
     }
@@ -1360,242 +1391,121 @@ class WechatDaemon {
       slot.pendingUserInput = null;
     }
 
-    switch (event.type) {
-      case "stdout":
-      case "stderr":
+    void forwardBridgeEvent(event, {
+      stdout: (next) => {
         slot.lastOutputAt = Date.now();
-        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type)) {
-          slot.outputBatcher.push(event.text);
+        if (shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+          slot.outputBatcher.push(next.text);
         }
-        break;
-      case "final_reply":
-        appendDaemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(event.text)}`);
+      },
+      stderr: (next) => {
+        slot.lastOutputAt = Date.now();
+        if (shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+          slot.outputBatcher.push(next.text);
+        }
+      },
+      finalReply: (next) => {
+        appendDaemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await forwardWechatFinalReply({
+          await channelPort.send({
+            target: {
+              channelId: "wechat",
+              conversationId: this.authorizedUserId,
+              recipientId: this.authorizedUserId,
+            },
+            kind: "final_reply",
+            text: next.text,
             adapter: slot.adapter,
-            rawText: event.text,
-            onEmptyVisibleReply: ({ rawVisibleText }) => {
-              appendDaemonLog(
-                `empty_visible_final_reply: adapter=${slot.adapter} raw=${truncatePreview(rawVisibleText)}`,
-              );
-            },
-            sender: {
-              sendText: async (text) => {
-                const sent = await this.queueWechatMessage(
-                  this.authorizedUserId,
-                  prefixDaemonAdapterMessage(slot.adapter, text),
-                  "final_reply",
-                );
-                if (sent) {
-                  appendDaemonLog(
-                    `final_reply_sent: adapter=${slot.adapter} chars=${Array.from(text).length}`,
-                  );
-                }
-                return sent;
-              },
-              sendImage: (imagePath) =>
-                this.queueWechatAttachmentAction(() =>
-                  this.transport.sendImage(imagePath, {
-                    recipientId: this.authorizedUserId,
-                  }),
-                ),
-              sendFile: (filePath) =>
-                this.queueWechatAttachmentAction(() =>
-                  this.transport.sendFile(filePath, {
-                    recipientId: this.authorizedUserId,
-                  }),
-                ),
-              sendVoice: (voicePath) =>
-                this.queueWechatAttachmentAction(() =>
-                  this.transport.sendVoice(voicePath, this.authorizedUserId),
-                ),
-              sendVideo: (videoPath) =>
-                this.queueWechatAttachmentAction(() =>
-                  this.transport.sendVideo(videoPath, {
-                    recipientId: this.authorizedUserId,
-                  }),
-                ),
-            },
           });
         }));
-        break;
-      case "status":
-        if (event.message) {
-          log(`${slot.adapter} ${event.status}: ${event.message}`);
-          appendDaemonLog(`${slot.adapter}_${event.status}: ${event.message}`);
+      },
+      status: (next) => {
+        if (next.message) {
+          log(`${slot.adapter} ${next.status}: ${next.message}`);
+          appendDaemonLog(`${slot.adapter}_${next.status}: ${next.message}`);
         }
-        break;
-      case "notice":
+      },
+      notice: (next) => {
         slot.lastOutputAt = Date.now();
-        appendDaemonLog(`${slot.adapter}_${event.level}_notice: ${truncatePreview(event.text)}`);
-        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type, { text: event.text })) {
+        appendDaemonLog(`${slot.adapter}_${next.level}_notice: ${truncatePreview(next.text)}`);
+        if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-            await this.queueWechatMessage(
-              this.authorizedUserId,
-              prefixDaemonAdapterMessage(slot.adapter, event.text),
-              "notice",
-            );
+            await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, next.text), "notice");
           }));
         }
-        break;
-      case "approval_required":
+      },
+      approvalRequired: (next) => {
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          const pending = toPendingApproval(event);
+          const pending = toPendingApproval(next);
           slot.pendingConfirmations.push(pending);
-          appendDaemonLog(
-            `approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`,
-          );
-          await this.queueWechatMessage(
-            this.authorizedUserId,
-            prefixDaemonAdapterMessage(
-              slot.adapter,
-              formatApprovalMessage(pending, adapterState),
-            ),
-            "approval_required",
-          );
+          appendDaemonLog(`approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`);
+          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatApprovalMessage(pending, adapterState)), "approval_required");
         }));
-        break;
-      case "user_input_required": {
-        // Mirror the pending request synchronously, before the async WeChat
-        // send (which retries with backoff). Otherwise a fast user reply can
-        // race past the still-unwritten mirror and be dispatched as plain
-        // input into a CLI that is waiting for a structured form answer.
-        const pending = toPendingUserInput(event.request);
+      },
+      userInputRequired: (next) => {
+        const pending = toPendingUserInput(next.request);
         slot.pendingUserInput = pending;
-        appendDaemonLog(
-          `user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`,
-        );
+        appendDaemonLog(`user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await this.queueWechatMessage(
-            this.authorizedUserId,
-            prefixDaemonAdapterMessage(
-              slot.adapter,
-              formatUserInputRequestMessage(pending, adapterState),
-            ),
-            "user_input_required",
-          );
+          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatUserInputRequestMessage(pending, adapterState)), "user_input_required");
         }));
-        break;
-      }
-      case "mirrored_user_input":
-        appendDaemonLog(
-          `mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(event.text)}`,
-        );
-        if (shouldForwardBridgeEventToWechat(slot.adapter, event.type, { text: event.text })) {
+      },
+      mirroredUserInput: (next) => {
+        appendDaemonLog(`mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
+        if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-            await this.queueWechatMessage(
-              this.authorizedUserId,
-              prefixDaemonAdapterMessage(
-                slot.adapter,
-                formatMirroredUserInputMessage(slot.adapter, event.text),
-              ),
-              "mirrored_user_input",
-            );
+            await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatMirroredUserInputMessage(slot.adapter, next.text)), "mirrored_user_input");
           }));
         }
-        break;
-      case "session_switched":
-        if (event.source === "local") {
-          slot.resumeCoordinator.clear();
-        }
-        appendDaemonLog(
-          `session_switched: adapter=${slot.adapter} session=${event.sessionId} source=${event.source} reason=${event.reason}`,
-        );
-        if (
-          shouldForwardSessionSwitchEvent(event.reason) &&
-          shouldForwardBridgeEventToWechat(slot.adapter, event.type)
-        ) {
+      },
+      sessionSwitched: (next) => {
+        if (next.source === "local") slot.resumeCoordinator.clear();
+        appendDaemonLog(`session_switched: adapter=${slot.adapter} session=${next.sessionId} source=${next.source} reason=${next.reason}`);
+        if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-            await this.queueWechatMessage(
-              this.authorizedUserId,
-              prefixDaemonAdapterMessage(
-                slot.adapter,
-                formatSessionSwitchMessage({
-                  adapter: slot.adapter,
-                  sessionId: event.sessionId,
-                  source: event.source,
-                  reason: event.reason,
-                }),
-              ),
-              "session_switched",
-            );
+            await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.sessionId, source: next.source, reason: next.reason })), "session_switched");
           }));
         }
-        break;
-      case "thread_switched":
-        if (event.source === "local") {
-          slot.resumeCoordinator.clear();
-        }
-        appendDaemonLog(
-          `thread_switched: adapter=${slot.adapter} thread=${event.threadId} source=${event.source} reason=${event.reason}`,
-        );
-        if (
-          shouldForwardSessionSwitchEvent(event.reason) &&
-          shouldForwardBridgeEventToWechat(slot.adapter, event.type)
-        ) {
+      },
+      threadSwitched: (next) => {
+        if (next.source === "local") slot.resumeCoordinator.clear();
+        appendDaemonLog(`thread_switched: adapter=${slot.adapter} thread=${next.threadId} source=${next.source} reason=${next.reason}`);
+        if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-            await this.queueWechatMessage(
-              this.authorizedUserId,
-              prefixDaemonAdapterMessage(
-                slot.adapter,
-                formatSessionSwitchMessage({
-                  adapter: slot.adapter,
-                  sessionId: event.threadId,
-                  source: event.source,
-                  reason: event.reason,
-                }),
-              ),
-              "thread_switched",
-            );
+            await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.threadId, source: next.source, reason: next.reason })), "thread_switched");
           }));
         }
-        break;
-      case "task_complete":
+      },
+      taskComplete: () => {
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(() => {
           slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
           slot.activeTask = null;
         }));
-        break;
-      case "task_failed":
+      },
+      taskFailed: (next) => {
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
           slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
           slot.activeTask = null;
-          await this.queueWechatMessage(
-            this.authorizedUserId,
-            prefixDaemonAdapterMessage(
-              slot.adapter,
-              formatTaskFailedMessage(slot.adapter, event.message),
-            ),
-            "task_failed",
-          );
+          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatTaskFailedMessage(slot.adapter, next.message)), "task_failed");
         }));
-        break;
-      case "fatal_error":
-        logError(`${slot.adapter}: ${event.message}`);
-        appendDaemonLog(`fatal_error: adapter=${slot.adapter} message=${event.message}`);
+      },
+      fatalError: (next) => {
+        logError(`${slot.adapter}: ${next.message}`);
+        appendDaemonLog(`fatal_error: adapter=${slot.adapter} message=${next.message}`);
         slot.pendingConfirmations = [];
         slot.pendingUserInput = null;
         slot.activeTask = null;
         this.disposeDeadSlot(slot);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await this.queueWechatMessage(
-            this.authorizedUserId,
-            prefixDaemonAdapterMessage(
-              slot.adapter,
-              formatUserFacingBridgeFatalError(event.message),
-            ),
-            "fatal_error",
-          );
+          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatUserFacingBridgeFatalError(next.message)), "fatal_error");
         }));
-        break;
-      case "shutdown_requested":
-        appendDaemonLog(
-          `slot_shutdown_requested: adapter=${slot.adapter} reason=${event.reason}`,
-        );
-        break;
-    }
+      },
+      shutdownRequested: (next) => {
+        appendDaemonLog(`slot_shutdown_requested: adapter=${slot.adapter} reason=${next.reason}`);
+      },
+    });
   }
 
   private async handleInboundMessage(message: InboundWechatMessage): Promise<void> {
@@ -1683,39 +1593,74 @@ class WechatDaemon {
       return;
     }
 
+    const routeCurrentMessage = async (
+      currentSlot: DaemonSlot,
+      command: ReturnType<typeof parseWechatControlCommand>,
+    ): Promise<void> => {
+      await routeBridgeMessage({
+        message: toChannelInboundMessage(message),
+        authorized: true,
+        command,
+        adapterState: currentSlot.runtime.getState(),
+        hasPendingApproval: currentSlot.pendingConfirmations.length > 0,
+        hasPendingUserInput: Boolean(currentSlot.pendingUserInput),
+        onUnauthorized: async () => undefined,
+        handleCommand: async (nextCommand) => {
+          await this.handleSystemCommand(message, currentSlot, nextCommand);
+          return true;
+        },
+        remindPendingApproval: async () => {
+          await this.queueWechatMessage(
+            message.senderId,
+            prefixDaemonAdapterMessage(
+              currentSlot.adapter,
+              formatPendingApprovalReminder(
+                currentSlot.pendingConfirmations[0]!,
+                currentSlot.runtime.getState(),
+              ),
+            ),
+          );
+        },
+        remindPendingUserInput: async () => {
+          await this.queueWechatMessage(
+            message.senderId,
+            prefixDaemonAdapterMessage(
+              currentSlot.adapter,
+              currentSlot.pendingUserInput
+                ? formatPendingUserInputReminder(currentSlot.pendingUserInput)
+                : `${currentSlot.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+            ),
+          );
+        },
+        remindBusy: async () => {
+          await this.queueWechatMessage(
+            message.senderId,
+            prefixDaemonAdapterMessage(
+              currentSlot.adapter,
+              `${currentSlot.adapter} is still working. Wait for the current reply or use /stop.`,
+            ),
+          );
+        },
+        defer: async () => undefined,
+        dispatch: async () => {
+          await this.dispatchInboundWechatText(message, currentSlot);
+        },
+      });
+    };
+
     const command = parseWechatControlCommand(message.text, {
       adapter: slot.adapter,
       hasPendingConfirmation: slot.pendingConfirmations.length > 0,
       hasPendingUserInput: Boolean(slot.pendingUserInput),
     });
-
-    if (command) {
-      await this.handleSystemCommand(message, slot, command);
-      return;
-    }
-
-    if (slot.pendingConfirmations.length > 0) {
-      await this.queueWechatMessage(
-        message.senderId,
-        prefixDaemonAdapterMessage(
-          slot.adapter,
-          formatPendingApprovalReminder(
-            slot.pendingConfirmations[0]!,
-            slot.runtime.getState(),
-          ),
-        ),
-      );
-      return;
-    }
-
-    if (slot.pendingUserInput) {
-      await this.queueWechatMessage(
-        message.senderId,
-        prefixDaemonAdapterMessage(
-          slot.adapter,
-          formatPendingUserInputReminder(slot.pendingUserInput),
-        ),
-      );
+    const slotState = slot.runtime.getState();
+    if (
+      command ||
+      slot.pendingConfirmations.length > 0 ||
+      slot.pendingUserInput ||
+      slotState.status === "awaiting_input"
+    ) {
+      await routeCurrentMessage(slot, command);
       return;
     }
 
@@ -1734,35 +1679,7 @@ class WechatDaemon {
       return;
     }
     slot = this.getActiveSlot() ?? slot;
-
-    const adapterState = slot.runtime.getState();
-    if (adapterState.status === "awaiting_input") {
-      // Belt-and-braces with the pendingUserInput mirror above: the adapter
-      // state is authoritative even when the mirror was cleared or the WeChat
-      // notification is still queued.
-      await this.queueWechatMessage(
-        message.senderId,
-        prefixDaemonAdapterMessage(
-          slot.adapter,
-          slot.pendingUserInput
-            ? formatPendingUserInputReminder(slot.pendingUserInput)
-            : `${slot.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
-        ),
-      );
-      return;
-    }
-    if (adapterState.status === "busy" || adapterState.status === "awaiting_approval") {
-      await this.queueWechatMessage(
-        message.senderId,
-        prefixDaemonAdapterMessage(
-          slot.adapter,
-          `${slot.adapter} is still working. Wait for the current reply or use /stop.`,
-        ),
-      );
-      return;
-    }
-
-    await this.dispatchInboundWechatText(message, slot);
+    await routeCurrentMessage(slot, null);
   }
 
   private async handleEmojiBindingsCommand(

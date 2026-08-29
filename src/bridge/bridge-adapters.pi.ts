@@ -25,7 +25,7 @@ import {
   type EventSink,
 } from "./bridge-adapters.shared.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
-import { normalizeOutput, nowIso } from "./bridge-utils.ts";
+import { normalizeOutput, nowIso } from "../core/text-utils.ts";
 
 const PI_TUI_CONNECT_WARNING_MS = 30_000;
 const PI_TUI_REQUEST_TIMEOUT_MS = 30_000;

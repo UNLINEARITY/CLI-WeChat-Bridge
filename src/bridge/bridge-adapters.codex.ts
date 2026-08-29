@@ -10,10 +10,8 @@ import type {
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
-  normalizeOutput,
-  nowIso,
-  truncatePreview,
 } from "./bridge-utils.ts";
+import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import * as shared from "./bridge-adapters.shared.ts";

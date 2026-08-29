@@ -27,9 +27,8 @@ import {
   isWechatOutboundAttachmentWriteCommand,
   isHighRiskShellCommand,
   isStrictApprovalModeEnabled,
-  normalizeOutput,
-  truncatePreview,
 } from "./bridge-utils.ts";
+import { normalizeOutput, truncatePreview } from "../core/text-utils.ts";
 import {
   getNotificationThreadId,
   isRecord,

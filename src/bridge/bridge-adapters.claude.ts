@@ -33,10 +33,8 @@ import type {
 import {
   detectCliApproval,
   isThinkingForwardEnabled,
-  normalizeOutput,
-  nowIso,
-  truncatePreview,
 } from "./bridge-utils.ts";
+import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 

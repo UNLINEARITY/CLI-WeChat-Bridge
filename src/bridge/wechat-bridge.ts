@@ -8,7 +8,6 @@ import {
 import { delay } from "./bridge-adapters.shared.ts";
 import { t } from "../i18n/index.ts";
 import { BridgeController } from "./bridge-controller.ts";
-import { forwardWechatFinalReply } from "./bridge-final-reply.ts";
 import {
   ResumeSessionCoordinator,
   isWechatResumeEnabled,
@@ -26,7 +25,7 @@ import {
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
   type WechatSendContext,
-} from "./wechat-forwarding.ts";
+} from "../channels/wechat/wechat-forwarding.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { BridgeStateStore } from "./bridge-state.ts";
 import {
@@ -35,6 +34,10 @@ import {
   reapPeerBridgeProcesses,
 } from "./bridge-process-reaper.ts";
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
+import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
+import { routeBridgeMessage } from "../core/bridge-message-router.ts";
+import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
+import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import type {
   ApprovalRequest,
   BridgeAdapter,
@@ -78,7 +81,7 @@ import {
 import {
   getPendingWechatMessagesFile,
   PendingWechatMessageStore,
-} from "./wechat-outbound-queue.ts";
+} from "../channels/wechat/wechat-outbound-queue.ts";
 import {
   checkForUpdate,
   formatUpdateMessage,
@@ -1084,6 +1087,26 @@ function wireAdapterEvents(params: {
     syncLocalClientEndpoint,
     requestShutdown,
   } = params;
+  const channelPort = new WechatChannelPort({
+    sendText: (recipientId, text, context) =>
+      queueWechatMessage(recipientId, text, context as WechatSendContext),
+    sendImage: (recipientId, filePath) =>
+      queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
+    sendFile: (recipientId, filePath) =>
+      queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
+    sendVoice: (recipientId, filePath) =>
+      queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
+    sendVideo: (recipientId, filePath) =>
+      queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
+    onEmptyVisibleReply: (adapter, rawText) => {
+      stateStore.appendLog(
+        `empty_visible_final_reply: adapter=${adapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
+      );
+    },
+    onTextSent: (_adapter, text) => {
+      stateStore.appendLog(`final_reply_sent: chars=${Array.from(text).length}`);
+    },
+  });
 
   adapter.setEventSink((event) => {
     syncSharedSessionState();
@@ -1098,76 +1121,50 @@ function wireAdapterEvents(params: {
     }
     const authorizedUserId = stateStore.getState().authorizedUserId;
 
-    switch (event.type) {
-      case "stdout":
-      case "stderr":
-        if (shouldForwardBridgeEventToWechat(options.adapter, event.type)) {
-          outputBatcher.push(event.text);
+    void forwardBridgeEvent(event, {
+      stdout: (next) => {
+        if (shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
+          outputBatcher.push(next.text);
         }
-        break;
-      case "final_reply":
-        stateStore.appendLog(`final_reply: ${truncatePreview(event.text)}`);
+      },
+      stderr: (next) => {
+        if (shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
+          outputBatcher.push(next.text);
+        }
+      },
+      finalReply: (next) => {
+        stateStore.appendLog(`final_reply: ${truncatePreview(next.text)}`);
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-          await forwardWechatFinalReply({
+          await channelPort.send({
+            target: {
+              channelId: "wechat",
+              conversationId: authorizedUserId,
+              recipientId: authorizedUserId,
+            },
+            kind: "final_reply",
+            text: next.text,
             adapter: options.adapter,
-            rawText: event.text,
-            onEmptyVisibleReply: ({ rawVisibleText }) => {
-              stateStore.appendLog(
-                `empty_visible_final_reply: adapter=${options.adapter} raw=${truncatePreview(rawVisibleText)}`,
-              );
-            },
-            sender: {
-              sendText: async (text) => {
-                const sent = await queueWechatMessage(
-                  authorizedUserId,
-                  text,
-                  "final_reply",
-                );
-                if (sent) {
-                  stateStore.appendLog(
-                    `final_reply_sent: chars=${Array.from(text).length}`,
-                  );
-                }
-                return sent;
-              },
-              sendImage: (imagePath) =>
-                queueWechatAttachmentAction(() =>
-                  transport.sendImage(imagePath, { recipientId: authorizedUserId }),
-                ),
-              sendFile: (filePath) =>
-                queueWechatAttachmentAction(() =>
-                  transport.sendFile(filePath, { recipientId: authorizedUserId }),
-                ),
-              sendVoice: (voicePath) =>
-                queueWechatAttachmentAction(() =>
-                  transport.sendVoice(voicePath, authorizedUserId),
-                ),
-              sendVideo: (videoPath) =>
-                queueWechatAttachmentAction(() =>
-                  transport.sendVideo(videoPath, { recipientId: authorizedUserId }),
-                ),
-            },
           });
         }));
-        break;
-      case "status":
-        if (event.message) {
-          log(`${event.status}: ${event.message}`);
-          stateStore.appendLog(`${event.status}: ${event.message}`);
+      },
+      status: (next) => {
+        if (next.message) {
+          log(`${next.status}: ${next.message}`);
+          stateStore.appendLog(`${next.status}: ${next.message}`);
         }
         void maybeDrainDeferredInboundMessages();
-        break;
-      case "notice":
-        stateStore.appendLog(`${event.level}_notice: ${truncatePreview(event.text)}`);
-        if (shouldForwardBridgeEventToWechat(options.adapter, event.type, { text: event.text })) {
+      },
+      notice: (next) => {
+        stateStore.appendLog(`${next.level}_notice: ${truncatePreview(next.text)}`);
+        if (shouldForwardBridgeEventToWechat(options.adapter, next.type, { text: next.text })) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-            await queueWechatMessage(authorizedUserId, event.text, "notice");
+            await queueWechatMessage(authorizedUserId, next.text, "notice");
           }));
         }
-        break;
-      case "thinking":
-        if (event.text) {
-          const thinkingPreview = formatThinkingForWechat(event.text, 500);
+      },
+      thinking: (next) => {
+        if (next.text) {
+          const thinkingPreview = formatThinkingForWechat(next.text, 500);
           if (thinkingPreview) {
             stateStore.appendLog(`thinking: ${thinkingPreview}`);
             trackWechatForwardTask((async () => {
@@ -1175,139 +1172,83 @@ function wireAdapterEvents(params: {
             })());
           }
         }
-        break;
-      case "approval_required":
+      },
+      approvalRequired: (next) => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-          const pending = toPendingApproval(event.request);
+          const pending = toPendingApproval(next.request);
           stateStore.setPendingConfirmation(pending);
-          stateStore.appendLog(
-            `Approval requested (${pending.source}): ${pending.commandPreview}`,
-          );
-          await queueWechatMessage(
-            authorizedUserId,
-            formatApprovalMessage(pending, adapterState),
-            "approval_required",
-          );
+          stateStore.appendLog(`Approval requested (${pending.source}): ${pending.commandPreview}`);
+          await queueWechatMessage(authorizedUserId, formatApprovalMessage(pending, adapterState), "approval_required");
         }));
-        break;
-      case "user_input_required":
+      },
+      userInputRequired: (next) => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-          const pending = toPendingUserInput(event.request);
+          const pending = toPendingUserInput(next.request);
           stateStore.setPendingUserInput(pending);
-          stateStore.appendLog(
-            `User input requested: questions=${pending.questions.length}`,
-          );
-          await queueWechatMessage(
-            authorizedUserId,
-            formatUserInputRequestMessage(pending, adapterState),
-            "user_input_required",
-          );
+          stateStore.appendLog(`User input requested: questions=${pending.questions.length}`);
+          await queueWechatMessage(authorizedUserId, formatUserInputRequestMessage(pending, adapterState), "user_input_required");
         }));
-        break;
-      case "mirrored_user_input":
-        stateStore.appendLog(`mirrored_local_input: ${truncatePreview(event.text)}`);
-        if (shouldForwardBridgeEventToWechat(options.adapter, event.type, { text: event.text })) {
+      },
+      mirroredUserInput: (next) => {
+        stateStore.appendLog(`mirrored_local_input: ${truncatePreview(next.text)}`);
+        if (shouldForwardBridgeEventToWechat(options.adapter, next.type, { text: next.text })) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-            await queueWechatMessage(
-              authorizedUserId,
-              formatMirroredUserInputMessage(options.adapter, event.text),
-              "mirrored_user_input",
-            );
+            await queueWechatMessage(authorizedUserId, formatMirroredUserInputMessage(options.adapter, next.text), "mirrored_user_input");
           }));
         }
-        break;
-      case "session_switched":
-        if (event.source === "local") {
-          resumeCoordinator.clear();
-        }
-        stateStore.appendLog(
-          `session_switched: ${event.sessionId} source=${event.source} reason=${event.reason}`,
-        );
-        if (
-          shouldForwardSessionSwitchEvent(event.reason) &&
-          shouldForwardBridgeEventToWechat(options.adapter, event.type)
-        ) {
+      },
+      sessionSwitched: (next) => {
+        if (next.source === "local") resumeCoordinator.clear();
+        stateStore.appendLog(`session_switched: ${next.sessionId} source=${next.source} reason=${next.reason}`);
+        if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-            await queueWechatMessage(
-              authorizedUserId,
-              formatSessionSwitchMessage({
-                adapter: options.adapter,
-                sessionId: event.sessionId,
-                source: event.source,
-                reason: event.reason,
-              }),
-              "session_switched",
-            );
+            await queueWechatMessage(authorizedUserId, formatSessionSwitchMessage({ adapter: options.adapter, sessionId: next.sessionId, source: next.source, reason: next.reason }), "session_switched");
           }));
         }
-        break;
-      case "thread_switched":
-        if (event.source === "local") {
-          resumeCoordinator.clear();
-        }
-        stateStore.appendLog(
-          `thread_switched: ${event.threadId} source=${event.source} reason=${event.reason}`,
-        );
-        if (
-          shouldForwardSessionSwitchEvent(event.reason) &&
-          shouldForwardBridgeEventToWechat(options.adapter, event.type)
-        ) {
+      },
+      threadSwitched: (next) => {
+        if (next.source === "local") resumeCoordinator.clear();
+        stateStore.appendLog(`thread_switched: ${next.threadId} source=${next.source} reason=${next.reason}`);
+        if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-            await queueWechatMessage(
-              authorizedUserId,
-              formatSessionSwitchMessage({
-                adapter: options.adapter,
-                sessionId: event.threadId,
-                source: event.source,
-                reason: event.reason,
-              }),
-              "thread_switched",
-            );
+            await queueWechatMessage(authorizedUserId, formatSessionSwitchMessage({ adapter: options.adapter, sessionId: next.threadId, source: next.source, reason: next.reason }), "thread_switched");
           }));
         }
         void maybeDrainDeferredInboundMessages();
-        break;
-      case "task_complete":
+      },
+      taskComplete: () => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           stateStore.clearPendingUserInput();
           clearActiveTask();
           await maybeDrainDeferredInboundMessages();
         }));
-        break;
-      case "task_failed":
+      },
+      taskFailed: (next) => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           stateStore.clearPendingUserInput();
           clearActiveTask();
-          await queueWechatMessage(
-            authorizedUserId,
-            formatTaskFailedMessage(options.adapter, event.message),
-            "task_failed",
-          );
+          await queueWechatMessage(authorizedUserId, formatTaskFailedMessage(options.adapter, next.message), "task_failed");
           await maybeDrainDeferredInboundMessages();
         }));
-        break;
-      case "fatal_error":
-        logError(event.message);
-        stateStore.appendLog(`fatal_error: ${event.message}`);
+      },
+      fatalError: (next) => {
+        logError(next.message);
+        stateStore.appendLog(`fatal_error: ${next.message}`);
         stateStore.clearPendingConfirmation();
         stateStore.clearPendingUserInput();
         clearActiveTask();
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
-          await queueWechatMessage(
-            authorizedUserId,
-            formatUserFacingBridgeFatalError(event.message),
-            "fatal_error",
-          );
+          await queueWechatMessage(authorizedUserId, formatUserFacingBridgeFatalError(next.message), "fatal_error");
           await maybeDrainDeferredInboundMessages();
         }));
-        break;
-      case "shutdown_requested":
-        stateStore.appendLog(`shutdown_requested: ${event.reason}`);
-        requestShutdown(event.message, event.exitCode ?? 0);
-        break;
-    }
+      },
+      shutdownRequested: (next) => {
+        stateStore.appendLog(`shutdown_requested: ${next.reason}`);
+        requestShutdown(next.message, next.exitCode ?? 0);
+      },
+    });
   });
 }
 
@@ -1550,63 +1491,72 @@ async function handleInboundMessage(params: {
     }
   }
 
-  if (state.pendingConfirmation) {
-    await queueWechatMessage(
-      message.senderId,
-      formatPendingApprovalReminder(state.pendingConfirmation, adapter.getState()),
-    );
-    return null;
-  }
-
-  if (state.pendingUserInput) {
-    await queueWechatMessage(
-      message.senderId,
-      formatPendingUserInputReminder(state.pendingUserInput),
-    );
-    return null;
-  }
-
   const adapterState = adapter.getState();
-  if (
-    shouldDeferCodexInboundMessage({
+  const routeResult = await routeBridgeMessage({
+    message: toChannelInboundMessage(message),
+    authorized: true,
+    command: null,
+    adapterState,
+    hasPendingApproval: Boolean(state.pendingConfirmation),
+    hasPendingUserInput: Boolean(state.pendingUserInput),
+    shouldDefer: shouldDeferCodexInboundMessage({
       adapter: options.adapter,
       status: adapterState.status,
       activeTurnOrigin: adapterState.activeTurnOrigin,
       hasPendingConfirmation: Boolean(state.pendingConfirmation),
       hasSystemCommand: Boolean(systemCommand),
-    })
-  ) {
-    await deferInboundMessage(message);
-    return null;
-  }
-
-  if (adapterState.status === "busy") {
-    if (
-      (options.adapter === "codex" || options.adapter === "opencode" || options.adapter === "pi") &&
-      adapterState.activeTurnOrigin === "local"
-    ) {
+    }),
+    onUnauthorized: async () => undefined,
+    handleCommand: async () => false,
+    remindPendingApproval: async () => {
       await queueWechatMessage(
         message.senderId,
-        `${
-          options.adapter === "opencode" ? "OpenCode" : options.adapter === "pi" ? "Pi" : "codex"
-        } is currently busy with a local terminal turn. Wait for it to finish or use /stop.`,
+        formatPendingApprovalReminder(stateStore.getState().pendingConfirmation!, adapter.getState()),
       );
-      return null;
-    }
+    },
+    remindPendingUserInput: async () => {
+      const pendingUserInput = stateStore.getState().pendingUserInput;
+      await queueWechatMessage(
+        message.senderId,
+        pendingUserInput
+          ? formatPendingUserInputReminder(pendingUserInput)
+          : `${options.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+      );
+    },
+    remindBusy: async () => {
+      const currentState = adapter.getState();
+      if (
+        (options.adapter === "codex" || options.adapter === "opencode" || options.adapter === "pi") &&
+        currentState.activeTurnOrigin === "local"
+      ) {
+        await queueWechatMessage(
+          message.senderId,
+          `${
+            options.adapter === "opencode" ? "OpenCode" : options.adapter === "pi" ? "Pi" : "codex"
+          } is currently busy with a local terminal turn. Wait for it to finish or use /stop.`,
+        );
+        return;
+      }
 
-    await queueWechatMessage(
-      message.senderId,
-      `${options.adapter} is still working. Wait for the current reply or use /stop.`,
-    );
-    return null;
-  }
-
-  return dispatchInboundWechatText({
-    message,
-    options,
-    stateStore,
-    adapter,
+      await queueWechatMessage(
+        message.senderId,
+        `${options.adapter} is still working. Wait for the current reply or use /stop.`,
+      );
+    },
+    defer: async () => {
+      await deferInboundMessage(message);
+    },
+    dispatch: async () => {
+      return await dispatchInboundWechatText({
+        message,
+        options,
+        stateStore,
+        adapter,
+      });
+    },
   });
+
+  return routeResult.kind === "dispatched" ? routeResult.result as ActiveTask : null;
 }
 
 async function dispatchInboundWechatText(params: {
