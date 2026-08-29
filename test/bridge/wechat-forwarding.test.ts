@@ -11,6 +11,7 @@ import {
   isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
+  shouldSuppressCodexLocalThreadNotice,
 } from "../../src/bridge/wechat-forwarding.ts";
 import { WechatApiResponseError } from "../../src/wechat/wechat-transport.ts";
 
@@ -154,6 +155,39 @@ describe("wechat forwarding helpers", () => {
     expect(shouldForwardBridgeEventToWechat("pi", "notice")).toBe(true);
     expect(shouldForwardBridgeEventToWechat("pi", "mirrored_user_input")).toBe(true);
     expect(shouldForwardBridgeEventToWechat("pi", "final_reply")).toBe(true);
+  });
+
+  test("suppresses noisy Codex local thread notices while a WeChat turn settles", () => {
+    expect(
+      shouldSuppressCodexLocalThreadNotice({
+        adapter: "codex",
+        source: "local",
+        activeTurnOrigin: "wechat",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressCodexLocalThreadNotice({
+        adapter: "codex",
+        source: "local",
+        lastFinalReplyAtMs: 10_000,
+        nowMs: 14_999,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppressCodexLocalThreadNotice({
+        adapter: "codex",
+        source: "local",
+        lastFinalReplyAtMs: 10_000,
+        nowMs: 15_000,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSuppressCodexLocalThreadNotice({
+        adapter: "claude",
+        source: "local",
+        activeTurnOrigin: "wechat",
+      }),
+    ).toBe(false);
   });
 
   test("keeps non-OpenCode adapters forwarding bridge events", () => {

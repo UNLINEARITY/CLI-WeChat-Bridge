@@ -70,6 +70,7 @@ import {
   isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
+  shouldSuppressCodexLocalThreadNotice,
   type WechatSendContext,
 } from "../channels/wechat/wechat-forwarding.ts";
 import {
@@ -156,6 +157,7 @@ type DaemonSlot = {
   resumeCoordinator: ResumeSessionCoordinator;
   activeTask: ActiveTask | null;
   lastOutputAt: number;
+  lastFinalReplyAtMs: number;
 };
 
 type WechatSendResult =
@@ -1321,6 +1323,7 @@ class WechatDaemon {
       }),
       activeTask: null,
       lastOutputAt: 0,
+      lastFinalReplyAtMs: 0,
     };
 
     runtime.setEventSink((event) => {
@@ -1405,6 +1408,7 @@ class WechatDaemon {
         }
       },
       finalReply: (next) => {
+        slot.lastFinalReplyAtMs = Date.now();
         appendDaemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await channelPort.send({
@@ -1470,6 +1474,16 @@ class WechatDaemon {
       threadSwitched: (next) => {
         if (next.source === "local") slot.resumeCoordinator.clear();
         appendDaemonLog(`thread_switched: adapter=${slot.adapter} thread=${next.threadId} source=${next.source} reason=${next.reason}`);
+        if (
+          shouldSuppressCodexLocalThreadNotice({
+            adapter: slot.adapter,
+            source: next.source,
+            activeTurnOrigin: slot.runtime.getState().activeTurnOrigin,
+            lastFinalReplyAtMs: slot.lastFinalReplyAtMs,
+          })
+        ) {
+          return;
+        }
         if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
           this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
             await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.threadId, source: next.source, reason: next.reason })), "thread_switched");
@@ -2031,11 +2045,23 @@ class WechatDaemon {
     text: string,
     context: WechatSendContext = "message",
   ): Promise<WechatSendResult> {
+    const startedAtMs = Date.now();
+    appendDaemonLog(
+      `wechat_send_started: context=${context} recipient=${senderId} chars=${Array.from(text).length}`,
+    );
     for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
       try {
         await this.transport.sendText(senderId, text);
+        appendDaemonLog(
+          `wechat_send_completed: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
+        );
         return { status: "sent" };
       } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          appendDaemonLog(
+            `wechat_send_timeout: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
+          );
+        }
         if (isWechatContextUnavailableError(error)) {
           if (isWechatContextTokenStaleError(error)) {
             this.transport.clearCachedContextToken(senderId);

@@ -219,6 +219,9 @@ describe("Codex visible thread resume", () => {
         interrupts.push(params);
         return {};
       }
+      if (method === "thread/read") {
+        return { thread: buildThread("thread_local", cwd) };
+      }
       throw new Error(`unexpected method ${method}`);
     };
 
@@ -248,5 +251,106 @@ describe("Codex visible thread resume", () => {
         source: "local",
       }),
     );
+  });
+
+  test("ignores headless status notifications from another workspace", async () => {
+    const cwd = path.resolve("tmp/codex-status-workspace");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/read");
+      return { thread: buildThread("thread_foreign", path.resolve("tmp/other-workspace")) };
+    };
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_foreign",
+      status: { type: "idle" },
+    });
+    await Promise.resolve();
+
+    expect(adapter.state.sharedThreadId).toBeUndefined();
+    expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
+  });
+
+  test("accepts a headless status notification after same-workspace validation", async () => {
+    const cwd = path.resolve("tmp/codex-status-workspace-valid");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/read");
+      return { thread: buildThread("thread_local", cwd) };
+    };
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_local",
+      status: { type: "idle" },
+    });
+    await Promise.resolve();
+
+    expect(adapter.state.sharedThreadId).toBe("thread_local");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "thread_switched",
+        threadId: "thread_local",
+        source: "local",
+      }),
+    );
+  });
+
+  test("ignores late weak thread signals immediately after a WeChat reply", async () => {
+    const cwd = path.resolve("tmp/codex-late-thread-follow");
+    const adapter = buildAdapter(cwd) as any;
+    const trackedTurn = {
+      threadId: "thread_current",
+      turnId: "turn_wechat",
+      origin: "wechat",
+    };
+    adapter.sharedThreadId = "thread_current";
+    adapter.announcedThreadId = "thread_current";
+    adapter.state.sharedThreadId = "thread_current";
+    adapter.state.sharedSessionId = "thread_current";
+    adapter.state.status = "busy";
+    adapter.activeTurn = trackedTurn;
+    adapter.state.activeTurnId = trackedTurn.turnId;
+    adapter.state.activeTurnOrigin = trackedTurn.origin;
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      if (method === "thread/read") {
+        return { thread: buildThread(String(params.threadId), cwd) };
+      }
+      throw new Error(`unexpected method ${method}`);
+    };
+    adapter.turnFinalMessages.set(
+      trackedTurn.turnId,
+      new Map([["item_final", "done"]]),
+    );
+
+    adapter.handleTurnCompleted(trackedTurn, {
+      turn: { status: "completed" },
+    });
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_late_status",
+      status: { type: "idle" },
+    });
+    adapter.handleThreadStarted({
+      thread: buildThread("thread_late_started", cwd, {
+        status: { type: "idle" },
+      }),
+    });
+
+    expect(adapter.state.sharedThreadId).toBe("thread_current");
+
+    adapter.localThreadFollowBlockedUntilMs = Date.now() - 1;
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_real_local",
+      status: { type: "idle" },
+    });
+
+    await Promise.resolve();
+
+    expect(adapter.state.sharedThreadId).toBe("thread_real_local");
   });
 });

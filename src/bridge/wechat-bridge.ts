@@ -24,6 +24,7 @@ import {
   isWechatContextUnavailableError,
   isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
+  shouldSuppressCodexLocalThreadNotice,
   type WechatSendContext,
 } from "../channels/wechat/wechat-forwarding.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
@@ -487,11 +488,23 @@ async function main(): Promise<void> {
     text: string,
     context: WechatSendContext = "message",
   ): Promise<WechatSendResult> => {
+    const startedAtMs = Date.now();
+    stateStore.appendLog(
+      `wechat_send_started: context=${context} recipient=${senderId} chars=${Array.from(text).length}`,
+    );
     for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
       try {
         await transport.sendText(senderId, text);
+        stateStore.appendLog(
+          `wechat_send_completed: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
+        );
         return { status: "sent" };
       } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          stateStore.appendLog(
+            `wechat_send_timeout: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
+          );
+        }
         if (isWechatContextUnavailableError(err)) {
           if (isWechatContextTokenStaleError(err)) {
             transport.clearCachedContextToken(senderId);
@@ -1107,6 +1120,7 @@ function wireAdapterEvents(params: {
       stateStore.appendLog(`final_reply_sent: chars=${Array.from(text).length}`);
     },
   });
+  let lastFinalReplyAtMs = 0;
 
   adapter.setEventSink((event) => {
     syncSharedSessionState();
@@ -1133,6 +1147,7 @@ function wireAdapterEvents(params: {
         }
       },
       finalReply: (next) => {
+        lastFinalReplyAtMs = Date.now();
         stateStore.appendLog(`final_reply: ${truncatePreview(next.text)}`);
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           await channelPort.send({
@@ -1209,6 +1224,16 @@ function wireAdapterEvents(params: {
       threadSwitched: (next) => {
         if (next.source === "local") resumeCoordinator.clear();
         stateStore.appendLog(`thread_switched: ${next.threadId} source=${next.source} reason=${next.reason}`);
+        if (
+          shouldSuppressCodexLocalThreadNotice({
+            adapter: options.adapter,
+            source: next.source,
+            activeTurnOrigin: adapter.getState().activeTurnOrigin,
+            lastFinalReplyAtMs,
+          })
+        ) {
+          return;
+        }
         if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(authorizedUserId, formatSessionSwitchMessage({ adapter: options.adapter, sessionId: next.threadId, source: next.source, reason: next.reason }), "thread_switched");

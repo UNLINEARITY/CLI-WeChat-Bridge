@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  CodexPtyAdapter,
   shouldSuppressCodexTransportFatalError,
   shouldTreatCodexNativeExitAsExpected,
 } from "../../src/bridge/bridge-adapters.codex.ts";
@@ -34,5 +35,20 @@ describe("codex exit handling", () => {
         cleanPanelExitInProgress: true,
       }),
     ).toBe(true);
+  });
+
+  test("keeps the fatal tail of the app-server log", () => {
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "headless",
+    }) as any;
+    adapter.appServerLog = `${"startup ".repeat(80)}\nactual fatal detail`;
+
+    const details = adapter.describeAppServerLog();
+
+    expect(details).toContain("actual fatal detail");
+    expect(details.length).toBeLessThan(560);
   });
 });

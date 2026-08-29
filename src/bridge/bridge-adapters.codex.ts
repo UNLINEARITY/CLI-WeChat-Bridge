@@ -11,7 +11,12 @@ import type {
 import {
   detectCliApproval,
 } from "./bridge-utils.ts";
-import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
+import {
+  normalizeOutput,
+  nowIso,
+  summarizeOutput,
+  truncatePreview,
+} from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import * as shared from "./bridge-adapters.shared.ts";
@@ -167,6 +172,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private subscribedThreadIds = new Set<string>();
   private sharedThreadId: string | null = null;
   private announcedThreadId: string | null = null;
+  private localThreadFollowBlockedUntilMs = 0;
+  private pendingThreadStatusChecks = new Map<string, Promise<void>>();
+  private threadStatusCheckEpoch = 0;
   private pendingThreadAnnouncement: CodexPendingThreadAnnouncement | null = null;
   private activeTurn: CodexActiveTurn | null = null;
   private bridgeOwnedTurnIds = new Set<string>();
@@ -1680,6 +1688,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!resumedThreadId) {
       throw new Error("Codex did not return a thread id while subscribing the bridge client.");
     }
+    this.validateCodexThreadWorkspaceIfPresent(response, resumedThreadId);
 
     this.rememberBridgeOwnedThreadSignal(resumedThreadId);
     this.subscribedThreadIds.add(resumedThreadId);
@@ -1760,6 +1769,25 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return thread;
   }
 
+  private validateCodexThreadWorkspaceIfPresent(
+    response: unknown,
+    targetThreadId: string,
+  ): void {
+    if (!isRecord(response) || !isRecord(response.thread)) {
+      return;
+    }
+    const thread = response.thread;
+    if (typeof thread.id === "string" && thread.id !== targetThreadId) {
+      throw new Error(`Codex opened ${thread.id}, expected ${targetThreadId}.`);
+    }
+    if (
+      typeof thread.cwd === "string" &&
+      normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)
+    ) {
+      throw new Error(`Codex thread ${targetThreadId} does not belong to ${this.options.cwd}.`);
+    }
+  }
+
   private async resumeVisibleSharedThread(threadId: string): Promise<void> {
     const targetThreadId = threadId.trim();
     if (!targetThreadId) {
@@ -1787,19 +1815,21 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       throw new Error(`Codex cannot switch threads while its status is ${this.state.status}.`);
     }
 
-    const readResponse = await this.sendRpcRequest("thread/read", {
-      threadId: targetThreadId,
-      includeTurns: false,
-    });
-    this.validateCodexResumeThread(readResponse, targetThreadId);
-
     const previousThreadId = this.sharedThreadId;
     let targetSubscribed = false;
     this.pendingVisibleResume = { targetThreadId };
-    this.setStatus("starting", `Switching Codex to thread ${targetThreadId.slice(0, 12)}...`);
+    this.setStatus("starting", `Codex resume validating thread ${targetThreadId.slice(0, 12)}...`);
 
     try {
+      const readResponse = await this.sendRpcRequest("thread/read", {
+        threadId: targetThreadId,
+        includeTurns: false,
+      });
+      this.validateCodexResumeThread(readResponse, targetThreadId);
+      this.setStatus("starting", `Codex resume validated thread ${targetThreadId.slice(0, 12)}.`);
+
       this.rememberBridgeOwnedThreadSignal(targetThreadId);
+      this.setStatus("starting", `Codex resume requesting thread ${targetThreadId.slice(0, 12)}.`);
       const resumeResponse = await this.sendRpcRequest("thread/resume", {
         threadId: targetThreadId,
         approvalPolicy: "on-request",
@@ -1811,6 +1841,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.validateCodexResumeThread(resumeResponse, targetThreadId);
       this.subscribedThreadIds.add(targetThreadId);
 
+      this.setStatus("starting", `Codex resume switching visible thread ${targetThreadId.slice(0, 12)}.`);
       const visibleThreadId = await this.switchVisibleCodexThread(targetThreadId);
       if (visibleThreadId !== targetThreadId) {
         throw new Error(
@@ -1828,6 +1859,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         reason: "wechat_resume",
         notify: true,
       });
+      this.setStatus("starting", `Codex resume committed thread ${targetThreadId.slice(0, 12)}.`);
       this.setStatus("idle");
 
       if (previousThreadId && previousThreadId !== targetThreadId) {
@@ -1837,7 +1869,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       if (targetSubscribed && targetThreadId !== previousThreadId) {
         await this.unsubscribeCodexThreadBestEffort(targetThreadId);
       }
-      this.setStatus("idle");
+      this.setStatus(
+        "idle",
+        `Codex resume failed for ${targetThreadId.slice(0, 12)}: ${describeUnknownError(error)}`,
+      );
       throw error;
     } finally {
       this.pendingVisibleResume = null;
@@ -1897,6 +1932,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!resumedThreadId) {
       throw new Error("Codex did not return a thread id while resuming the saved thread.");
     }
+    this.validateCodexThreadWorkspaceIfPresent(response, resumedThreadId);
 
     this.rememberBridgeOwnedThreadSignal(resumedThreadId);
     this.subscribedThreadIds.add(resumedThreadId);
@@ -2070,6 +2106,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.completedTurnOrder = [];
     }
     this.pendingInjectedInputs = [];
+    this.threadStatusCheckEpoch += 1;
+    this.pendingThreadStatusChecks.clear();
     this.recentBridgeThreadSignalAtById.clear();
     this.sessionFinalText = null;
     this.nextSessionFallbackScanAtMs = 0;
@@ -2145,6 +2183,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         signal: "status_changed",
       });
     }
+  }
+
+  private blockLateLocalThreadFollow(): void {
+    this.localThreadFollowBlockedUntilMs =
+      Date.now() + CODEX_LOCAL_THREAD_ANNOUNCE_SETTLE_MS;
   }
 
   private clearPendingThreadAnnouncement(): void {
@@ -2224,6 +2267,17 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       signal: CodexThreadAnnouncementSignal;
     },
   ): void {
+    const weakSignal =
+      options.signal === "status_changed" ||
+      options.signal === "thread_started" ||
+      options.signal === "session_fallback";
+    if (weakSignal && Date.now() < this.localThreadFollowBlockedUntilMs) {
+      return;
+    }
+    if (options.signal === "user_message" || options.signal === "turn_started") {
+      this.localThreadFollowBlockedUntilMs = 0;
+    }
+
     if (this.pendingVisibleResume) {
       return;
     }
@@ -2948,6 +3002,76 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!threadId) {
       return;
     }
+    if (this.pendingVisibleResume) {
+      return;
+    }
+
+    const notificationCwd =
+      typeof params.cwd === "string"
+        ? params.cwd
+        : isRecord(params.thread) && typeof params.thread.cwd === "string"
+          ? params.thread.cwd
+          : null;
+    if (
+      notificationCwd &&
+      normalizeComparablePath(notificationCwd) !== normalizeComparablePath(this.options.cwd)
+    ) {
+      return;
+    }
+
+    if (!this.isTrustedThreadStatus(threadId, Boolean(notificationCwd))) {
+      this.queueThreadStatusCwdCheck(threadId);
+      return;
+    }
+
+    this.applyThreadStatusChanged(threadId);
+  }
+
+  private isTrustedThreadStatus(threadId: string, hasCwd: boolean): boolean {
+    if (hasCwd || this.isNativePanelMode()) {
+      return true;
+    }
+    return (
+      this.subscribedThreadIds.has(threadId) ||
+      this.activeTurn?.threadId === threadId ||
+      this.pendingTurnThreadId === threadId ||
+      this.pendingVisibleResume?.targetThreadId === threadId
+    );
+  }
+
+  private queueThreadStatusCwdCheck(threadId: string): void {
+    if (this.pendingThreadStatusChecks.has(threadId)) {
+      return;
+    }
+
+    const epoch = this.threadStatusCheckEpoch;
+    const check = this.sendRpcRequest("thread/read", {
+      threadId,
+      includeTurns: false,
+    })
+      .then((response) => {
+        if (epoch !== this.threadStatusCheckEpoch) {
+          return;
+        }
+        if (!isRecord(response) || !isRecord(response.thread)) {
+          return;
+        }
+        const thread = response.thread;
+        if (
+          typeof thread.cwd === "string" &&
+          normalizeComparablePath(thread.cwd) === normalizeComparablePath(this.options.cwd)
+        ) {
+          this.applyThreadStatusChanged(threadId);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        this.pendingThreadStatusChecks.delete(threadId);
+      });
+    this.pendingThreadStatusChecks.set(threadId, check);
+  }
+
+  private applyThreadStatusChanged(threadId: string): void {
 
     if (
       !this.activeTurn ||
@@ -3104,6 +3228,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
     if (this.activeTurn?.turnId === trackedTurn.turnId) {
       this.setActiveTurn(null);
+    }
+    if (completedTrackedTurn.origin === "wechat") {
+      this.blockLateLocalThreadFollow();
     }
     this.cleanupTurnArtifacts(trackedTurn.turnId);
 
@@ -3272,6 +3399,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    if (activeTurn.origin === "wechat") {
+      this.blockLateLocalThreadFollow();
+    }
     this.clearPendingApprovalState();
     this.clearPendingUserInputState();
     this.setActiveTurn(null);
@@ -3335,11 +3465,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private describeAppServerLog(): string {
-    const summary = normalizeOutput(this.appServerLog).trim();
-    if (!summary) {
+    const normalized = normalizeOutput(this.appServerLog).trim();
+    if (!normalized) {
       return "";
     }
-    return ` Recent app-server log: ${truncatePreview(summary, 220)}`;
+    const summary = summarizeOutput(normalized, 500);
+    return ` Recent app-server log: ${summary}`;
   }
 
   private terminateCodexClient(): void {
