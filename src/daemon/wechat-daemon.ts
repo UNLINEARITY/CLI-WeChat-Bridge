@@ -158,6 +158,7 @@ type DaemonSlot = {
   activeTask: ActiveTask | null;
   lastOutputAt: number;
   lastFinalReplyAtMs: number;
+  eventForwardChain: Promise<void>;
 };
 
 type WechatSendResult =
@@ -1324,6 +1325,7 @@ class WechatDaemon {
       activeTask: null,
       lastOutputAt: 0,
       lastFinalReplyAtMs: 0,
+      eventForwardChain: Promise.resolve(),
     };
 
     runtime.setEventSink((event) => {
@@ -1394,7 +1396,8 @@ class WechatDaemon {
       slot.pendingUserInput = null;
     }
 
-    void forwardBridgeEvent(event, {
+    slot.eventForwardChain = slot.eventForwardChain
+      .then(() => forwardBridgeEvent(event, {
       stdout: (next) => {
         slot.lastOutputAt = Date.now();
         if (shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
@@ -1519,7 +1522,11 @@ class WechatDaemon {
       shutdownRequested: (next) => {
         appendDaemonLog(`slot_shutdown_requested: adapter=${slot.adapter} reason=${next.reason}`);
       },
-    });
+      }))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        appendDaemonLog(`event_forward_failed: adapter=${slot.adapter} message=${message}`);
+      });
   }
 
   private async handleInboundMessage(message: InboundWechatMessage): Promise<void> {

@@ -1106,6 +1106,7 @@ function wireAdapterEvents(params: {
     },
   });
   let lastFinalReplyAtMs = 0;
+  let eventForwardChain = Promise.resolve();
 
   adapter.setEventSink((event) => {
     syncSharedSessionState();
@@ -1120,7 +1121,8 @@ function wireAdapterEvents(params: {
     }
     const authorizedUserId = stateStore.getState().authorizedUserId;
 
-    void forwardBridgeEvent(event, {
+    eventForwardChain = eventForwardChain
+      .then(() => forwardBridgeEvent(event, {
       stdout: (next) => {
         if (shouldForwardBridgeEventToWechat(options.adapter, next.type)) {
           outputBatcher.push(next.text);
@@ -1258,7 +1260,12 @@ function wireAdapterEvents(params: {
         stateStore.appendLog(`shutdown_requested: ${next.reason}`);
         requestShutdown(next.message, next.exitCode ?? 0);
       },
-    });
+      }))
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        logError(`Bridge event handling failed: ${message}`);
+        stateStore.appendLog(`event_forward_failed: ${message}`);
+      });
   });
 }
 
