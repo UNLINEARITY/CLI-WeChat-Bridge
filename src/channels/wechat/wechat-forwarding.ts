@@ -21,7 +21,7 @@ export type WechatSendContext =
   | "thinking";
 
 export const WECHAT_SEND_MAX_ATTEMPTS = 3;
-export const CODEX_LOCAL_THREAD_NOTICE_SUPPRESS_MS = 5_000;
+export const CODEX_LOCAL_THREAD_NOTICE_SUPPRESS_MS = 500;
 
 const WECHAT_SEND_RETRY_BASE_MS = 750;
 
@@ -55,9 +55,9 @@ export function shouldForwardBridgeEventToWechat(
 }
 
 /**
- * Local Codex panels can emit a burst of weak thread notifications while a
- * WeChat turn is settling. Suppress only the user-facing notice in that
- * window; the adapter still updates its internal shared-thread state.
+ * Local Codex panels can emit a burst of weak thread notifications immediately
+ * after a WeChat reply. Suppress only the user-facing notice in that window;
+ * the adapter still updates its internal shared-thread state.
  */
 export function shouldSuppressCodexLocalThreadNotice(params: {
   adapter: BridgeAdapterKind;
@@ -68,9 +68,6 @@ export function shouldSuppressCodexLocalThreadNotice(params: {
 }): boolean {
   if (params.adapter !== "codex" || params.source !== "local") {
     return false;
-  }
-  if (params.activeTurnOrigin === "wechat") {
-    return true;
   }
   if (typeof params.lastFinalReplyAtMs !== "number") {
     return false;

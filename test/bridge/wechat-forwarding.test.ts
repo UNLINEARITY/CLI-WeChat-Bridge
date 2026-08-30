@@ -157,20 +157,20 @@ describe("wechat forwarding helpers", () => {
     expect(shouldForwardBridgeEventToWechat("pi", "final_reply")).toBe(true);
   });
 
-  test("suppresses noisy Codex local thread notices while a WeChat turn settles", () => {
+  test("suppresses only recently completed Codex local thread notices", () => {
     expect(
       shouldSuppressCodexLocalThreadNotice({
         adapter: "codex",
         source: "local",
         activeTurnOrigin: "wechat",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldSuppressCodexLocalThreadNotice({
         adapter: "codex",
         source: "local",
         lastFinalReplyAtMs: 10_000,
-        nowMs: 14_999,
+        nowMs: 10_499,
       }),
     ).toBe(true);
     expect(
@@ -178,7 +178,7 @@ describe("wechat forwarding helpers", () => {
         adapter: "codex",
         source: "local",
         lastFinalReplyAtMs: 10_000,
-        nowMs: 15_000,
+        nowMs: 10_500,
       }),
     ).toBe(false);
     expect(
