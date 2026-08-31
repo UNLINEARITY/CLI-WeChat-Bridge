@@ -1,7 +1,7 @@
 ﻿import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   BridgeResumeSessionCandidate,
@@ -53,6 +53,21 @@ type CodexPendingVisibleResume = {
   targetThreadId: string;
 };
 
+export function parseCodexCliVersion(output: string): string | null {
+  const match = output.match(/\b(\d+\.\d+\.\d+)\b/);
+  return match?.[1] ?? null;
+}
+
+export function isCodexVersionInCompatibilityRange(version: string): boolean {
+  const parts = version.split(".").map((part) => Number(part));
+  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
+    return false;
+  }
+  const major = parts[0] ?? -1;
+  const minor = parts[1] ?? -1;
+  return major === 0 && minor >= 149 && minor <= 151;
+}
+
 const {
   CODEX_APP_SERVER_HOST,
   CODEX_APP_SERVER_READY_TIMEOUT_MS,
@@ -102,6 +117,7 @@ const {
 
 const CODEX_LOCAL_THREAD_ANNOUNCE_SETTLE_MS = 150;
 const CODEX_NON_BLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
+const CODEX_RESUME_REPLAY_SETTLE_MS = 5_000;
 
 function getCodexThreadStatusType(value: unknown): string | null {
   if (typeof value === "string") {
@@ -170,6 +186,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private rpcRequestCounter = 0;
   private pendingRpcRequests = new Map<string, CodexRpcPendingRequest>();
   private subscribedThreadIds = new Set<string>();
+  private pendingThreadSubscriptions = new Map<string, Promise<boolean>>();
   private sharedThreadId: string | null = null;
   private announcedThreadId: string | null = null;
   private localThreadFollowBlockedUntilMs = 0;
@@ -184,6 +201,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private interruptPendingTurnStart = false;
   private pendingThreadFollowId: string | null = null;
   private pendingVisibleResume: CodexPendingVisibleResume | null = null;
+  private bridgeResumeReplayThreadId: string | null = null;
+  private bridgeResumeReplayUntilMs = 0;
   private pendingApprovalRequests: CodexPendingApprovalRequest[] = [];
   private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
   private pendingUserInputTimer: ReturnType<typeof setTimeout> | null = null;
@@ -220,6 +239,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private finalReplyCompletionTimer: ReturnType<typeof setTimeout> | null = null;
   private finalReplyCompletionTurnId: string | null = null;
   private resumeThreadId: string | null;
+  private codexCliVersion: string | null = null;
   private readonly localClientInstanceId = `${process.pid}-${Date.now().toString(36)}`;
 
   constructor(options: AdapterOptions) {
@@ -241,6 +261,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (this.isHeadlessRuntimeMode()) {
       this.setStatus("starting", `Starting ${this.options.kind} runtime host...`);
     }
+
+    this.codexCliVersion = this.detectCodexCliVersion();
+    const compatibility = this.codexCliVersion
+      ? isCodexVersionInCompatibilityRange(this.codexCliVersion)
+        ? `compatible=${this.codexCliVersion}`
+        : `outside-supported-range=${this.codexCliVersion}`
+      : "unknown-version";
+    this.setStatus("starting", `Codex protocol compatibility: ${compatibility}.`);
 
     await this.startAppServer();
     await this.connectRpcClient();
@@ -556,6 +584,24 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return Boolean(this.appServer);
     }
     return this.isNativePanelMode() ? Boolean(this.nativeProcess) : Boolean(this.pty);
+  }
+
+  private detectCodexCliVersion(): string | null {
+    try {
+      const target = resolveSpawnTarget(this.options.command, "codex", {
+        forwardArgs: ["--version"],
+      });
+      const result = spawnSync(target.file, target.args, {
+        cwd: this.options.cwd,
+        env: this.buildEnv(),
+        encoding: "utf8",
+        timeout: 5_000,
+        windowsHide: true,
+      });
+      return parseCodexCliVersion(`${result.stdout ?? ""}\n${result.stderr ?? ""}`);
+    } catch {
+      return null;
+    }
   }
 
   private shouldPollSessionLog(): boolean {
@@ -1662,12 +1708,19 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return true;
     }
 
-    try {
-      await this.ensureSharedThreadSubscribed(threadId);
-      return true;
-    } catch {
-      return false;
+    const pending = this.pendingThreadSubscriptions.get(threadId);
+    if (pending) {
+      return await pending;
     }
+
+    const attempt = this.ensureSharedThreadSubscribed(threadId)
+      .then(() => true)
+      .catch(() => false)
+      .finally(() => {
+        this.pendingThreadSubscriptions.delete(threadId);
+      });
+    this.pendingThreadSubscriptions.set(threadId, attempt);
+    return await attempt;
   }
 
   private async ensureSharedThreadSubscribed(threadId: string): Promise<void> {
@@ -1688,13 +1741,13 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!resumedThreadId) {
       throw new Error("Codex did not return a thread id while subscribing the bridge client.");
     }
-    this.validateCodexThreadWorkspaceIfPresent(response, resumedThreadId);
+    if (resumedThreadId !== threadId) {
+      throw new Error(`Codex opened ${resumedThreadId}, expected ${threadId}.`);
+    }
+    this.validateCodexThreadWorkspaceIfPresent(response, threadId);
 
     this.rememberBridgeOwnedThreadSignal(resumedThreadId);
     this.subscribedThreadIds.add(resumedThreadId);
-    if (resumedThreadId !== this.sharedThreadId) {
-      this.updateSharedThread(resumedThreadId);
-    }
   }
 
   private async listAppServerResumeSessions(
@@ -1786,6 +1839,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     ) {
       throw new Error(`Codex thread ${targetThreadId} does not belong to ${this.options.cwd}.`);
     }
+    if (typeof thread.parentThreadId === "string") {
+      throw new Error(`Codex thread ${targetThreadId} is a subagent thread.`);
+    }
+    if (thread.ephemeral === true) {
+      throw new Error(`Codex thread ${targetThreadId} is ephemeral.`);
+    }
   }
 
   private async resumeVisibleSharedThread(threadId: string): Promise<void> {
@@ -1859,6 +1918,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         reason: "wechat_resume",
         notify: true,
       });
+      this.bridgeResumeReplayThreadId = targetThreadId;
+      this.bridgeResumeReplayUntilMs = Date.now() + CODEX_RESUME_REPLAY_SETTLE_MS;
       this.setStatus("starting", `Codex resume committed thread ${targetThreadId.slice(0, 12)}.`);
       this.setStatus("idle");
 
@@ -2108,6 +2169,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.pendingInjectedInputs = [];
     this.threadStatusCheckEpoch += 1;
     this.pendingThreadStatusChecks.clear();
+    this.clearBridgeResumeReplay();
     this.recentBridgeThreadSignalAtById.clear();
     this.sessionFinalText = null;
     this.nextSessionFallbackScanAtMs = 0;
@@ -2285,11 +2347,15 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.interruptWechatTurnForLocalThreadSwitch(threadId);
 
     if (!this.isNativePanelMode()) {
+      const threadChanged = this.sharedThreadId !== threadId;
       this.updateSharedThread(threadId, {
         source: "local",
         reason: options.reason,
         notify: true,
       });
+      if (threadChanged) {
+        void this.tryEnsureSharedThreadSubscribed(threadId);
+      }
       return;
     }
 
@@ -2386,6 +2452,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return false;
     }
     return true;
+  }
+
+  private isBridgeResumeReplay(threadId: string): boolean {
+    if (this.bridgeResumeReplayThreadId !== threadId) {
+      return false;
+    }
+    if (Date.now() >= this.bridgeResumeReplayUntilMs) {
+      this.clearBridgeResumeReplay();
+      return false;
+    }
+    return true;
+  }
+
+  private clearBridgeResumeReplay(): void {
+    this.bridgeResumeReplayThreadId = null;
+    this.bridgeResumeReplayUntilMs = 0;
   }
 
   private clearPendingApprovalState(): void {
@@ -3005,6 +3087,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (this.pendingVisibleResume) {
       return;
     }
+    if (this.isBridgeResumeReplay(threadId)) {
+      return;
+    }
 
     const notificationCwd =
       typeof params.cwd === "string"
@@ -3058,8 +3143,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         }
         const thread = response.thread;
         if (
+          thread.id === threadId &&
           typeof thread.cwd === "string" &&
-          normalizeComparablePath(thread.cwd) === normalizeComparablePath(this.options.cwd)
+          normalizeComparablePath(thread.cwd) === normalizeComparablePath(this.options.cwd) &&
+          typeof thread.parentThreadId !== "string" &&
+          thread.ephemeral !== true
         ) {
           this.applyThreadStatusChanged(threadId);
         }
@@ -3094,14 +3182,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!threadId) {
       return;
     }
+    if (this.isBridgeResumeReplay(threadId)) {
+      return;
+    }
 
     if (this.isRecentlyBridgeOwnedThread(threadId)) {
       return;
     }
 
     const thread = isRecord(params.thread) ? params.thread : null;
-    if (thread && typeof thread.cwd === "string") {
-      if (normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)) {
+    if (thread) {
+      if (
+        (typeof thread.cwd === "string" &&
+          normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)) ||
+        typeof thread.parentThreadId === "string" ||
+        thread.ephemeral === true
+      ) {
         return;
       }
     }
@@ -3125,6 +3221,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private handleTrackedTurnStarted(trackedTurn: CodexActiveTurn): void {
     if (this.activeTurn?.turnId === trackedTurn.turnId) {
       return;
+    }
+    if (trackedTurn.origin === "local") {
+      this.clearBridgeResumeReplay();
     }
 
     if (

@@ -301,6 +301,132 @@ describe("Codex visible thread resume", () => {
     );
   });
 
+  test("subscribes a headless locally followed thread before mirroring its input", async () => {
+    const cwd = path.resolve("tmp/codex-local-follow-subscription");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    const methods: string[] = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.sharedThreadId = "thread_old";
+    adapter.state.sharedThreadId = "thread_old";
+    adapter.state.sharedSessionId = "thread_old";
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      methods.push(method);
+      if (method === "thread/read" || method === "thread/resume") {
+        return { thread: buildThread("thread_local", cwd) };
+      }
+      throw new Error(`unexpected method ${method}`);
+    };
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_local",
+      status: { type: "idle" },
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(methods).toEqual(["thread/read", "thread/resume"]);
+    expect(adapter.subscribedThreadIds.has("thread_local")).toBe(true);
+
+    adapter.handleRpcNotification("turn/started", {
+      threadId: "thread_local",
+      turnId: "turn_local",
+    });
+    adapter.handleRpcNotification("item/started", {
+      threadId: "thread_local",
+      turnId: "turn_local",
+      item: {
+        type: "userMessage",
+        id: "item_local",
+        content: [{ type: "text", text: "local input", text_elements: [] }],
+      },
+    });
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "mirrored_user_input",
+        text: "local input",
+        origin: "local",
+      }),
+    );
+  });
+
+  test("ignores ephemeral same-workspace status notifications", async () => {
+    const cwd = path.resolve("tmp/codex-status-ephemeral");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/read");
+      return { thread: buildThread("thread_ephemeral", cwd, { ephemeral: true }) };
+    };
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_ephemeral",
+      status: { type: "idle" },
+    });
+    await Promise.resolve();
+
+    expect(adapter.state.sharedThreadId).toBeUndefined();
+    expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
+  });
+
+  test("ignores subagent same-workspace status notifications", async () => {
+    const cwd = path.resolve("tmp/codex-status-subagent");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/read");
+      return {
+        thread: buildThread("thread_subagent", cwd, { parentThreadId: "thread_root" }),
+      };
+    };
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_subagent",
+      status: { type: "idle" },
+    });
+    await Promise.resolve();
+
+    expect(adapter.state.sharedThreadId).toBeUndefined();
+    expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
+  });
+
+  test("ignores ephemeral and subagent thread-started notifications", () => {
+    const cwd = path.resolve("tmp/codex-started-side-threads");
+    const adapter = buildAdapter(cwd) as any;
+    const events: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+    adapter.state.status = "idle";
+
+    adapter.handleThreadStarted({
+      thread: buildThread("thread_ephemeral", cwd, { ephemeral: true }),
+    });
+    adapter.handleThreadStarted({
+      thread: buildThread("thread_subagent", cwd, { parentThreadId: "thread_root" }),
+    });
+
+    expect(adapter.state.sharedThreadId).toBeUndefined();
+    expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
+  });
+
+  test("rejects an ephemeral saved thread during startup restore", async () => {
+    const cwd = path.resolve("tmp/codex-startup-ephemeral");
+    const adapter = buildAdapter(cwd) as any;
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/resume");
+      return { thread: buildThread("thread_ephemeral", cwd, { ephemeral: true }) };
+    };
+
+    await expect(
+      adapter.resumeSharedThread("thread_ephemeral", { startup: true }),
+    ).rejects.toThrow("is ephemeral");
+    expect(adapter.state.sharedThreadId).toBeUndefined();
+  });
+
   test("ignores late weak thread signals immediately after a WeChat reply", async () => {
     const cwd = path.resolve("tmp/codex-late-thread-follow");
     const adapter = buildAdapter(cwd) as any;
@@ -352,5 +478,31 @@ describe("Codex visible thread resume", () => {
     await Promise.resolve();
 
     expect(adapter.state.sharedThreadId).toBe("thread_real_local");
+  });
+
+  test("does not treat resume replay status as a local thread switch", () => {
+    const cwd = path.resolve("tmp/codex-resume-replay");
+    const adapter = buildAdapter(cwd) as any;
+    adapter.sharedThreadId = "thread_old";
+    adapter.state.sharedThreadId = "thread_old";
+    adapter.state.sharedSessionId = "thread_old";
+    adapter.state.status = "idle";
+    adapter.subscribedThreadIds.add("thread_target");
+    adapter.bridgeResumeReplayThreadId = "thread_target";
+    adapter.bridgeResumeReplayUntilMs = Date.now() + 5_000;
+
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_target",
+      status: { type: "idle" },
+    });
+
+    expect(adapter.state.sharedThreadId).toBe("thread_old");
+
+    adapter.bridgeResumeReplayUntilMs = Date.now() - 1;
+    adapter.handleThreadStatusChanged({
+      threadId: "thread_target",
+      status: { type: "idle" },
+    });
+    expect(adapter.state.sharedThreadId).toBe("thread_target");
   });
 });
