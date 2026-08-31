@@ -9,10 +9,9 @@
 # To make this gate actually block merges, enable branch protection on `main`:
 #   Settings -> Branches -> Edit rule for `main`
 #   -> "Require status checks to pass before merging"
-#   -> select the `Quality (ubuntu-latest)`, `Quality (macos-latest)`,
-#      `Quality (windows-latest)` checks
+#   -> select all six `Quality (<os>, Node <version>)` checks
 # 让该门禁真正阻止不合格 PR 合并,需在 main 分支保护规则里勾选
-# "Require status checks to pass before merging" 并选中上面的三个 Quality 检查。
+# "Require status checks to pass before merging" 并选中上面的六个 Quality 检查。
 
 name: CI
 
@@ -33,7 +32,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Quality (${{ matrix.os }})
+    name: Quality (${{ matrix.os }}, Node ${{ matrix.node_version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:

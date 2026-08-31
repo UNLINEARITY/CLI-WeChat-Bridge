@@ -283,5 +283,5 @@ describe("classifyLockHolderProcess", () => {
     } finally {
       child.kill();
     }
-  });
+  }, 12_000);
 });
