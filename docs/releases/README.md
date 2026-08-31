@@ -4,6 +4,10 @@
 
 ## 版本列表
 
+### [v1.1.6](./1.1.6.md) / [中文说明](./1.1.6_CN.md)
+**Bridge core/微信通道分离 + Codex 与 emoji 行为修复 + 微信回复恢复**
+`src/core` 承载通道无关类型、命令、消息路由、事件分发和文本工具，`src/channels/wechat` 承载微信转换、回复格式、发送队列和 channel port；direct bridge 与 daemon 共用核心链路。Codex 上游 `#40492` 新增隐藏 ephemeral 标题 thread，1.1.6 增加 `thread/read`、cwd、parent、ephemeral 校验并恢复本地 `/resume` 同步。standalone bridge 不再解析 emoji 绑定或拦截 `/bind`、`/unbind`、`/bindings`，daemon 保留绑定能力。微信 context 失效时按工作区持久化并顺序补发回复；Node.js 最低版本调整为 22.13.0。
+
 ### [v1.1.5](./1.1.5.md) / [中文说明](./1.1.5_CN.md)
 **四个 adapter 双向 `/resume` + 启动命令迁移完成**
 微信 `/resume` 统一支持 Codex、Claude Code、OpenCode 与 Pi：列出当前目录最近 8 个根 thread/session，通过编号、完整 ID 或唯一前缀恢复，并在电脑端主动切换后继续跟随可见 TUI；运行中的旧微信任务会先中断结算。Codex 使用持久 app-server 与 token 鉴权的 visible supervisor，Claude 使用 SessionEnd/SessionStart Hook，OpenCode 使用临时 route reporter，Pi 使用原生 extension。完成 1.1.4 宣布的迁移，删除四个 `wechat-*-start` 公共别名，统一改用 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi`。统计：46 个文件，新增 4,394 行，删除 339 行。
