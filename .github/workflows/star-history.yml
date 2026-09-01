@@ -1,0 +1,29 @@
+name: Star History
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Update chart
+        uses: narayann7/star-history-action@12543ab7352b91fb7c5eb0c4fbb39772baa0c168 # v1.0.6
+        with:
+          repos: ${{ github.repository }}
+          type: Timeline
+          themes: light,dark
+          readme-format: png
