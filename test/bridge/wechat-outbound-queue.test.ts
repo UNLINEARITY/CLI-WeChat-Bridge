@@ -40,4 +40,29 @@ describe("pending WeChat outbound messages", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
   });
+
+  test("persists an opaque channel target for cross-conversation retry", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wecom-outbound-"));
+    const filePath = path.join(directory, "pending.json");
+    try {
+      const store = new PendingWechatMessageStore(filePath);
+      store.enqueue("operator", "final", "final_reply", {
+        channelId: "wecom",
+        accountId: "bot-1",
+        conversationId: "group-1",
+        recipientId: "group-1",
+        metadata: { chatType: "group" },
+      });
+
+      expect(new PendingWechatMessageStore(filePath).list()[0]?.target).toEqual({
+        channelId: "wecom",
+        accountId: "bot-1",
+        conversationId: "group-1",
+        recipientId: "group-1",
+        metadata: { chatType: "group" },
+      });
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

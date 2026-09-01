@@ -18,6 +18,7 @@ import {
   type LocalCompanionMessage,
 } from "./local-companion-link.ts";
 import { migrateLegacyChannelFiles } from "../wechat/channel-config.ts";
+import { isDirectModuleRun } from "../core/direct-run.ts";
 
 export const LOCAL_COMPANION_RECONNECT_RETRY_MS = 250;
 
@@ -568,7 +569,11 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+const isDirectRun = isDirectModuleRun(
+  import.meta.url,
+  process.argv,
+  (import.meta as ImportMeta & { main?: boolean }).main,
+);
 if (isDirectRun) {
   void main();
 }

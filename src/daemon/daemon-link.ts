@@ -7,6 +7,7 @@ import {
   ensureChannelDataDir,
 } from "../wechat/channel-config.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
+import type { BridgeChannelId } from "../core/channel-types.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode" | "pi";
@@ -18,6 +19,7 @@ export type DaemonEndpoint = {
   token: string;
   cwd: string;
   startedAt: string;
+  channelId?: BridgeChannelId;
 };
 
 export type DaemonSlotSummary = {
@@ -31,6 +33,7 @@ export type DaemonSlotSummary = {
 
 export type DaemonStatus = {
   cwd: string;
+  channelId?: BridgeChannelId;
   activeAdapter?: DaemonAdapterKind;
   startedAt: string;
   slots: DaemonSlotSummary[];
@@ -104,6 +107,9 @@ function normalizeDaemonEndpoint(value: unknown): DaemonEndpoint | null {
     token: record.token,
     cwd: record.cwd,
     startedAt: record.startedAt,
+    ...(record.channelId === "wechat" || record.channelId === "wecom"
+      ? { channelId: record.channelId }
+      : {}),
   };
 }
 

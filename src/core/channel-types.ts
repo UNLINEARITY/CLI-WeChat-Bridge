@@ -1,5 +1,11 @@
 import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
 
+export type BridgeChannelId = "wechat" | "wecom";
+
+export function normalizeBridgeChannelId(value: unknown): BridgeChannelId {
+  return value === "wecom" ? "wecom" : "wechat";
+}
+
 export type ChannelAttachmentKind = "image" | "file" | "voice" | "video";
 
 /**
@@ -12,6 +18,7 @@ export type ChannelConversationRef = {
   conversationId: string;
   recipientId: string;
   opaqueRef?: string;
+  metadata?: Record<string, string>;
 };
 
 export type ChannelAttachment = {

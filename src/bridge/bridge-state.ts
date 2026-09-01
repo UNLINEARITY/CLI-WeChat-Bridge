@@ -17,6 +17,7 @@ import type {
   PendingUserInputRequest,
 } from "./bridge-types.ts";
 import { buildInstanceId } from "../core/text-utils.ts";
+import type { BridgeChannelId } from "../core/channel-types.ts";
 import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import {
   getProcessRecordByPid,
@@ -31,6 +32,7 @@ type BridgeStateOptions = {
   lifecycle: BridgeLifecycleMode;
   sessionStartMode?: BridgeSessionStartMode;
   authorizedUserId: string;
+  channelId?: BridgeChannelId;
 };
 
 export type BridgeLockPayload = {
@@ -43,6 +45,7 @@ export type BridgeLockPayload = {
   startedAt: string;
   lifecycle: BridgeLifecycleMode;
   legacyLifecycleFallback?: true;
+  channelId?: BridgeChannelId;
 };
 
 export type BridgeRuntimeOwnership =
@@ -168,6 +171,9 @@ export function normalizeBridgeLockPayload(value: unknown): BridgeLockPayload | 
     startedAt: record.startedAt,
     lifecycle: record.lifecycle === "companion_bound" ? "companion_bound" : "persistent",
     legacyLifecycleFallback: hasExplicitLifecycle ? undefined : true,
+    ...(record.channelId === "wechat" || record.channelId === "wecom"
+      ? { channelId: record.channelId }
+      : {}),
   };
 }
 
@@ -321,6 +327,7 @@ export class BridgeStateStore {
       cwd: options.cwd,
       startedAt: new Date(this.bridgeStartedAtMs).toISOString(),
       lifecycle: options.lifecycle,
+      channelId: options.channelId,
     };
 
     this.acquireLock();
@@ -360,6 +367,7 @@ export class BridgeStateStore {
       resumeConversationId: persistedResumeConversationId,
       transcriptPath: persistedTranscriptPath,
       lastActivityAt: persisted?.lastActivityAt,
+      channelId: options.channelId,
       pendingConfirmation: null,
       pendingUserInput: null,
     };

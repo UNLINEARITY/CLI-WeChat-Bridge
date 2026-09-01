@@ -39,6 +39,13 @@ describe("agent CLI entrypoints", () => {
       "wechat-opencode",
       "wechat-pi",
       "wechat-setup",
+      "wecom-check-update",
+      "wecom-claude",
+      "wecom-codex",
+      "wecom-daemon",
+      "wecom-opencode",
+      "wecom-pi",
+      "wecom-setup",
     ]);
     expect(packageJson.scripts?.["bridge:shell"]).toBeUndefined();
   });
@@ -49,6 +56,14 @@ describe("agent CLI entrypoints", () => {
 
       expect(source).toContain('runJsEntry("dist/companion/local-companion-start.js"');
       expect(source).toContain(`"--adapter", "${agent}"`);
+    });
+
+    test(`wecom-${agent} selects WeCom through the smart launcher`, () => {
+      const source = readRepoFile(`bin/wecom-${agent}.mjs`);
+
+      expect(source).toContain('runJsEntry("dist/companion/local-companion-start.js"');
+      expect(source).toContain(`"--adapter", "${agent}"`);
+      expect(source).toContain('"--channel", "wecom"');
     });
 
   }

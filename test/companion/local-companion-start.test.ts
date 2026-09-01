@@ -89,6 +89,33 @@ describe("local-companion-start helpers", () => {
     expect(options.cliArgs).toEqual([]);
   });
 
+  test("parseCliArgs selects WeCom without forwarding the channel flag", () => {
+    const options = parseCliArgs([
+      "--adapter",
+      "codex",
+      "--channel",
+      "wecom",
+      "--yolo",
+    ]);
+
+    expect(options.channelId).toBe("wecom");
+    expect(options.cliArgs).toEqual(["--yolo"]);
+  });
+
+  test("buildBackgroundBridgeArgs passes the WeCom channel to the internal bridge", () => {
+    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
+      adapter: "codex",
+      cwd: path.resolve("./tmp/project"),
+      timeoutMs: 15000,
+      sessionStartMode: "restore",
+      cliArgs: [],
+      channelId: "wecom",
+    });
+
+    expect(args).toContain("--channel");
+    expect(args).toContain("wecom");
+  });
+
   test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
     const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
       adapter: "codex",
@@ -356,6 +383,36 @@ describe("local-companion-start helpers", () => {
         },
       ),
     ).rejects.toThrow("v1 daemon switching is limited to its startup cwd");
+  });
+
+  test("tryDelegateToDaemon rejects a live daemon owned by another channel", async () => {
+    const cwd = path.resolve("./tmp/project");
+    const endpoint: DaemonEndpoint = {
+      protocolVersion: 1,
+      pid: 123,
+      port: 9123,
+      token: "token",
+      cwd,
+      startedAt: "2026-05-22T00:00:00.000Z",
+      channelId: "wechat",
+    };
+
+    await expect(
+      tryDelegateToDaemon(
+        {
+          adapter: "codex",
+          cwd,
+          timeoutMs: 15000,
+          sessionStartMode: "restore",
+          cliArgs: [],
+          channelId: "wecom",
+        },
+        {
+          readEndpoint: () => endpoint,
+          isEndpointAlive: async () => true,
+        },
+      ),
+    ).rejects.toThrow("Stop it before starting the wecom channel");
   });
 
   test("tryDelegateToDaemon clears stale daemon endpoint and falls back", async () => {

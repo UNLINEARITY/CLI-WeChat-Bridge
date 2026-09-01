@@ -21,6 +21,7 @@ import {
   SYNC_BUF_FILE,
 } from "./channel-config.ts";
 import { isWechatSyncSessionTimeout } from "./wechat-transport.ts";
+import { isDirectModuleRun } from "../core/direct-run.ts";
 
 interface QRCodeResponse {
   qrcode: string;
@@ -366,7 +367,11 @@ async function main() {
   printPostLoginHelp((message) => console.log(message));
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+const isDirectRun = isDirectModuleRun(
+  import.meta.url,
+  process.argv,
+  (import.meta as ImportMeta & { main?: boolean }).main,
+);
 if (isDirectRun) {
   main().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);

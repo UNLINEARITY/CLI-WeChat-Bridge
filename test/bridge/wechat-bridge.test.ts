@@ -39,6 +39,18 @@ describe("wechat-bridge cli helpers", () => {
     expect(options.sessionStartMode).toBe("new");
   });
 
+  test("parseCliArgs selects the WeCom channel without changing adapter arguments", () => {
+    const options = parseCliArgs([
+      "--adapter",
+      "codex",
+      "--channel",
+      "wecom",
+    ]);
+
+    expect(options.channelId).toBe("wecom");
+    expect(options.adapter).toBe("codex");
+  });
+
   test("shouldWatchParentProcess watches attached terminal bridges", () => {
     expect(
       shouldWatchParentProcess({

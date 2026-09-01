@@ -106,6 +106,11 @@ describe("wechat-daemon helpers", () => {
     });
   });
 
+  test("parseDaemonCliArgs selects WeCom while preserving the legacy WeChat default", () => {
+    expect(parseDaemonCliArgs([]).channelId).toBeUndefined();
+    expect(parseDaemonCliArgs(["--channel", "wecom"]).channelId).toBe("wecom");
+  });
+
   test("buildVisibleClientLaunchArgs routes codex through the remote client", () => {
     const args = buildVisibleClientLaunchArgs({
       adapter: "codex",
@@ -702,9 +707,12 @@ describe("wechat-daemon helpers", () => {
       scripts?: Record<string, string>;
     };
     const binSource = readRepoFile("bin/wechat-daemon.mjs");
+    const wecomBinSource = readRepoFile("bin/wecom-daemon.mjs");
 
     expect(packageJson.bin?.["wechat-daemon"]).toBe("bin/wechat-daemon.mjs");
     expect(packageJson.scripts?.daemon).toContain("src/daemon/wechat-daemon.ts");
     expect(binSource).toContain('runJsEntry("dist/daemon/wechat-daemon.js")');
+    expect(packageJson.bin?.["wecom-daemon"]).toBe("bin/wecom-daemon.mjs");
+    expect(wecomBinSource).toContain('"--channel", "wecom"');
   });
 });

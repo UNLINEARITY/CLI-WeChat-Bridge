@@ -135,14 +135,14 @@ function printHelp() {
 
 function isSafeSmokeCommand(commandName) {
   return (
-    commandName === "wechat-daemon" ||
-    /^wechat-(?:codex|claude|opencode|pi)$/.test(commandName)
+    /^(?:wechat|wecom)-daemon$/.test(commandName) ||
+    /^(?:wechat|wecom)-(?:codex|claude|opencode|pi)$/.test(commandName)
   );
 }
 
 function getSmokeCommands() {
   return Object.keys(BIN_MAP)
-    .filter((commandName) => commandName !== "wechat-setup" && commandName !== "wechat-check-update")
+    .filter((commandName) => !/^(?:wechat|wecom)-(?:setup|check-update)$/.test(commandName))
     .filter(isSafeSmokeCommand)
     .sort();
 }

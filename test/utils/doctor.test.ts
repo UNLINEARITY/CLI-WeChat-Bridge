@@ -136,6 +136,15 @@ describe("doctor report", () => {
     });
   });
 
+  test("parseDoctorCliArgs recognizes the WeCom channel", () => {
+    expect(
+      parseDoctorCliArgs(["--channel", "wecom", "--adapter", "codex"], "bridge", CWD),
+    ).toMatchObject({
+      channelId: "wecom",
+      adapter: "codex",
+    });
+  });
+
   test("reports clean runtime state in default Chinese locale", async () => {
     const lines = await buildDoctorReport(
       {

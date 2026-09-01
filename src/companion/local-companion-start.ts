@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
+import { ensureWecomAccount } from "../channels/wecom/setup.ts";
+import type { BridgeChannelId } from "../core/channel-types.ts";
+import { isDirectModuleRun } from "../core/direct-run.ts";
 import {
   readBridgeLockFile,
   shouldAutoReclaimBridgeLock,
@@ -42,6 +45,7 @@ type LocalCompanionStartCliOptions = {
   timeoutMs: number;
   sessionStartMode: BridgeSessionStartMode;
   cliArgs: string[];
+  channelId?: BridgeChannelId;
 };
 
 type EndpointReadResult = {
@@ -74,6 +78,7 @@ type DecideLaunchActionInput = {
   endpointIsReachable: boolean;
   companionIsAlive: boolean;
   sessionStartMode: BridgeSessionStartMode;
+  requestedChannelId?: BridgeChannelId;
 };
 
 type VisibleClientRunners = {
@@ -93,8 +98,12 @@ const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".
 const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
 const DEFAULT_ADAPTER: LocalCompanionLaunchAdapter = "codex";
 
-function log(adapter: LocalCompanionLaunchAdapter, message: string): void {
-  process.stderr.write(`[wechat-${adapter}] ${message}\n`);
+function log(
+  adapter: LocalCompanionLaunchAdapter,
+  message: string,
+  channelId: BridgeChannelId = "wechat",
+): void {
+  process.stderr.write(`[${channelId}-${adapter}] ${message}\n`);
 }
 
 export function normalizeComparablePath(cwd: string): string {
@@ -140,6 +149,8 @@ export function decideLaunchAction(
 
   const sameWorkspace =
     input.runningLock.adapter === input.requestedAdapter &&
+    (input.runningLock.channelId ?? "wechat") ===
+      (input.requestedChannelId ?? "wechat") &&
     isSameWorkspaceCwd(input.runningLock.cwd, input.requestedCwd);
 
   if (!sameWorkspace) {
@@ -202,6 +213,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   let profile: string | undefined;
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
   let sessionStartMode: BridgeSessionStartMode | undefined;
+  let channelId: BridgeChannelId = "wechat";
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -213,7 +225,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
 
     if (arg === "--help" || arg === "-h") {
       const helpAdapter = adapter;
-      const commandName = `wechat-${helpAdapter}`;
+      const commandName = `${channelId}-${helpAdapter}`;
       const adapterLabel = {
         codex: "Codex",
         claude: "Claude Code",
@@ -224,7 +236,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
         [
           `Usage: ${commandName} [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--session-start-mode <restore|new>] [...${helpAdapter} args]`,
           "",
-          "Ensures the WeChat runtime for the current directory, then opens or reuses the visible CLI.",
+          `Ensures the ${channelId === "wecom" ? "WeCom" : "WeChat"} runtime for the current directory, then opens or reuses the visible CLI.`,
           "If a same-workspace daemon is running, the command delegates to that daemon.",
           helpAdapter === "codex"
             ? "Codex restores the current session by default."
@@ -242,6 +254,15 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     }
 
     if (arg === "--doctor") {
+      continue;
+    }
+
+    if (arg === "--channel") {
+      if (!next || (next !== "wechat" && next !== "wecom")) {
+        throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
+      }
+      channelId = next;
+      i += 1;
       continue;
     }
 
@@ -304,6 +325,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     timeoutMs,
     sessionStartMode: sessionStartMode ?? defaultSessionStartMode(adapter),
     cliArgs,
+    channelId,
   };
 }
 
@@ -448,6 +470,10 @@ export function buildBackgroundBridgeArgs(
     lifecycle,
   );
 
+  if (options.channelId === "wecom") {
+    args.push("--channel", "wecom");
+  }
+
   if (options.sessionStartMode !== "restore") {
     args.push("--session-start-mode", options.sessionStartMode);
   }
@@ -539,6 +565,7 @@ async function ensureBridgeReady(
     endpointIsReachable: Boolean(endpointResult.endpoint),
     companionIsAlive: isCompanionAlive(endpointResult.endpoint),
     sessionStartMode: options.sessionStartMode,
+    requestedChannelId: options.channelId,
   });
 
   log(options.adapter, decision.message);
@@ -601,9 +628,17 @@ export async function tryDelegateToDaemon(
     return false;
   }
 
+  const requestedChannel = options.channelId ?? "wechat";
+  const endpointChannel = endpoint.channelId ?? "wechat";
+  if (requestedChannel !== endpointChannel) {
+    throw new Error(
+      `${endpointChannel}-daemon is running for ${endpoint.cwd}. Stop it before starting the ${requestedChannel} channel.`,
+    );
+  }
+
   if (!isSameWorkspaceCwd(endpoint.cwd, options.cwd)) {
     throw new Error(
-      `wechat-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}; v1 daemon switching is limited to its startup cwd.`,
+      `${requestedChannel}-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}; v1 daemon switching is limited to its startup cwd.`,
     );
   }
 
@@ -636,7 +671,8 @@ export async function tryDelegateToDaemon(
 
   log(
     options.adapter,
-    `Delegated to running wechat-daemon for ${options.cwd}.`,
+    `Delegated to running ${requestedChannel}-daemon for ${options.cwd}.`,
+    requestedChannel,
   );
   return true;
 }
@@ -674,6 +710,18 @@ export async function ensureCompanionStartWechatCredentials(
   });
 }
 
+export async function ensureCompanionStartChannelCredentials(
+  options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">,
+): Promise<void> {
+  if (options.channelId === "wecom") {
+    await ensureWecomAccount({
+      log: (message) => log(options.adapter, message, "wecom"),
+    });
+    return;
+  }
+  await ensureCompanionStartWechatCredentials(options.adapter);
+}
+
 export async function runLocalCompanionStart(
   argv: string[] = process.argv.slice(2),
 ): Promise<number> {
@@ -684,7 +732,7 @@ export async function runLocalCompanionStart(
   }
 
   const options = parseCliArgs(argv);
-  await ensureCompanionStartWechatCredentials(options.adapter);
+  await ensureCompanionStartChannelCredentials(options);
 
   if (await tryDelegateToDaemon(options)) {
     return 0;
@@ -709,12 +757,23 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         return DEFAULT_ADAPTER;
       }
     })();
-    log(adapter, error instanceof Error ? error.message : String(error));
+    const channelId = (() => {
+      try {
+        return parseCliArgs(argv).channelId ?? "wechat";
+      } catch {
+        return "wechat";
+      }
+    })();
+    log(adapter, error instanceof Error ? error.message : String(error), channelId);
     process.exit(1);
   }
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+const isDirectRun = isDirectModuleRun(
+  import.meta.url,
+  process.argv,
+  (import.meta as ImportMeta & { main?: boolean }).main,
+);
 if (isDirectRun) {
   void main();
 }

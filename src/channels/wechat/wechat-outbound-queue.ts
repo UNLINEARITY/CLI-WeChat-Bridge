@@ -5,6 +5,10 @@ import path from "node:path";
 import { getWorkspaceChannelPaths } from "../../wechat/channel-config.ts";
 import { writeJsonFileAtomic } from "../../utils/atomic-file.ts";
 import type { WechatSendContext } from "./wechat-forwarding.ts";
+import type {
+  BridgeChannelId,
+  ChannelConversationRef,
+} from "../../core/channel-types.ts";
 
 export type PendingWechatMessage = {
   id: string;
@@ -12,6 +16,7 @@ export type PendingWechatMessage = {
   text: string;
   context: WechatSendContext;
   queuedAt: string;
+  target?: ChannelConversationRef;
 };
 
 type PendingWechatMessageFile = {
@@ -19,9 +24,16 @@ type PendingWechatMessageFile = {
 };
 
 export function getPendingWechatMessagesFile(cwd: string): string {
+  return getPendingChannelMessagesFile(cwd, "wechat");
+}
+
+export function getPendingChannelMessagesFile(
+  cwd: string,
+  channelId: BridgeChannelId,
+): string {
   return path.join(
     getWorkspaceChannelPaths(cwd).workspaceDir,
-    "pending-wechat-messages.json",
+    `pending-${channelId}-messages.json`,
   );
 }
 
@@ -61,13 +73,17 @@ export class PendingWechatMessageStore {
   }
 
   list(): PendingWechatMessage[] {
-    return this.messages.map((message) => ({ ...message }));
+    return this.messages.map((message) => ({
+      ...message,
+      target: message.target ? { ...message.target } : undefined,
+    }));
   }
 
   enqueue(
     recipientId: string,
     text: string,
     context: WechatSendContext,
+    target?: ChannelConversationRef,
   ): PendingWechatMessage | null {
     const normalizedRecipientId = recipientId.trim();
     const normalizedText = text.trim();
@@ -81,6 +97,7 @@ export class PendingWechatMessageStore {
       text: normalizedText,
       context,
       queuedAt: new Date().toISOString(),
+      target: target ? { ...target } : undefined,
     };
     this.messages.push(message);
     this.persist();

@@ -45,6 +45,7 @@ export type DoctorCliOptions = {
   mode: DoctorMode;
   cwd: string;
   adapter?: LegacyBridgeAdapterKind;
+  channelId?: "wechat" | "wecom";
 };
 
 type FileReadResult<T> =
@@ -60,7 +61,7 @@ export type DoctorDeps = {
   env?: NodeJS.ProcessEnv;
   now?: () => number;
   getWindowsCodePage?: () => number | null;
-  fetchServerDate?: () => Promise<Date | null>;
+  fetchServerDate?: (baseUrl?: string) => Promise<Date | null>;
   findExecutable?: (name: string) => string | null;
   loadNodePty?: () => Promise<void>;
   resolveDataDir?: () => string;
@@ -150,11 +151,13 @@ function defaultGetWindowsCodePage(): number | null {
   }
 }
 
-async function defaultFetchServerDate(): Promise<Date | null> {
+async function defaultFetchServerDate(
+  baseUrl = DEFAULT_BASE_URL,
+): Promise<Date | null> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SERVER_DATE_TIMEOUT_MS);
   try {
-    const res = await fetch(DEFAULT_BASE_URL, {
+    const res = await fetch(baseUrl, {
       method: "GET",
       signal: controller.signal,
     });
@@ -280,6 +283,7 @@ export function parseDoctorCliArgs(
 ): DoctorCliOptions {
   let cwd = fallbackCwd;
   let adapter: BridgeAdapterKind | undefined;
+  let channelId: "wechat" | "wecom" = "wechat";
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -299,12 +303,19 @@ export function parseDoctorCliArgs(
       i += 1;
       continue;
     }
+
+    if (arg === "--channel" && (next === "wechat" || next === "wecom")) {
+      channelId = next;
+      i += 1;
+      continue;
+    }
   }
 
   return {
     mode,
     cwd: path.resolve(cwd),
     adapter,
+    ...(channelId === "wecom" ? { channelId } : {}),
   };
 }
 
@@ -844,11 +855,22 @@ export async function buildDoctorReport(
   }
 
   const proxyUrl = pickProxyEnvValue(deps.env);
-  const serverDate = await deps.fetchServerDate();
+  const connectivityUrl = doctorOptions.channelId === "wecom"
+    ? "https://open.work.weixin.qq.com"
+    : DEFAULT_BASE_URL;
+  const serverDate = await deps.fetchServerDate(connectivityUrl);
   if (serverDate) {
-    lines.push(row(STATE_OK, msg("label.connectivity"), msg("connectivity.ok", {
-      baseUrl: DEFAULT_BASE_URL,
-    })));
+    lines.push(row(
+      STATE_OK,
+      msg(
+        doctorOptions.channelId === "wecom"
+          ? "label.wecomConnectivity"
+          : "label.connectivity",
+      ),
+      msg("connectivity.ok", {
+        baseUrl: connectivityUrl,
+      }),
+    ));
 
     const skewMs = deps.now() - serverDate.getTime();
     const skewSeconds = Math.round(Math.abs(skewMs) / 1000);
@@ -863,10 +885,14 @@ export async function buildDoctorReport(
   } else {
     lines.push(row(
       STATE_WARN,
-      msg("label.connectivity"),
+      msg(
+        doctorOptions.channelId === "wecom"
+          ? "label.wecomConnectivity"
+          : "label.connectivity",
+      ),
       proxyUrl && deps.env.NODE_USE_ENV_PROXY !== "1"
-        ? msg("connectivity.proxyHint", { baseUrl: DEFAULT_BASE_URL, proxy: proxyUrl })
-        : msg("connectivity.unreachable", { baseUrl: DEFAULT_BASE_URL }),
+        ? msg("connectivity.proxyHint", { baseUrl: connectivityUrl, proxy: proxyUrl })
+        : msg("connectivity.unreachable", { baseUrl: connectivityUrl }),
     ));
   }
 
@@ -889,12 +915,20 @@ export async function buildDoctorReport(
     dataDirExists ? dataDir : `${dataDir} ${msg("dataDirMissing")}`,
   ));
 
-  const credFile = path.join(dataDir, "account.json");
+  const credFile = doctorOptions.channelId === "wecom"
+    ? path.join(dataDir, "wecom", "account.json")
+    : path.join(dataDir, "account.json");
   const credExists = deps.exists(credFile);
   lines.push(row(
     credExists ? STATE_OK : STATE_FAIL,
     msg("label.credentials"),
-    credExists ? msg("credentialsFound") : msg("credentialsMissing"),
+    credExists
+      ? msg("credentialsFound")
+      : msg(
+          doctorOptions.channelId === "wecom"
+            ? "credentialsMissingWecom"
+            : "credentialsMissing",
+        ),
   ));
 
   section(lines, msg("section.runtime"));

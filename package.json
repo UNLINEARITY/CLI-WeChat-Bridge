@@ -1,7 +1,7 @@
 {
   "name": "cli-wechat-bridge",
   "version": "1.1.6",
-  "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and Pi over WeChat",
+  "description": "CLI bridge for Codex, Claude Code, OpenCode, and Pi over WeChat and WeCom",
   "type": "module",
   "files": [
     "bin/",
@@ -12,6 +12,7 @@
   ],
   "keywords": [
     "wechat",
+    "wecom",
     "cli",
     "bridge",
     "codex",
@@ -40,7 +41,14 @@
     "wechat-pi": "bin/wechat-pi.mjs",
     "wechat-daemon": "bin/wechat-daemon.mjs",
     "wechat-setup": "bin/wechat-setup.mjs",
-    "wechat-check-update": "bin/wechat-check-update.mjs"
+    "wechat-check-update": "bin/wechat-check-update.mjs",
+    "wecom-codex": "bin/wecom-codex.mjs",
+    "wecom-claude": "bin/wecom-claude.mjs",
+    "wecom-opencode": "bin/wecom-opencode.mjs",
+    "wecom-pi": "bin/wecom-pi.mjs",
+    "wecom-daemon": "bin/wecom-daemon.mjs",
+    "wecom-setup": "bin/wecom-setup.mjs",
+    "wecom-check-update": "bin/wecom-check-update.mjs"
   },
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-permissions.mjs",
@@ -75,11 +83,13 @@
     "test:bridge": "bun test test/bridge",
     "test:companion": "bun test test/companion",
     "test:wechat": "bun test test/wechat",
+    "test:wecom": "bun test test/wecom",
     "test:watch": "bun test --watch test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/sdk": "^1.18.0",
+    "@wecom/aibot-node-sdk": "1.0.7",
     "node-pty": "^1.1.0",
     "qrcode-terminal": "^0.12.0"
   },

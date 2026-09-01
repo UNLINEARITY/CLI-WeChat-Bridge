@@ -26,6 +26,7 @@ import {
 } from "./local-companion-link.ts";
 import { migrateLegacyChannelFiles } from "../wechat/channel-config.ts";
 import { CODEX_REMOTE_AUTH_TOKEN_ENV } from "../runtime/runtime-types.ts";
+import { isDirectModuleRun } from "../core/direct-run.ts";
 
 type CodexRemoteClientCliOptions = {
   cwd: string;
@@ -505,7 +506,11 @@ async function main(): Promise<void> {
   process.exit(exitCode);
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+const isDirectRun = isDirectModuleRun(
+  import.meta.url,
+  process.argv,
+  (import.meta as ImportMeta & { main?: boolean }).main,
+);
 if (isDirectRun) {
   main().catch((error) => {
     log(error instanceof Error ? error.message : String(error));
