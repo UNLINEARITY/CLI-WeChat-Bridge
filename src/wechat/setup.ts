@@ -44,6 +44,20 @@ export type StoredAccount = {
   savedAt: string;
 };
 
+export type LoginTerminal = {
+  platform: NodeJS.Platform;
+  isTTY: boolean;
+  columns?: number;
+};
+
+export type QRCodeMode = "small" | "normal";
+export type QRPresentation = "qr_with_url" | "url_only";
+
+type QRCodeGenerator = (
+  input: string,
+  options: { small: boolean },
+) => Promise<string>;
+
 type WechatLoginOptions = {
   baseUrl?: string;
   requireUserId?: boolean;
@@ -51,6 +65,8 @@ type WechatLoginOptions = {
   pollIntervalMs?: number;
   log?: (message: string) => void;
   write?: (message: string) => void;
+  terminal?: LoginTerminal;
+  qrMode?: QRCodeMode;
 };
 
 type EnsureWechatCredentialsOptions = WechatLoginOptions & {
@@ -203,20 +219,100 @@ async function askYesNo(prompt: string): Promise<boolean> {
   }
 }
 
-async function printQRCode(
+// eslint-disable-next-line no-control-regex
+const ANSI_SGR_RE = /\u001b\[[0-9;]*m/g;
+
+function resolveLoginTerminal(): LoginTerminal {
+  const columns = process.stdout.columns;
+  return {
+    platform: process.platform,
+    isTTY: process.stdout.isTTY === true,
+    columns:
+      typeof columns === "number" && Number.isFinite(columns) && columns > 0
+        ? columns
+        : undefined,
+  };
+}
+
+export function getQRCodeVisibleWidth(qr: string): number {
+  return Math.max(
+    0,
+    ...qr
+      .replace(/\r/g, "")
+      .split("\n")
+      .map((line) => Array.from(line.replace(ANSI_SGR_RE, "")).length),
+  );
+}
+
+export function selectQRCodePresentation(params: {
+  isTTY: boolean;
+  columns?: number;
+  renderedWidth: number;
+}): QRPresentation {
+  if (
+    !params.isTTY ||
+    typeof params.columns !== "number" ||
+    !Number.isFinite(params.columns) ||
+    params.columns <= 0 ||
+    params.renderedWidth + 1 > params.columns
+  ) {
+    return "url_only";
+  }
+  return "qr_with_url";
+}
+
+export function formatQRCodeLoginInstruction(presentation: QRPresentation): string {
+  return presentation === "qr_with_url"
+    ? "Scan the QR code above with WeChat, then confirm the login on your phone. If scanning fails, open the browser URL above.\n"
+    : "The QR code was not rendered in this terminal. Open the browser URL above, then confirm the login in WeChat.\n";
+}
+
+async function generateQRCode(
+  qrContent: string,
+  options: { small: boolean },
+): Promise<string> {
+  const qrterm = await import("qrcode-terminal");
+  return await new Promise<string>((resolve, reject) => {
+    try {
+      qrterm.default.generate(qrContent, options, resolve);
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+export async function printQRCode(
   qrContent: string,
   write: (message: string) => void,
-): Promise<void> {
+  terminal: LoginTerminal = resolveLoginTerminal(),
+  qrMode: QRCodeMode = "small",
+  qrGenerator: QRCodeGenerator = generateQRCode,
+): Promise<QRPresentation> {
+  if (!terminal.isTTY) {
+    return "url_only";
+  }
+
   try {
-    const qrterm = await import("qrcode-terminal");
-    await new Promise<void>((resolve) => {
-      qrterm.default.generate(qrContent, { small: true }, (qr: string) => {
-        write(`${qr}\n`);
-        resolve();
-      });
+    const qr = await qrGenerator(qrContent, {
+      small: qrMode === "small",
     });
+    const presentation = selectQRCodePresentation({
+      isTTY: terminal.isTTY,
+      columns: terminal.columns,
+      renderedWidth: getQRCodeVisibleWidth(qr),
+    });
+    if (presentation === "qr_with_url") {
+      write(`${qr}\n`);
+    }
+    write(
+      presentation === "qr_with_url"
+        ? `If scanning fails, open this short-lived WeChat login URL in a browser. Do not share it:\n${qrContent}\n\n`
+        : `Open this short-lived WeChat login URL in a browser. Do not share it:\n${qrContent}\n\n`,
+    );
+    return presentation;
   } catch {
-    write(`Open this QR code URL in a browser: ${qrContent}\n\n`);
+    write(`The QR code could not be rendered. Open this short-lived WeChat login URL in a browser. Do not share it:\n${qrContent}\n\n`);
+    return "url_only";
   }
 }
 
@@ -250,6 +346,46 @@ function printPostLoginHelp(log: (message: string) => void): void {
   log("Run wechat-setup again any time you need to refresh the login.");
 }
 
+export type WechatSetupCliOptions = {
+  help: boolean;
+  qrMode: QRCodeMode;
+};
+
+export function parseWechatSetupCliArgs(argv: string[]): WechatSetupCliOptions {
+  let qrMode: QRCodeMode = "small";
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, qrMode };
+    }
+    if (arg === "--qr-mode") {
+      const value = argv[index + 1];
+      if (value !== "small" && value !== "normal") {
+        throw new Error("--qr-mode requires small or normal.");
+      }
+      qrMode = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--qr-mode=small" || arg === "--qr-mode=normal") {
+      qrMode = arg.endsWith("=small") ? "small" : "normal";
+      continue;
+    }
+    throw new Error(`Unknown wechat-setup option: ${arg}`);
+  }
+  return { help: false, qrMode };
+}
+
+export function formatWechatSetupUsage(): string {
+  return [
+    "Usage: wechat-setup [--qr-mode <small|normal>]",
+    "",
+    "Log in to WeChat and save bridge credentials.",
+    "QR mode defaults to small; use --qr-mode normal when the terminal renders small QR blocks incorrectly.",
+    "",
+  ].join("\n");
+}
+
 export async function runWechatLogin(
   options: WechatLoginOptions = {},
 ): Promise<StoredAccount> {
@@ -258,12 +394,19 @@ export async function runWechatLogin(
   const write = options.write ?? ((message: string) => process.stdout.write(message));
   const timeoutMs = options.timeoutMs ?? 480_000;
   const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+  const terminal = options.terminal ?? resolveLoginTerminal();
+  const qrMode = options.qrMode ?? "small";
+
+  if (!terminal.isTTY) {
+    throw new Error(
+      "WeChat login requires an interactive terminal. Run wechat-setup directly in PowerShell, Command Prompt, or a terminal window.",
+    );
+  }
 
   log("Fetching WeChat login QR code...\n");
   const qrResp = await fetchQRCode(baseUrl);
-  await printQRCode(qrResp.qrcode_img_content, write);
-
-  log("Scan the QR code above with WeChat, then confirm the login on your phone.\n");
+  const presentation = await printQRCode(qrResp.qrcode_img_content, write, terminal, qrMode);
+  log(formatQRCodeLoginInstruction(presentation));
 
   const deadline = Date.now() + timeoutMs;
   let scannedPrinted = false;
@@ -346,7 +489,13 @@ export async function ensureWechatCredentials(
   return login();
 }
 
-async function main() {
+async function main(argv: string[] = process.argv.slice(2)) {
+  const cliOptions = parseWechatSetupCliArgs(argv);
+  if (cliOptions.help) {
+    console.log(formatWechatSetupUsage());
+    return;
+  }
+
   migrateLegacyChannelFiles((message) => console.log(message));
 
   const existing = loadExistingCredentials();
@@ -363,7 +512,7 @@ async function main() {
     }
   }
 
-  await runWechatLogin({ requireUserId: true });
+  await runWechatLogin({ requireUserId: true, qrMode: cliOptions.qrMode });
   printPostLoginHelp((message) => console.log(message));
 }
 

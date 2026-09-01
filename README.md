@@ -118,6 +118,8 @@ apk add build-base python3
 wechat-setup
 ```
 
+二维码默认使用 `small` 模式；如果 Windows 终端中的小二维码字符渲染异常，可使用 `wechat-setup --qr-mode normal` 切换为普通模式。
+
 登录流程会：
 
 1. 获取微信登录二维码；
