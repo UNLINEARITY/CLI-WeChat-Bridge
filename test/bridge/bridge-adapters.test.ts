@@ -1001,6 +1001,66 @@ describe("Claude CLI compatibility", () => {
     await adapter.dispose();
   });
 
+  test("waits for Claude interactive readiness before injecting WeChat input", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const writes: string[] = [];
+    adapter.setEventSink(() => undefined);
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+    adapter.state.status = "starting";
+    adapter.interactiveReady = false;
+
+    const sendPromise = adapter.sendInput("Wait for Claude first");
+    await wait(25);
+
+    expect(writes).toEqual([]);
+    adapter.markInteractiveReady();
+    await sendPromise;
+
+    expect(writes).toEqual(["Wait for Claude first", "\r"]);
+    await adapter.dispose();
+  });
+
+  test("retries Claude WeChat Enter until UserPromptSubmit confirms the input", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "claude",
+      command: "claude",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    }) as any;
+    const writes: string[] = [];
+    adapter.setEventSink(() => undefined);
+    adapter.renderLocalOutput = () => undefined;
+    adapter.pty = {
+      pid: 1234,
+      write(value: string) {
+        writes.push(value);
+      },
+      kill() {},
+    };
+
+    await adapter.sendInput("Retry this Claude submission");
+    await wait(260);
+    expect(writes).toEqual(["Retry this Claude submission", "\r", "\r"]);
+
+    adapter.handleClaudeUserPromptSubmit({ prompt: "Retry this Claude submission" });
+    await wait(600);
+    expect(writes).toEqual(["Retry this Claude submission", "\r", "\r"]);
+
+    await adapter.dispose();
+  });
+
   test("auto-confirms Claude workspace trust prompt during startup", () => {
     const adapter = createBridgeAdapter({
       kind: "claude",

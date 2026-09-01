@@ -63,6 +63,8 @@ const CLAUDE_COMPACT_DEDUP_MS = 2_000;
 const CLAUDE_BRACKETED_PASTE_START = "\u001b[200~";
 const CLAUDE_BRACKETED_PASTE_END = "\u001b[201~";
 const CLAUDE_REMOTE_ENTER_DELAY_MS = 40;
+const CLAUDE_REMOTE_ENTER_RETRY_DELAYS_MS = [200, 500, 1_000] as const;
+const CLAUDE_INTERACTIVE_READY_TIMEOUT_MS = 10_000;
 const CLAUDE_STARTUP_OUTPUT_BUFFER_LIMIT = 4_000;
 const CLAUDE_SESSION_METADATA_READ_BYTES = 64 * 1024;
 const CLAUDE_MAX_SANITIZED_PROJECT_PATH = 200;
@@ -99,6 +101,11 @@ type ClaudePendingResume = {
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
   sessionEndObserved: boolean;
+};
+
+type ClaudeInteractiveReadyWaiter = {
+  resolve: () => void;
+  reject: (error: Error) => void;
 };
 
 function isClaudeWorkspaceTrustPrompt(text: string): boolean {
@@ -480,6 +487,12 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private polledTranscriptSessionId: string | null = null;
   private pendingResume: ClaudePendingResume | null = null;
   private localResumeSessionEndObserved = false;
+  private interactiveReady = true;
+  private interactiveReadyTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly interactiveReadyWaiters = new Set<ClaudeInteractiveReadyWaiter>();
+  private remoteSubmitRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private remoteSubmitRetryIndex = 0;
+  private remoteSubmitText: string | null = null;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -510,6 +523,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    this.beginInteractiveReadinessWait();
     this.startupOutputBuffer = "";
     this.hasAutoConfirmedWorkspaceTrustPrompt = false;
     ensureClaudeWorkspaceTrustAccepted(this.options.cwd);
@@ -535,10 +549,16 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       }
     }
 
-    await this.startHookServer();
     try {
+      await this.startHookServer();
       await super.start();
+      if (!this.interactiveReady) {
+        this.setStatus("starting", "Waiting for Claude interactive session...");
+      }
     } catch (error) {
+      this.rejectInteractiveReadiness(
+        error instanceof Error ? error : new Error(String(error)),
+      );
       await this.stopHookServer();
       throw error;
     }
@@ -555,7 +575,19 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
     }
 
+    await this.waitForInteractiveReadiness();
+    if (!this.pty) {
+      throw new Error("claude adapter is not running.");
+    }
+    if (this.getState().status === "busy") {
+      throw new Error("claude is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.pendingApproval) {
+      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
+    }
+
     const normalizedText = normalizeOutput(text).trim();
+    this.clearRemoteSubmitRetry();
     this.pendingInjectedInputs.push({
       normalizedText,
       createdAtMs: Date.now(),
@@ -572,6 +604,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.writeToPty(this.buildRemoteInputPayload(text));
     await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
     this.writeToPty("\r");
+    this.armRemoteSubmitRetry(normalizedText);
     this.armWechatWorkingNotice();
   }
 
@@ -702,6 +735,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.clearWechatWorkingNotice(true);
+    this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     if (this.pendingApproval) {
@@ -739,7 +773,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.lastSessionSwitchAt = undefined;
     this.state.lastSessionSwitchSource = undefined;
     this.state.lastSessionSwitchReason = undefined;
-    await super.reset();
+    await this.dispose();
+    await this.start();
   }
 
   override async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
@@ -809,6 +844,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.rejectPendingResume(new Error("Claude is shutting down during session switching."));
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
+    this.clearRemoteSubmitRetry();
+    this.rejectInteractiveReadiness(new Error("Claude is shutting down."));
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.stopTranscriptThinkingWatch();
@@ -928,10 +965,16 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   protected override handleExit(exitCode: number | undefined): void {
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
+    this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.rejectPendingResume(
       new Error("Claude exited before the requested session switch completed."),
     );
+    if (!this.recoveringInvalidResume) {
+      this.rejectInteractiveReadiness(
+        new Error("Claude exited before its interactive session became ready."),
+      );
+    }
     void this.stopHookServer();
     if (this.recoveringInvalidResume && !this.shuttingDown) {
       this.clearCompletionTimer();
@@ -1259,6 +1302,110 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     return `${CLAUDE_BRACKETED_PASTE_START}${normalizedText}${CLAUDE_BRACKETED_PASTE_END}`;
   }
 
+  private beginInteractiveReadinessWait(): void {
+    this.clearInteractiveReadinessTimer();
+    this.interactiveReady = false;
+    this.interactiveReadyTimer = setTimeout(() => {
+      this.interactiveReadyTimer = null;
+      this.markInteractiveReady();
+    }, CLAUDE_INTERACTIVE_READY_TIMEOUT_MS);
+    this.interactiveReadyTimer.unref?.();
+  }
+
+  private waitForInteractiveReadiness(): Promise<void> {
+    if (this.interactiveReady) {
+      return Promise.resolve();
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      this.interactiveReadyWaiters.add({ resolve, reject });
+    });
+  }
+
+  private markInteractiveReady(): void {
+    if (this.interactiveReady) {
+      return;
+    }
+
+    this.interactiveReady = true;
+    this.clearInteractiveReadinessTimer();
+    for (const waiter of this.interactiveReadyWaiters) {
+      waiter.resolve();
+    }
+    this.interactiveReadyWaiters.clear();
+    if (this.state.status === "starting" && !this.hasAcceptedInput) {
+      this.setStatus("idle", "Claude interactive session is ready.");
+    }
+  }
+
+  private rejectInteractiveReadiness(error: Error): void {
+    this.clearInteractiveReadinessTimer();
+    for (const waiter of this.interactiveReadyWaiters) {
+      waiter.reject(error);
+    }
+    this.interactiveReadyWaiters.clear();
+    this.interactiveReady = true;
+  }
+
+  private clearInteractiveReadinessTimer(): void {
+    if (!this.interactiveReadyTimer) {
+      return;
+    }
+    clearTimeout(this.interactiveReadyTimer);
+    this.interactiveReadyTimer = null;
+  }
+
+  private armRemoteSubmitRetry(normalizedText: string): void {
+    this.clearRemoteSubmitRetry();
+    this.remoteSubmitText = normalizedText;
+    this.remoteSubmitRetryIndex = 0;
+    this.scheduleRemoteSubmitRetry();
+  }
+
+  private scheduleRemoteSubmitRetry(): void {
+    const delayMs = CLAUDE_REMOTE_ENTER_RETRY_DELAYS_MS[this.remoteSubmitRetryIndex];
+    if (delayMs === undefined || !this.remoteSubmitText) {
+      return;
+    }
+
+    this.remoteSubmitRetryTimer = setTimeout(() => {
+      this.remoteSubmitRetryTimer = null;
+      if (
+        !this.remoteSubmitText ||
+        !this.pty ||
+        this.state.status !== "busy" ||
+        !this.pendingInjectedInputs.some(
+          (input) => input.normalizedText === this.remoteSubmitText,
+        )
+      ) {
+        this.clearRemoteSubmitRetry();
+        return;
+      }
+
+      this.writeToPty("\r");
+      this.remoteSubmitRetryIndex += 1;
+      if (this.remoteSubmitRetryIndex >= CLAUDE_REMOTE_ENTER_RETRY_DELAYS_MS.length) {
+        this.clearRemoteSubmitRetry();
+        this.emitClaudeNotice(
+          "Claude did not confirm the WeChat message submission. Press Enter in the local Claude terminal to retry.",
+          "warning",
+        );
+        return;
+      }
+      this.scheduleRemoteSubmitRetry();
+    }, delayMs);
+    this.remoteSubmitRetryTimer.unref?.();
+  }
+
+  private clearRemoteSubmitRetry(): void {
+    if (this.remoteSubmitRetryTimer) {
+      clearTimeout(this.remoteSubmitRetryTimer);
+      this.remoteSubmitRetryTimer = null;
+    }
+    this.remoteSubmitRetryIndex = 0;
+    this.remoteSubmitText = null;
+  }
+
   // Fallback heuristic for older Claude Code versions that lack PostCompact hooks.
   // The structured PostCompact hook event (handled in handleClaudeHookEnvelope) is
   // the reliable signal; this regex match serves as a best-effort fallback.
@@ -1320,6 +1467,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     this.clearCompletionTimer();
     this.clearWechatWorkingNotice(true);
+    this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
@@ -1367,6 +1515,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     const completedPreview = this.currentPreview;
     this.clearCompletionTimer();
     this.clearWechatWorkingNotice(true);
+    this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
@@ -1466,6 +1615,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     source?: string;
     transcript_path?: string;
   }): void {
+    this.markInteractiveReady();
     if (!payload.session_id) {
       return;
     }
@@ -1625,6 +1775,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     const injectedIndex = findInjectedClaudePromptIndex(prompt, this.pendingInjectedInputs);
     if (injectedIndex >= 0) {
+      this.clearRemoteSubmitRetry();
       this.pendingInjectedInputs.splice(injectedIndex, 1);
       return;
     }
@@ -1674,7 +1825,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     );
 
     try {
-      await super.reset();
+      await this.reset();
     } catch (error) {
       // recoverFromInvalidResume is invoked fire-and-forget (void) and there is
       // no global unhandled-rejection handler, so a throwing reset() must be
@@ -1818,6 +1969,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     ) {
       return;
     }
+    this.clearRemoteSubmitRetry();
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.lastAutoApprovedPayload = null;
