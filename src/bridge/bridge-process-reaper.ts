@@ -153,10 +153,7 @@ function normalizeBridgeProcessRecord(value: unknown): BridgeProcessRecord | nul
   return record;
 }
 
-export function parseWindowsBridgeProcessProbeOutput(
-  stdout: string,
-  currentPid = process.pid,
-): BridgeProcessRecord[] {
+function parseWindowsProcessProbeRecords(stdout: string): BridgeProcessRecord[] {
   const trimmed = stdout.trim();
   if (!trimmed) {
     return [];
@@ -172,7 +169,23 @@ export function parseWindowsBridgeProcessProbeOutput(
   const values = Array.isArray(parsed) ? parsed : [parsed];
   return values
     .map(normalizeBridgeProcessRecord)
-    .filter((record): record is BridgeProcessRecord => Boolean(record))
+    .filter((record): record is BridgeProcessRecord => Boolean(record));
+}
+
+export function parseWindowsProcessRecordProbeOutput(
+  stdout: string,
+  currentPid = process.pid,
+): BridgeProcessRecord | null {
+  return (
+    parseWindowsProcessProbeRecords(stdout).find((record) => record.pid !== currentPid) ?? null
+  );
+}
+
+export function parseWindowsBridgeProcessProbeOutput(
+  stdout: string,
+  currentPid = process.pid,
+): BridgeProcessRecord[] {
+  return parseWindowsProcessProbeRecords(stdout)
     .filter(
       (record) => record.pid !== currentPid && isWechatBridgeCommandLine(record.commandLine),
     );
@@ -263,12 +276,49 @@ export function listPeerBridgeProcesses(currentPid = process.pid): BridgeProcess
     : listPosixBridgeProcesses(currentPid);
 }
 
+function getWindowsProcessRecordByPid(
+  pid: number,
+  currentPid = process.pid,
+): BridgeProcessRecord | null {
+  const probe = spawnSync(
+    "powershell.exe",
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      [
+        "$ErrorActionPreference='Stop';",
+        `Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}'`,
+        "| Select-Object ProcessId,ParentProcessId,Name,CommandLine",
+        "| ConvertTo-Json -Compress",
+      ].join(" "),
+    ],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 8_000,
+    },
+  );
+
+  if (probe.status !== 0 || typeof probe.stdout !== "string") {
+    return null;
+  }
+
+  return parseWindowsProcessRecordProbeOutput(probe.stdout, currentPid);
+}
+
 export function getProcessRecordByPid(
   pid: number,
   currentPid = process.pid,
 ): BridgeProcessRecord | null {
   if (!Number.isInteger(pid) || pid <= 0 || pid === currentPid) {
     return null;
+  }
+  if (process.platform === "win32") {
+    return getWindowsProcessRecordByPid(pid, currentPid);
   }
   return listAllProcessesRaw(currentPid).find((record) => record.pid === pid) ?? null;
 }

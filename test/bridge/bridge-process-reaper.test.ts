@@ -8,6 +8,7 @@ import {
   isWechatDaemonCommandLineForCwd,
   parsePosixBridgeProcessProbeOutput,
   parseWindowsBridgeProcessProbeOutput,
+  parseWindowsProcessRecordProbeOutput,
 } from "../../src/bridge/bridge-process-reaper.ts";
 
 describe("bridge peer process reaper", () => {
@@ -158,6 +159,24 @@ describe("bridge peer process reaper", () => {
           '"C:\\Program Files\\nodejs\\node.exe" "C:\\Users\\unlin\\AppData\\Roaming\\npm\\node_modules\\cli-wechat-bridge\\dist\\bridge\\wechat-bridge.js" "--adapter" "codex"',
       },
     ]);
+  });
+
+  test("parses a targeted Windows process record without bridge filtering", () => {
+    const output = JSON.stringify({
+      ProcessId: 202,
+      ParentProcessId: 101,
+      Name: "cmd.exe",
+      CommandLine: '"C:\\Windows\\System32\\cmd.exe" /c ping -n 20 127.0.0.1',
+    });
+
+    expect(parseWindowsProcessRecordProbeOutput(output, 303)).toEqual({
+      pid: 202,
+      parentPid: 101,
+      name: "cmd.exe",
+      commandLine: '"C:\\Windows\\System32\\cmd.exe" /c ping -n 20 127.0.0.1',
+    });
+    expect(parseWindowsProcessRecordProbeOutput(output, 202)).toBeNull();
+    expect(parseWindowsProcessRecordProbeOutput("", 303)).toBeNull();
   });
 
   test("parses POSIX process probe output and ignores the current pid", () => {
