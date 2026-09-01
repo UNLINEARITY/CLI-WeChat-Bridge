@@ -169,7 +169,7 @@ cd D:\work\your-project
 
 | 使用的本地 CLI | 微信启动命令 | 企业微信启动命令 |
 | --- | --- | --- |
-| Codex | `wechat-codex` |`wecom-codex` |
+| Codex | `wechat-codex` | `wecom-codex` |
 | Claude Code | `wechat-claude` | `wecom-claude` |
 | OpenCode | `wechat-opencode` | `wecom-opencode` |
 | Pi | `wechat-pi` | `wecom-pi` |
@@ -183,7 +183,7 @@ cd D:\work\your-project
 
 ### 6. 常驻 daemon 模式（支持多 CLI 切换）
 
-如果你希望微信连接长期保持在线，并在 Codex / Claude Code / OpenCode / Pi 之间来回切换，可以在项目目录启动统一 daemon：
+如果你希望远程通道连接长期保持在线，并在 Codex / Claude Code / OpenCode / Pi 之间来回切换，可以在项目目录启动统一 daemon：
 
 ```bash
 cd D:\work\your-project
@@ -215,7 +215,7 @@ daemon 启动后，后续切换都可以直接从对应远程通道发起；如�
 
 当前 daemon 行为如下：
 
-- daemon 绑定启动时的工作目录；暂不支持在微信里切换工作目录；
+- daemon 绑定启动时的工作目录；暂不支持从远程通道切换工作目录；
 - 启动时会自动接管并清理旧的单 bridge 进程、失效 lock 和旧 endpoint；
 - 如果还没有对应 CLI，daemon 会自动打开一个新的可见终端；
 - Codex / Claude / OpenCode / Pi 的重要输出都会带上 `[codex]`、`[claude]`、`[opencode]`、`[pi]` 标签再发回对应远程通道；
@@ -263,7 +263,7 @@ Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 
 
 ![Claude Linux](docs/images/image-7.png)
 
-### OpenCode/Pi 示例 (类似省略)
+### OpenCode / Pi 示例
 
 OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session` 创建新 session；如果在本地 OpenCode CLI 中创建新 session，远程通道消息也会跟随新的 session。
 

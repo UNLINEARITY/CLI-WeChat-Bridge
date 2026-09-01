@@ -9,6 +9,7 @@
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0`
 - [Bun](https://bun.sh/docs/installation) `>= 1.0.0`
 - 至少一个本地 CLI：Codex、Claude Code、OpenCode 或 Pi
+- 至少一个远程通道凭据：微信登录凭据或企业微信 Bot 凭据
 
 克隆并安装依赖：
 
@@ -25,7 +26,9 @@ bun install
 | 场景 | 命令 |
 | --- | --- |
 | 微信登录初始化 | `npm run setup` |
+| 企业微信配对初始化 | `node --no-warnings --experimental-strip-types src/channels/wecom/setup-cli.ts` |
 | 启动 daemon | `npm run daemon` |
+| 启动企业微信 daemon | `npm run daemon -- --channel wecom` |
 | Codex bridge | `npm run bridge:codex` |
 | Codex companion | `npm run codex:panel` |
 | Codex 单命令启动器 | `npm run codex:start` |
@@ -43,16 +46,23 @@ bun install
 
 ```bash
 npm run daemon -- --adapter codex
+npm run daemon -- --channel wecom --adapter claude
 npm run bridge:claude -- --cwd D:\work\my-project
 npm run opencode:start -- --cwd D:\work\my-project
 npm run pi:start -- --cwd D:\work\my-project --model openai/gpt-5.6-sol
 ```
 
-`bridge:*` 与 `*:companion` 是维护者源码调试入口，不会发布为 `wechat-bridge*` 全局命令。普通用户应直接运行 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 或 `wechat-daemon`。
+源码模式的企业微信直接启动器使用同一个入口，并显式传入通道：
+
+```bash
+node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --channel wecom --adapter claude
+```
+
+`bridge:*` 与 `*:companion` 是维护者源码调试入口，不会发布为 `wechat-bridge*` 全局命令。普通用户应直接运行 `wechat-*`、`wecom-*` 或对应的 daemon 命令。
 
 ## Pi 原生 TUI 接管说明
 
-Pi companion 启动一个长期运行的 `pi --approve --extension <bridge-extension>` 子进程，并使用 `stdio: "inherit"` 把当前可见终端直接交给 Pi。本地键盘和微信输入共享这一原生 TUI 进程及其当前 session；微信输入由 extension 调用 `pi.sendUserMessage()`，`/stop` 调用 extension context 的 `abort()`，`/new` 和 `/new-session` 通过 command context 新建 session。
+Pi companion 启动一个长期运行的 `pi --approve --extension <bridge-extension>` 子进程，并使用 `stdio: "inherit"` 把当前可见终端直接交给 Pi。本地键盘和微信/企业微信输入共享这一原生 TUI 进程及其当前 session；远程输入由 extension 调用 `pi.sendUserMessage()`，`/stop` 调用 extension context 的 `abort()`，`/new` 和 `/new-session` 通过 command context 新建 session。
 
 adapter 与 extension 之间只通过 localhost TCP JSONL 同步命令、session 状态和最终回复；Pi 的终端输出不经过该协议，因此主题、快捷键、模型选择和 extension UI 都保持原生行为，也不需要 `node-pty`。该适配器按启动用户权限执行，不增加 bridge 工具审批层。测试或调试时不要再启动第二个 Pi 进程写入同一 session；companion 是当前 session 的唯一进程 owner。
 
@@ -105,7 +115,7 @@ npm run smoke:global -- --purge-global --clean-cache --full
 | `--full` | 额外执行 `npm run quality` |
 | `--keep-tarball` | 保留生成的 tarball，方便排查 |
 
-`smoke:global` 会先用当前源码打出真实 npm tarball，再执行 `npm install -g <tarball>` 安装到真实全局环境。脚本结束后，可以离开仓库目录运行 `wechat-codex` 等直接命令验证。
+`smoke:global` 会先用当前源码打出真实 npm tarball，再执行 `npm install -g <tarball>` 安装到真实全局环境。脚本结束后，可以离开仓库目录运行 `wechat-*` 或 `wecom-*` 直接命令验证。
 
 ## 源码更新
 
@@ -157,7 +167,7 @@ npm pack --dry-run --json
 | 文件 | 作用 |
 | --- | --- |
 | `src/bridge/wechat-bridge.ts` | bridge 主事件循环 |
-| `src/daemon/wechat-daemon.ts` | 常驻 WeChat daemon 与多 CLI slot 管理 |
+| `src/daemon/wechat-daemon.ts` | 常驻 WeChat/WeCom daemon 与多 CLI slot 管理 |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |
 | `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `pi` 适配器入口 |
 | `src/bridge/bridge-adapters.opencode.ts` | OpenCode 适配器实现 |
@@ -166,6 +176,9 @@ npm pack --dry-run --json
 | `src/companion/local-companion.ts` | `wechat-claude` / `wechat-opencode` / `wechat-pi` 本地 companion 入口 |
 | `src/companion/codex-remote-client.ts` | `wechat-codex` 本地客户端入口 |
 | `src/companion/local-companion-start.ts` | 四个直接命令共用的智能启动入口 |
+| `src/channels/wecom/setup.ts` | 企业微信 Bot 配置与操作者配对 |
+| `src/channels/wecom/wecom-transport.ts` | 企业微信 WebSocket 长连接、消息和媒体收发 |
+| `src/channels/wecom/wecom-message.ts` | 企业微信消息帧解析与通道消息转换 |
 | `src/wechat/wechat-transport.ts` | iLink 消息收发 |
 | `src/bridge/bridge-state.ts` | bridge 状态、锁与日志 |
 | `src/wechat/setup.ts` | 登录与凭据初始化 |

@@ -1,6 +1,6 @@
 # 问题排查
 
-本文记录 CLI WeChat Bridge 的常见问题、已知限制和排查入口，包括状态文件、网络发送、会话同步和审批行为。
+本文记录 CLI WeChat Bridge 的常见问题、已知限制和排查入口，包括状态文件、网络发送、会话同步、审批行为以及微信与企业微信通道。
 
 ## 数据目录与状态文件
 
@@ -27,26 +27,28 @@
 | 路径 | 作用 |
 | --- | --- |
 | `account.json` | 微信凭据 |
+| `wecom/account.json` | 企业微信 Bot 凭据与操作者配对信息 |
 | `sync_buf.txt` | iLink 增量同步游标 |
 | `context_tokens.json` | 微信上下文 token 缓存 |
-| `bridge.log` | bridge、daemon、适配器和 WeChat 发送失败日志 |
+| `bridge.log` | bridge、daemon、适配器、微信和企业微信发送失败日志 |
 | `bridge.lock.json` | 独立 bridge 运行锁 |
-| `daemon-endpoint.json` | 当前 `wechat-daemon` 的本地 IPC endpoint |
+| `daemon-endpoint.json` | 当前通道 daemon 的本地 IPC endpoint |
 | `inbound-attachments/<date>/` | 微信入站图片和普通文件的本地保存目录 |
+| `wecom/inbound-attachments/<date>/` | 企业微信入站媒体的本地保存目录 |
 | `workspaces/<workspace-key>/bridge-state.json` | 当前工作区状态、会话和 adapter 状态 |
 | `workspaces/<workspace-key>/codex-panel-endpoint.json` | 当前工作区 companion endpoint；文件名保留历史兼容 |
 | `workspaces/<workspace-key>/<adapter>-companion-endpoint.json` | daemon / 多适配器模式下的 companion endpoint |
 
 如果微信没有收到回复，优先确认 `bridge.log` 中是否出现 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT`、`context_token`、`endpoint`、`final_reply` 或 adapter 相关错误。
 
-## `wechat-codex` / `wechat-claude` / `wechat-opencode` / `wechat-pi` 提示找不到 bridge
+## `wechat-*` / `wecom-*` 提示找不到 bridge
 
 通常原因是：
 
 - 可见 CLI 与内部 runtime 不在同一个工作目录；
 - 当前工作区 endpoint 文件来自旧进程或已经失效。
 
-请在目标项目目录重新运行对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`。直接命令会自动复用同目录 daemon，或在没有 daemon 时重建内部 runtime 和可见 CLI。
+请在目标项目目录重新运行对应的 `wechat-*` 或 `wecom-*` 直接命令。直接命令会自动复用同目录同通道 daemon，或在没有 daemon 时重建内部 runtime 和可见 CLI。
 
 ## 全局命令不存在
 
@@ -63,7 +65,7 @@ npm install -g cli-wechat-bridge@latest
 如果全局安装看似完成，但出现类似警告：
 
 ```text
-npm warn install-scripts cli-wechat-bridge@1.1.5 ... blocked because ... allowScripts
+npm warn install-scripts cli-wechat-bridge@<installed-version> ... blocked because ... allowScripts
 npm warn install-scripts node-pty@1.1.0 ... blocked because ... allowScripts
 ```
 
@@ -234,7 +236,7 @@ HTTP_PROXY
 HTTPS_PROXY
 ALL_PROXY
 NO_PROXY
-NODE_OPTIONS=--use-env-proxy
+NODE_USE_ENV_PROXY=1 (Node.js 24+)
 ```
 
 建议保留：
@@ -245,7 +247,7 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 这样本地 daemon / companion IPC 不会被代理转发。
 
-提示：Node.js 的内置 `fetch` 默认**不读取**代理环境变量。如果你的网络必须经代理才能访问 `ilinkai.weixin.qq.com`，请设置 `NODE_USE_ENV_PROXY=1`（Node 24+）后重启桥接；`--doctor` 的"微信服务可达性"一项会在检测到该情况时给出提示。
+提示：Node.js 的内置 `fetch` 默认**不读取**代理环境变量。如果你的网络必须经代理才能访问 `ilinkai.weixin.qq.com`，Node.js 24 及以上请设置 `NODE_USE_ENV_PROXY=1` 后重启桥接；Node.js 22.13 不使用 `NODE_OPTIONS=--use-env-proxy`，应升级 Node.js 或为运行环境提供可用的直连网络。`--doctor` 的"微信服务可达性"一项会在检测到该情况时给出提示。
 
 ## 消息发出去桥接没反应（环境看起来一切正常）
 
@@ -264,16 +266,18 @@ NO_PROXY=127.0.0.1,localhost,::1
 如果偶发出现：
 
 1. 先确认本地 `wechat-codex` 是否真的仍在执行任务；
-2. 必要时在微信发送 `/stop`；
+2. 必要时在对应远程通道发送 `/stop`；
 3. 检查 `~/.cli-bridge/bridge.log` 和当前工作区的 `bridge-state.json`。
 
-## 本地 `/resume` 后微信不同步
+## 本地 `/resume` 后远程通道不同步
 
-请优先重新运行对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode` 或 `wechat-pi`，确保内部 runtime 与可见 CLI 来自同一安装版本。
+请优先重新运行对应的 `wechat-*` 或 `wecom-*` 直接命令，确保内部 runtime 与可见 CLI 来自同一安装版本。
 
-微信侧 `/resume` 当前仍保持禁用。需要切换 Codex / Claude Code / OpenCode / Pi 会话时，优先在可见 CLI 中使用 `/new` 或对应 CLI 的会话命令，内部 runtime 会跟随本地活动会话。
+微信和企业微信侧的 `/resume` 均支持 Codex、Claude Code、OpenCode 和 Pi。命令只列出当前 daemon / bridge 启动目录内的最近会话；切换前需要当前适配器处于 idle，且没有待审批或待回答请求。
 
-部分设备可能存在第一次本地输入不同步到微信的情况，可以先从微信发送一条普通消息来建立连接。
+Codex 会先校验目标 thread 的 cwd、root 和 active 状态，再执行 `thread/resume` 与可见客户端切换；Claude Code 会等待 `SessionEnd(reason=resume)` 和目标 `SessionStart(source=resume)`；OpenCode 与 Pi 会等待可见 TUI 的 session 切换确认。任何一步失败时，bridge 保留原会话，不提交新的 shared session。
+
+部分设备可能存在第一次本地输入不同步到微信的情况，可以先从对应远程通道发送一条普通消息来建立上下文。
 
 ## 审批与权限请求
 
@@ -281,7 +285,7 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 如果希望关闭所有自动放行（每个权限请求都转发到微信确认），设置环境变量 `CLI_BRIDGE_STRICT_APPROVAL=1` 后重启桥接。
 
-Codex、Claude Code 等适配器会在 bridge 能识别的审批请求上同步到微信侧处理。少数底层 CLI 自己弹出的本地 TUI 安全确认，如果没有暴露给 bridge，仍可能需要在本地终端处理。
+Codex、Claude Code 等适配器会在 bridge 能识别的审批请求上同步到微信或企业微信侧处理。少数底层 CLI 自己弹出的本地 TUI 安全确认，如果没有暴露给 bridge，仍可能需要在本地终端处理。
 
 如果普通查找、读目录、读文件等低风险命令频繁要求本地终端审批，请保留 `bridge.log` 和对应终端输出后提交 issue。
 
@@ -297,7 +301,6 @@ Codex、Claude Code 等适配器会在 bridge 能识别的审批请求上同步�
 
 ## 已知限制
 
-- 微信侧 `/resume` 暂时禁用，以避免远程和本地会话线程出现不一致。
-- `wechat-daemon` v1 绑定启动工作区，暂不支持从微信切换到另一个本地目录。
-- 入站图片和文件会保存为本地路径并转发给 CLI；bridge 本身不做 OCR，也不自动抽取 PDF / DOCX 正文。
-- daemon 和独立 bridge 不应在同一工作区同时运行；同目录启动器会优先委托已有 daemon。
+- `wechat-daemon` 和 `wecom-daemon` v1 均绑定启动工作区，暂不支持从远程通道切换到另一个本地目录。
+- 微信和企业微信入站图片、文件及视频会保存为本地路径并转发给 CLI；bridge 本身不做 OCR，也不自动抽取 PDF / DOCX 正文。
+- 同一工作区同一通道不应同时运行 daemon 和独立 bridge；同目录启动器会优先委托已有 daemon。

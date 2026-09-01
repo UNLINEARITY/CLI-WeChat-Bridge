@@ -4,6 +4,10 @@
 
 ## 版本列表
 
+### [v1.1.7](./1.1.7.md) / [中文说明](./1.1.7_CN.md)
+**企业微信原生智能机器人接入 + Claude/Windows/微信登录兼容性修复 + 静态 Star History**
+1.1.7 新增基于 `@wecom/aibot-node-sdk@1.0.7` 的企业微信智能机器人 WebSocket 通道，提供 `wecom-setup`、`wecom-daemon` 和四个 `wecom-*` 适配器入口。企业微信支持内部单聊和内部群聊、一次性 `/pair` 操作者配对、入站媒体下载解密和出站媒体发送；凭据、附件和去重状态存放在 `~/.cli-bridge/wecom`，每个 Bot 同时只保持一个有效连接。Claude daemon 的远程输入在 Windows PTY 漏掉首次 Enter 时会按限定间隔重试；Windows 进程身份检查改为针对记录 PID 的定向查询，CI 现在区分 Node.js 22.13.0 和 24 的六个检查。`wechat-setup` 保留 Windows 默认 `small` 二维码，同时支持 `--qr-mode normal`、交互终端校验、终端宽度检测和浏览器 fallback。README 的托管 Star History 图片已替换为仓库内固定 PNG 路径，并新增定时/手动 GitHub Action 生成静态图表。
+
 ### [v1.1.6](./1.1.6.md) / [中文说明](./1.1.6_CN.md)
 **Bridge core/微信通道分离 + Codex 与 emoji 行为修复 + 微信回复恢复**
 `src/core` 承载通道无关类型、命令、消息路由、事件分发和文本工具，`src/channels/wechat` 承载微信转换、回复格式、发送队列和 channel port；direct bridge 与 daemon 共用核心链路。Codex 上游 `#40492` 新增隐藏 ephemeral 标题 thread，1.1.6 增加 `thread/read`、cwd、parent、ephemeral 校验并恢复本地 `/resume` 同步。standalone bridge 不再解析 emoji 绑定或拦截 `/bind`、`/unbind`、`/bindings`，daemon 保留绑定能力。微信 context 失效时按工作区持久化并顺序补发回复；Node.js 最低版本调整为 22.13.0。
@@ -194,6 +198,8 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.1.7 | 2026-09-01 | 企业微信智能机器人通道、Claude Windows 输入提交重试、Windows 进程检查、微信二维码模式与静态 Star History Action | 见 [1.1.7 发布说明](./1.1.7_CN.md) |
+| 1.1.6 | 2026-08-31 | Bridge 通用核心与微信通道分离、Codex 上游 thread 兼容、微信回复恢复、standalone emoji 绑定归属调整、Node.js 22.13.0 支持 | 42 个文件，+2,496/-972 |
 | 1.1.3 | 2026-08-22 | 原生 Pi TUI 接管、Codex/OpenCode 较新主流版本兼容、Windows/OpenCode/Pi 启动可靠性、daemon 行内 prompt 切换转发 | 48 个文件，+3,744/-291 |
 | 1.1.2 | 2026-07-07 | node-pty 跨平台执行位修复、崩溃/turn 竞态加固、原子持久化与入站 fail-closed 去重、Windows 环境变量与诊断增强、npm-based 更新检查、三平台 CI 质量门禁 | 36 个文件，+1,182/-159 |
 | 1.1.1 | 2026-06-02 | 按适配器收敛的 doctor 诊断、紧凑 i18n 输出、bridge lock 字段化展示、架构文档与 PTY 排障补充 | 12 个文件，+1,706/-8 |

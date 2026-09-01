@@ -58,7 +58,7 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 | `WECHAT_MAX_INBOUND_IMAGE_MB` | 覆盖微信入站图片下载大小限制，默认 20 MB |
 | `WECHAT_MAX_INBOUND_FILE_MB` | 覆盖微信入站普通文件下载大小限制，默认 50 MB |
 | `WECHAT_OPENCODE_DEBUG` | 开启 OpenCode 适配器调试输出 |
-| `CLI_BRIDGE_STRICT_APPROVAL` | 设为 `1` 后关闭所有自动审批，Claude/Codex 的每个权限请求都会转发到微信等待 /confirm 或 /deny |
+| `CLI_BRIDGE_STRICT_APPROVAL` | 设为 `1` 后关闭所有自动审批，Claude/Codex 的每个权限请求都会转发到微信或企业微信等待 /confirm 或 /deny |
 | `CLI_BRIDGE_SKIP_NODE_CHECK` | 设为 `1` 跳过入口命令的 Node.js >= 22.13.0 版本检查（自担风险） |
 
 另外，桥接启动 `claude` / `codex` / `opencode` 子进程时会**完整继承当前终端的环境变量**（包括 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`OPENAI_API_KEY` 等），并自动为回环地址追加 `NO_PROXY`。如果你的 CLI 依赖环境变量认证，请确保在启动桥接的同一终端会话中设置了这些变量。
