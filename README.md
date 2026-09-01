@@ -216,6 +216,31 @@ wechat-daemon --adapter claude --profile work
 
 其中 `wechat-pi` 默认表示启动一个新的 Pi session；如果 Pi TUI 已经可见，daemon 会在现有窗口中创建新 session。微信中的 `/pi` 仅用于切换适配器，仍会复用已经连接的 Pi TUI。
 
+## 企业微信智能机器人
+
+企业微信使用官方智能机器人 WebSocket 长连接，不需要公网回调地址。先在企业微信客户端的“工作台 → 智能机器人”中创建 API 模式机器人，选择“使用长连接”，取得 Bot ID 和 Secret。官方说明见 [智能机器人长连接](https://developer.work.weixin.qq.com/document/path/101463)。
+
+首次使用时运行：
+
+```bash
+wecom-setup
+```
+
+终端会验证 Bot ID 和 Secret，并生成一次性配对码。请在企业微信中与机器人单聊，发送终端显示的 `/pair <code>`；配对成功后，只有该企业微信用户可以控制本地 CLI。凭据保存在 `~/.cli-bridge/wecom/account.json`，也可以通过 `WECOM_BOT_ID`、`WECOM_BOT_SECRET` 和 `WECOM_OPERATOR_USER_ID` 提供。
+
+直接启动和 daemon 命令与微信入口一一对应：
+
+| 本地 CLI | 直接启动 | 常驻连接 |
+| --- | --- | --- |
+| Codex | `wecom-codex` | `wecom-daemon --adapter codex` |
+| Claude Code | `wecom-claude` | `wecom-daemon --adapter claude` |
+| OpenCode | `wecom-opencode` | `wecom-daemon --adapter opencode` |
+| Pi | `wecom-pi` | `wecom-daemon --adapter pi` |
+
+企业微信支持内部单聊和内部群聊。群聊中需要 @机器人；只有已配对用户的消息会进入 CLI。图片、文件和视频会立即下载并解密到 `~/.cli-bridge/wecom/inbound-attachments/`，语音使用企业微信提供的转写文本。出站附件遵循企业微信限制：图片和 MP4 视频不超过 10 MB、AMR 语音不超过 2 MB、普通文件不超过 20 MB；不满足媒体格式时会按普通文件发送，发送失败会返回明确错误。
+
+同一工作目录一次只能由微信或企业微信中的一个通道拥有。直接命令只会委托给同通道 daemon；若另一通道 daemon 正在运行，需要先停止它。每个企业微信 Bot 同时只能保持一个有效长连接，新连接会使旧连接退出。外部群、客户群、自建应用回调和企业微信私有部署不在当前支持范围内。
+
 ## 适配器支持情况
 
 > 目前支持将本地文件发送到微信,微信也允许发送文件给本地 cli 解析 （注意模型本身要具备处理对应文件的能力！）

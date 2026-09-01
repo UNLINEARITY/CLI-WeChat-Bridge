@@ -285,6 +285,16 @@ Codex、Claude Code 等适配器会在 bridge 能识别的审批请求上同步�
 
 如果普通查找、读目录、读文件等低风险命令频繁要求本地终端审批，请保留 `bridge.log` 和对应终端输出后提交 issue。
 
+## 企业微信连接与附件发送
+
+`wecom-setup --check` 可以验证已保存的 Bot ID、Secret 和配对用户。企业微信规定每个智能机器人同时只能保持一个有效长连接；如果日志出现 `connected by another process` 或 `event.disconnected_event`，请关闭使用同一 Bot ID 的其他 `wecom-daemon`、bridge 或 OpenClaw 插件实例，再重新启动。
+
+企业微信附件下载地址只有五分钟有效，因此 bridge 会在收到消息时立即下载并解密。下载失败、超时或超过 `WECOM_MAX_INBOUND_*_MB` 限制时，CLI prompt 中会出现明确的附件不可用说明。
+
+官方 `@wecom/aibot-node-sdk@1.0.7` 的大文件分片上传存在已公开的延迟 ACK 问题。当前实现会逐个发送附件，失败时向企业微信返回文件名和错误类型，不会静默丢失，也不会修改 SDK 私有字段。待官方发布修复版本后再升级依赖。
+
+企业微信智能机器人当前只支持内部单聊和内部群聊，不支持外部群或客户群。主动消息只能发送到已经与机器人发生过交互的会话。
+
 ## 已知限制
 
 - 微信侧 `/resume` 暂时禁用，以避免远程和本地会话线程出现不一致。

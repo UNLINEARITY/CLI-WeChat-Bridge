@@ -33,6 +33,8 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 ~/.cli-bridge
 ```
 
+企业微信凭据和附件使用独立子目录：`~/.cli-bridge/wecom/account.json`、`~/.cli-bridge/wecom/inbound-attachments/` 和 `~/.cli-bridge/wecom/inbound-message-claims/`。工作区状态、bridge lock、daemon endpoint 与 `bridge.log` 仍由两个通道共用，从而保证同一工作区一次只有一个远程通道拥有本地 CLI。
+
 可以通过 `CLI_BRIDGE_DATA_DIR` 覆盖。状态文件、日志和旧目录迁移说明见 [问题排查](troubleshooting.md#数据目录与状态文件)。
 
 旧版 `CLAUDE_WECHAT_CHANNEL_DATA_DIR` 不再作为活动数据目录配置项；如旧环境中设置过该变量，它只会被视为一次性旧数据迁移来源。新的自定义目录请使用 `CLI_BRIDGE_DATA_DIR`。
@@ -43,6 +45,12 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 | --- | --- |
 | `WECHAT_ILINK_BASE_URL` | 覆盖默认 iLink API 地址 |
 | `CLI_BRIDGE_DATA_DIR` | 覆盖默认数据目录 |
+| `WECOM_BOT_ID` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Bot ID |
+| `WECOM_BOT_SECRET` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Secret |
+| `WECOM_OPERATOR_USER_ID` | 覆盖已配对的企业微信操作者 userid |
+| `WECOM_MAX_INBOUND_IMAGE_MB` | 覆盖企业微信入站图片下载限制，默认 20 MB |
+| `WECOM_MAX_INBOUND_FILE_MB` | 覆盖企业微信入站文件下载限制，默认 50 MB |
+| `WECOM_MAX_INBOUND_VIDEO_MB` | 覆盖企业微信入站视频下载限制，默认 50 MB |
 | `WECHAT_MAX_IMAGE_MB` | 覆盖图片上传大小限制，默认 20 MB |
 | `WECHAT_MAX_FILE_MB` | 覆盖普通文件上传大小限制，默认 50 MB |
 | `WECHAT_MAX_VOICE_MB` | 覆盖语音上传大小限制，默认 20 MB |
@@ -55,4 +63,4 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 
 另外，桥接启动 `claude` / `codex` / `opencode` 子进程时会**完整继承当前终端的环境变量**（包括 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN`、`OPENAI_API_KEY` 等），并自动为回环地址追加 `NO_PROXY`。如果你的 CLI 依赖环境变量认证，请确保在启动桥接的同一终端会话中设置了这些变量。
 
-网络代理相关变量不是 CLI WeChat Bridge 专属配置。遇到 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT` 或 iLink 连接超时时，再检查 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 和 `NODE_OPTIONS=--use-env-proxy`，具体排查步骤见 [问题排查](troubleshooting.md#wechat_send_failed-或-und_err_connect_timeout)。
+网络代理相关变量不是 CLI WeChat Bridge 专属配置。遇到 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT` 或 iLink 连接超时时，再检查 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和 `NO_PROXY`。Node 24+ 可设置 `NODE_USE_ENV_PROXY=1`；不要在 Node 22.13 中设置 `NODE_OPTIONS=--use-env-proxy`，该版本会在程序启动前拒绝此选项。具体排查步骤见 [问题排查](troubleshooting.md#wechat_send_failed-或-und_err_connect_timeout)。
