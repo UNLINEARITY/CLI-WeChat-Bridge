@@ -23,6 +23,7 @@ import {
   getProcessRecordByPid,
   isWechatBridgeCommandLine,
 } from "./bridge-process-reaper.ts";
+import type { BridgeProcessRecord } from "./bridge-process-reaper.ts";
 
 type BridgeStateOptions = {
   adapter: BridgeAdapterKind;
@@ -271,11 +272,20 @@ function buildLockConflictError(lock: BridgeLockPayload): Error {
  * pid is alive but belongs to something else, and "unknown" when the command
  * line could not be resolved (probe failure, restricted permissions).
  */
-export function classifyLockHolderProcess(pid: number): "bridge" | "foreign" | "unknown" {
-  if (!isPidAlive(pid)) {
+export function classifyLockHolderProcess(
+  pid: number,
+  dependencies: {
+    isPidAlive?: (pid: number) => boolean;
+    getProcessRecordByPid?: (pid: number) => BridgeProcessRecord | null;
+  } = {},
+): "bridge" | "foreign" | "unknown" {
+  const isProcessAlive = dependencies.isPidAlive ?? isPidAlive;
+  const getProcessRecord = dependencies.getProcessRecordByPid ?? getProcessRecordByPid;
+
+  if (!isProcessAlive(pid)) {
     return "unknown";
   }
-  const record = getProcessRecordByPid(pid);
+  const record = getProcessRecord(pid);
   if (!record) {
     return "unknown";
   }

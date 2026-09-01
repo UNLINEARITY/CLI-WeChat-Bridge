@@ -279,7 +279,18 @@ describe("classifyLockHolderProcess", () => {
       { stdout: "ignore", stderr: "ignore" },
     );
     try {
-      expect(classifyLockHolderProcess(child.pid)).toBe("foreign");
+      expect(
+        classifyLockHolderProcess(child.pid, {
+          // Keep this regression focused on PID-reuse classification. The
+          // production Windows command-line probe is covered by its parser
+          // tests and can be delayed by concurrent WMI activity in CI.
+          getProcessRecordByPid: () => ({
+            pid: child.pid,
+            name: "cmd.exe",
+            commandLine: '"C:\\Windows\\System32\\cmd.exe" /c ping -n 20 127.0.0.1',
+          }),
+        }),
+      ).toBe("foreign");
     } finally {
       child.kill();
     }
