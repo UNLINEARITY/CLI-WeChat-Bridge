@@ -19,6 +19,12 @@
 
 项目围绕本地工作流设计，重点是保留**本地原生终端体验**：你仍然在本地使用原生 CLI 和高级启动参数，微信或企业微信负责远程输入、结果回流与状态同步。
 
+<p align="center">
+  <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/"><strong>产品主页 ↗</strong></a>
+  <span>&nbsp;&nbsp;·&nbsp;&nbsp;</span>
+  <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/?lang=en">English ↗</a>
+</p>
+
 <p align='center'><img src='docs/images/animation.webp' width=90%></p>
 
 ## 文档导航

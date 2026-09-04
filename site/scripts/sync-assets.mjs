@@ -1,0 +1,19 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const siteDir = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(siteDir, "../..");
+const sourceDir = path.join(rootDir, "docs", "images");
+const targetDir = path.join(rootDir, "site", "public", "assets", "real");
+
+const files = [
+  "logo.png",
+  "animation.webp",
+];
+
+fs.rmSync(targetDir, { recursive: true, force: true });
+fs.mkdirSync(targetDir, { recursive: true });
+for (const file of files) {
+  fs.copyFileSync(path.join(sourceDir, file), path.join(targetDir, file));
+}
