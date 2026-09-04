@@ -20,7 +20,11 @@ import {
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import * as shared from "./bridge-adapters.shared.ts";
-import { requestCodexVisibleThreadSwitch } from "../companion/codex-visible-client-link.ts";
+import {
+  requestCodexVisibleClientShutdown,
+  requestCodexVisibleThreadSwitch,
+} from "../companion/codex-visible-client-link.ts";
+import { readLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   CODEX_REMOTE_AUTH_TOKEN_ENV,
@@ -296,6 +300,15 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
   }
 
+  async prepareVisibleClientSession(): Promise<boolean> {
+    if (this.isNativePanelMode() || this.sharedThreadId) {
+      return Boolean(this.sharedThreadId);
+    }
+
+    const threadId = await this.ensureThreadStarted();
+    return Boolean(threadId);
+  }
+
   protected buildSpawnArgs(): string[] {
     if (!this.appServerPort) {
       throw new Error("Codex app-server is not ready.");
@@ -453,6 +466,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async dispose(): Promise<void> {
+    await this.shutdownVisibleClient();
     this.resetTurnTracking({ preserveThread: false });
     if (this.isEmbeddedCliMode()) {
       this.detachLocalInputForwarding();
@@ -481,6 +495,28 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       await super.dispose();
     }
     await this.stopAppServer();
+  }
+
+  private async shutdownVisibleClient(): Promise<void> {
+    const endpoint = readLocalCompanionEndpoint(this.options.cwd, { adapter: "codex" });
+    if (
+      !endpoint?.companionPid ||
+      endpoint.instanceId !== this.localClientInstanceId ||
+      !endpoint.codexControlPort ||
+      !endpoint.codexControlToken
+    ) {
+      return;
+    }
+
+    try {
+      await requestCodexVisibleClientShutdown({
+        cwd: this.options.cwd,
+        instanceId: endpoint.instanceId,
+      });
+    } catch {
+      // The visible client may already be exiting. Its endpoint is cleared
+      // by the supervisor when the child process finishes.
+    }
   }
 
   getLocalClientEndpoint(): LocalClientEndpoint | null {

@@ -16,11 +16,28 @@ export type CodexVisibleSwitchRequest = {
   threadId: string;
 };
 
+export type CodexVisibleShutdownRequest = {
+  type: "shutdown";
+  id: string;
+  token: string;
+};
+
+export type CodexVisibleControlRequest =
+  | CodexVisibleSwitchRequest
+  | CodexVisibleShutdownRequest;
+
 export type CodexVisibleSwitchResponse = {
   type: "switch_thread_result";
   id: string;
   ok: boolean;
   threadId?: string;
+  error?: string;
+};
+
+export type CodexVisibleShutdownResponse = {
+  type: "shutdown_result";
+  id: string;
+  ok: boolean;
   error?: string;
 };
 
@@ -50,9 +67,43 @@ export function parseCodexVisibleSwitchRequest(
   };
 }
 
+export function parseCodexVisibleControlRequest(
+  value: unknown,
+): CodexVisibleControlRequest | null {
+  const switchRequest = parseCodexVisibleSwitchRequest(value);
+  if (switchRequest) {
+    return switchRequest;
+  }
+  if (!isRecord(value)) {
+    return null;
+  }
+  if (
+    value.type !== "shutdown" ||
+    typeof value.id !== "string" ||
+    typeof value.token !== "string"
+  ) {
+    return null;
+  }
+  return {
+    type: "shutdown",
+    id: value.id,
+    token: value.token,
+  };
+}
+
 export function sendCodexVisibleSwitchResponse(
   socket: net.Socket,
   response: CodexVisibleSwitchResponse,
+): void {
+  if (socket.destroyed || socket.writableEnded) {
+    return;
+  }
+  socket.end(`${JSON.stringify(response)}\n`);
+}
+
+export function sendCodexVisibleShutdownResponse(
+  socket: net.Socket,
+  response: CodexVisibleShutdownResponse,
 ): void {
   if (socket.destroyed || socket.writableEnded) {
     return;
@@ -167,6 +218,92 @@ export async function requestCodexVisibleThreadSwitch(params: {
     socket.once("close", () => {
       if (!settled) {
         finish(new Error("The visible Codex client closed the control connection."));
+      }
+    });
+  });
+}
+
+export async function requestCodexVisibleClientShutdown(params: {
+  cwd: string;
+  instanceId: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const endpoint = resolveCodexControlEndpoint(params.cwd, params.instanceId);
+  const requestId = crypto.randomUUID();
+  const timeoutMs = params.timeoutMs ?? 5_000;
+
+  await new Promise<void>((resolve, reject) => {
+    const socket = net.connect({
+      host: CODEX_VISIBLE_CONTROL_HOST,
+      port: endpoint.codexControlPort!,
+    });
+    let buffer = "";
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      socket.destroy();
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+
+    socket.setEncoding("utf8");
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => {
+      const request: CodexVisibleShutdownRequest = {
+        type: "shutdown",
+        id: requestId,
+        token: endpoint.codexControlToken!,
+      };
+      socket.write(`${JSON.stringify(request)}\n`);
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (buffer.length > 65_536) {
+        finish(new Error("The visible Codex client returned an oversized shutdown response."));
+        return;
+      }
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex < 0) {
+        return;
+      }
+      const line = buffer.slice(0, newlineIndex).trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        finish(new Error("The visible Codex client returned an invalid shutdown response."));
+        return;
+      }
+      if (!isRecord(parsed) || parsed.type !== "shutdown_result" || parsed.id !== requestId) {
+        finish(new Error("The visible Codex client returned an unexpected shutdown response."));
+        return;
+      }
+      if (parsed.ok !== true) {
+        finish(
+          new Error(
+            typeof parsed.error === "string"
+              ? parsed.error
+              : "The visible Codex client could not shut down.",
+          ),
+        );
+        return;
+      }
+      finish();
+    });
+    socket.once("timeout", () => {
+      finish(new Error("Timed out waiting for the visible Codex client to shut down."));
+    });
+    socket.once("error", (error) => finish(error));
+    socket.once("close", () => {
+      if (!settled) {
+        finish(new Error("The visible Codex client closed the shutdown connection."));
       }
     });
   });

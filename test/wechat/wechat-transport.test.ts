@@ -22,6 +22,7 @@ import {
   resolveMediaUploadLimitBytes,
   tryClaimInboundMessage,
   WechatApiResponseError,
+  WeChatTransport,
   type WeixinMessage,
 } from "../../src/wechat/wechat-transport.ts";
 
@@ -226,6 +227,57 @@ describe("wechat upload limits", () => {
       ).toBe(true);
     } finally {
       clearInboundMessageClaims(claimsDir);
+    }
+  });
+
+  test("stops an in-flight long poll without waiting for its timeout", async () => {
+    const originalFetch = globalThis.fetch;
+    let fetchStarted: (() => void) | null = null;
+    const fetchReady = new Promise<void>((resolve) => {
+      fetchStarted = resolve;
+    });
+
+    globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+      fetchStarted?.();
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal?.aborted) {
+          reject(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        signal?.addEventListener(
+          "abort",
+          () => reject(new DOMException("Aborted", "AbortError")),
+          { once: true },
+        );
+      });
+    }) as typeof fetch;
+
+    const transport = new WeChatTransport({
+      log: () => undefined,
+      logError: () => undefined,
+    });
+    transport.getCredentials = () => ({
+      token: "test-token",
+      baseUrl: "https://example.invalid",
+      accountId: "test-account",
+      userId: "test-user",
+      savedAt: new Date().toISOString(),
+    });
+
+    try {
+      const polling = transport.pollMessages({ timeoutMs: 60_000 });
+      await fetchReady;
+      const startedAt = Date.now();
+      transport.stop();
+      await expect(polling).resolves.toEqual({
+        messages: [],
+        ignoredBacklogCount: 0,
+      });
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      transport.stop();
+      globalThis.fetch = originalFetch;
     }
   });
 });

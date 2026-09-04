@@ -66,3 +66,54 @@ describe("codex exit handling", () => {
     expect(details.length).toBeLessThan(560);
   });
 });
+
+describe("Codex visible client preparation", () => {
+  test("creates and stores a shared thread before the visible client starts", async () => {
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "headless",
+    }) as any;
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      requests.push({ method, params });
+      return method === "thread/start" ? { thread: { id: "thread_prepared" } } : {};
+    };
+
+    await expect(adapter.prepareVisibleClientSession()).resolves.toBe(true);
+    expect(adapter.getState()).toMatchObject({
+      sharedSessionId: "thread_prepared",
+      sharedThreadId: "thread_prepared",
+    });
+    expect(requests).toEqual([
+      {
+        method: "thread/start",
+        params: {
+          cwd: process.cwd(),
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+          sandbox: "workspace-write",
+          serviceName: "wechat-bridge",
+        },
+      },
+    ]);
+
+    await expect(adapter.prepareVisibleClientSession()).resolves.toBe(true);
+    expect(requests).toHaveLength(1);
+  });
+
+  test("does not create a thread for native panel mode", async () => {
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    adapter.sendRpcRequest = async () => {
+      throw new Error("thread/start should not be called for panel mode");
+    };
+
+    await expect(adapter.prepareVisibleClientSession()).resolves.toBe(false);
+  });
+});

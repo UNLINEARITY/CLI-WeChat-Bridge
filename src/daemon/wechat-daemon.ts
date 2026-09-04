@@ -109,6 +109,7 @@ import {
 import {
   createRuntimeHost,
 } from "../runtime/create-runtime-host.ts";
+import { hasVisibleClientSessionPreparer } from "../runtime/runtime-types.ts";
 import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
@@ -1202,6 +1203,22 @@ class WechatDaemon {
 
   private async cleanup(): Promise<void> {
     appendDaemonLog("shutdown_started");
+    // Stop accepting new channel work and abort an in-flight long poll before
+    // waiting for queued sends or adapter disposal. Otherwise Ctrl+C can leave
+    // the process alive until the 35-second poll timeout and retain the daemon
+    // endpoint for the next startup to clean up.
+    try {
+      this.transport.stop();
+    } catch {
+      // Best effort shutdown.
+    }
+    try {
+      this.wecomTransport?.stop();
+    } catch {
+      // Best effort shutdown.
+    }
+    clearDaemonEndpoint();
+
     for (const slot of this.slots.values()) {
       try {
         await slot.outputBatcher.flushNow();
@@ -1212,12 +1229,6 @@ class WechatDaemon {
     await this.waitForPendingWechatForwardTasks();
     await this.textSendChain.catch(() => undefined);
     await this.attachmentSendChain.catch(() => undefined);
-    try {
-      this.wecomTransport?.stop();
-    } catch {
-      // Best effort shutdown.
-    }
-
     for (const slot of this.slots.values()) {
       try {
         await slot.runtime.dispose();
@@ -1371,9 +1382,35 @@ class WechatDaemon {
         `dead_visible_codex_runtime_restarted: cwd=${this.cwd}`,
       );
     }
-    const sharedSessionBeforeVisible = getSharedSessionIdFromAdapterState(
+    let sharedSessionBeforeVisible = getSharedSessionIdFromAdapterState(
       slot.runtime.getState(),
     );
+    let preparedVisibleThread = false;
+    if (
+      adapter === "codex" &&
+      !sharedSessionBeforeVisible &&
+      !visibleConnected &&
+      hasVisibleClientSessionPreparer(slot.runtime)
+    ) {
+      try {
+        if (await slot.runtime.prepareVisibleClientSession()) {
+          preparedVisibleThread = true;
+          sharedSessionBeforeVisible = getSharedSessionIdFromAdapterState(
+            slot.runtime.getState(),
+          );
+          slot.controller.syncLocalClientEndpoint();
+          if (sharedSessionBeforeVisible) {
+            appendDaemonLog(
+              `codex_visible_thread_prepared: thread=${sharedSessionBeforeVisible} cwd=${this.cwd}`,
+            );
+          }
+        }
+      } catch (error) {
+        appendDaemonLog(
+          `codex_visible_thread_prepare_failed: cwd=${this.cwd} error=${truncatePreview(error instanceof Error ? error.message : String(error), 400)}`,
+        );
+      }
+    }
     const sessionStartMode = resolveDaemonSessionStartMode({
       adapter,
       explicitSessionStartMode: options.sessionStartMode,
@@ -1399,7 +1436,10 @@ class WechatDaemon {
       const launch = openVisibleClient({
         adapter,
         cwd: this.cwd,
-        sessionStartMode,
+        // A freshly prepared blank thread is semantically a new session, but
+        // the visible client must resume its id from the endpoint instead of
+        // creating a second thread of its own.
+        sessionStartMode: preparedVisibleThread ? "restore" : sessionStartMode,
         cliArgs: options.cliArgs,
         channelId: this.channelId,
         onError: (error) => {
@@ -2975,6 +3015,9 @@ export async function runDaemon(
       }
       shutdownInProgress = true;
       log(`Received ${signal}. Stopping daemon.`);
+      // Remove this process's endpoint synchronously so a new terminal can be
+      // started immediately even if asynchronous adapter cleanup takes time.
+      clearDaemonEndpoint();
       void daemon.shutdown().finally(() => process.exit(0));
     };
     process.on("SIGINT", () => handleSignal("SIGINT"));

@@ -12,7 +12,10 @@ import {
   CodexVisibleClientSupervisor,
   parseCliArgs,
 } from "../../src/companion/codex-remote-client.ts";
-import { requestCodexVisibleThreadSwitch } from "../../src/companion/codex-visible-client-link.ts";
+import {
+  requestCodexVisibleClientShutdown,
+  requestCodexVisibleThreadSwitch,
+} from "../../src/companion/codex-visible-client-link.ts";
 import {
   clearLocalCompanionEndpoint,
   readLocalCompanionEndpoint,
@@ -216,6 +219,53 @@ describe("codex remote client helpers", () => {
 
     const activeChild = children.get(10_001);
     activeChild?.emit("exit", 0, null);
+    expect(await runPromise).toBe(0);
+    expect(readLocalCompanionEndpoint(cwd)?.codexControlPort).toBeUndefined();
+  });
+
+  test("shuts down a visible Codex child through the authenticated control link", async () => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-codex-shutdown-"));
+    tempDirectories.push(cwd);
+    const endpoint = buildEndpoint({ cwd });
+    writeLocalCompanionEndpoint(endpoint);
+
+    const children = new Map<number, ChildProcess & EventEmitter>();
+    let nextPid = 20_000;
+    let stoppedPid: number | undefined;
+    const spawnProcess = ((
+      _file: string,
+      _args: readonly string[],
+    ): ChildProcess => {
+      const child = new EventEmitter() as ChildProcess & EventEmitter;
+      const pid = nextPid;
+      nextPid += 1;
+      Object.defineProperty(child, "pid", { value: pid });
+      children.set(pid, child);
+      return child;
+    }) as typeof spawn;
+    const stopProcessTree = (pid: number) => {
+      stoppedPid = pid;
+      queueMicrotask(() => children.get(pid)?.emit("exit", 0, null));
+    };
+    const supervisor = new CodexVisibleClientSupervisor(
+      endpoint,
+      {},
+      {
+        spawnProcess,
+        stopProcessTree,
+        switchSettleMs: 5,
+      },
+    );
+
+    const runPromise = supervisor.run();
+    await waitFor(() => Boolean(readLocalCompanionEndpoint(cwd)?.codexControlPort));
+
+    await requestCodexVisibleClientShutdown({
+      cwd,
+      instanceId: endpoint.instanceId,
+    });
+
+    expect(stoppedPid).toBe(20_000);
     expect(await runPromise).toBe(0);
     expect(readLocalCompanionEndpoint(cwd)?.codexControlPort).toBeUndefined();
   });

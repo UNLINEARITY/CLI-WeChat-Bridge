@@ -14,7 +14,8 @@ import {
 import { killProcessTreeSync } from "../bridge/bridge-process-reaper.ts";
 import {
   CODEX_VISIBLE_CONTROL_HOST,
-  parseCodexVisibleSwitchRequest,
+  parseCodexVisibleControlRequest,
+  sendCodexVisibleShutdownResponse,
   sendCodexVisibleSwitchResponse,
 } from "./codex-visible-client-link.ts";
 import {
@@ -395,9 +396,18 @@ export class CodexVisibleClientSupervisor {
           socket.destroy();
           return;
         }
-        const request = parseCodexVisibleSwitchRequest(parsed);
+        const request = parseCodexVisibleControlRequest(parsed);
         if (!request || request.token !== this.controlToken) {
           socket.destroy();
+          return;
+        }
+        if (request.type === "shutdown") {
+          sendCodexVisibleShutdownResponse(socket, {
+            type: "shutdown_result",
+            id: request.id,
+            ok: true,
+          });
+          void this.shutdownFromControl();
           return;
         }
         void this.switchThread(request.threadId).then(
@@ -436,6 +446,19 @@ export class CodexVisibleClientSupervisor {
     }
     this.controlServer = server;
     this.controlPort = address.port;
+  }
+
+  private async shutdownFromControl(): Promise<void> {
+    await this.switchChain.catch(() => undefined);
+    if (this.runSettled) {
+      return;
+    }
+
+    const child = this.child;
+    if (child) {
+      await this.stopChild(child);
+    }
+    this.finishRun(undefined, 0);
   }
 
   private async closeControlServer(): Promise<void> {

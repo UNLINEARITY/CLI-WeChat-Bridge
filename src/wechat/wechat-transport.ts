@@ -597,11 +597,20 @@ async function apiFetch(params: {
   body: string;
   token?: string;
   timeoutMs: number;
+  signal?: AbortSignal;
 }): Promise<string> {
   const base = params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`;
   const url = new URL(params.endpoint, base).toString();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  const abortFromCaller = () => controller.abort(params.signal?.reason);
+  if (params.signal) {
+    if (params.signal.aborted) {
+      abortFromCaller();
+    } else {
+      params.signal.addEventListener("abort", abortFromCaller, { once: true });
+    }
+  }
 
   try {
     const res = await fetch(url, {
@@ -624,6 +633,8 @@ async function apiFetch(params: {
   } catch (err) {
     clearTimeout(timer);
     throw err;
+  } finally {
+    params.signal?.removeEventListener("abort", abortFromCaller);
   }
 }
 
@@ -1230,6 +1241,8 @@ export class WeChatTransport {
   private readonly recentMessageOrder: string[] = [];
   private readonly contextTokenCache: Map<string, string>;
   private syncBuffer = "";
+  private stopped = false;
+  private readonly activePollControllers = new Set<AbortController>();
 
   constructor(logger: TransportLogger) {
     this.logger = logger;
@@ -1283,99 +1296,124 @@ export class WeChatTransport {
       : "Reset sync state.";
   }
 
+  stop(): void {
+    if (this.stopped) {
+      return;
+    }
+    this.stopped = true;
+    for (const controller of this.activePollControllers) {
+      controller.abort();
+    }
+    this.activePollControllers.clear();
+  }
+
   async pollMessages(
     options: PollMessagesOptions = {},
   ): Promise<PollMessagesResult> {
+    if (this.stopped) {
+      return { messages: [], ignoredBacklogCount: 0 };
+    }
+
     const timeoutMs = options.timeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
     const account = this.requireAccount();
+    const controller = new AbortController();
+    this.activePollControllers.add(controller);
 
-    let response = await this.getUpdates(account, timeoutMs);
-    if (isWechatSyncSessionTimeout(response) && this.syncBuffer) {
-      this.logger.log(
-        "WeChat sync session timed out. Clearing local sync cursor and retrying once.",
-      );
-      this.clearSyncBuffer();
-      response = await this.getUpdates(account, timeoutMs);
+    try {
+      let response = await this.getUpdates(account, timeoutMs, controller.signal);
+      if (isWechatSyncSessionTimeout(response) && this.syncBuffer && !this.stopped) {
+        this.logger.log(
+          "WeChat sync session timed out. Clearing local sync cursor and retrying once.",
+        );
+        this.clearSyncBuffer();
+        response = await this.getUpdates(account, timeoutMs, controller.signal);
+      }
+
+      if (this.stopped) {
+        return { messages: [], ignoredBacklogCount: 0 };
+      }
+
+      if (isWechatSyncSessionTimeout(response)) {
+        throw new Error('WeChat session timed out. Run "wechat-setup" to log in again.');
+      }
+
+      const isError =
+        (response.ret !== undefined && response.ret !== 0) ||
+        (response.errcode !== undefined && response.errcode !== 0);
+
+      if (isError) {
+        throw new Error(
+          `getUpdates failed: ret=${response.ret} errcode=${response.errcode} errmsg=${response.errmsg ?? ""}`,
+        );
+      }
+
+      if (response.get_updates_buf) {
+        this.syncBuffer = response.get_updates_buf;
+        this.saveSyncBuffer(this.syncBuffer);
+      }
+
+      const messages: InboundWechatMessage[] = [];
+      let ignoredBacklogCount = 0;
+
+      for (const rawMessage of response.msgs ?? []) {
+        if (rawMessage.message_type !== MSG_TYPE_USER) {
+          continue;
+        }
+
+        const extracted = extractInboundMessageContent(rawMessage);
+        if (!extracted.text && extracted.attachments.length === 0) {
+          continue;
+        }
+
+        const senderId = rawMessage.from_user_id ?? "unknown";
+        if (rawMessage.context_token) {
+          this.cacheContextToken(senderId, rawMessage.context_token);
+        }
+
+        // Filter pre-start backlog BEFORE claiming/remembering the message so a
+        // skipped message is not permanently locked away from other processes.
+        // A missing create_time_ms is treated as fresh rather than dropped.
+        const createdAtMs = rawMessage.create_time_ms ?? 0;
+        if (
+          typeof options.minCreatedAtMs === "number" &&
+          Number.isFinite(createdAtMs) &&
+          createdAtMs > 0 &&
+          createdAtMs < options.minCreatedAtMs
+        ) {
+          ignoredBacklogCount += 1;
+          continue;
+        }
+
+        const messageKey = buildMessageKey(rawMessage);
+        if (!this.rememberMessage(messageKey)) {
+          continue;
+        }
+        if (!tryClaimInboundMessage(buildScopedMessageClaimKey(account.accountId, messageKey))) {
+          continue;
+        }
+
+        const { attachments, failureLines } = await this.downloadInboundAttachments(
+          extracted.attachments,
+          rawMessage,
+        );
+        const text = appendInboundAttachmentFailureText(extracted.text, failureLines);
+
+        messages.push({
+          senderId,
+          sender: normalizeSender(senderId),
+          sessionId: rawMessage.session_id ?? "",
+          text,
+          attachments,
+          contextToken: rawMessage.context_token,
+          createdAt: formatTimestamp(rawMessage.create_time_ms),
+          createdAtMs,
+        });
+      }
+
+      return { messages, ignoredBacklogCount };
+    } finally {
+      this.activePollControllers.delete(controller);
     }
-
-    if (isWechatSyncSessionTimeout(response)) {
-      throw new Error('WeChat session timed out. Run "wechat-setup" to log in again.');
-    }
-
-    const isError =
-      (response.ret !== undefined && response.ret !== 0) ||
-      (response.errcode !== undefined && response.errcode !== 0);
-
-    if (isError) {
-      throw new Error(
-        `getUpdates failed: ret=${response.ret} errcode=${response.errcode} errmsg=${response.errmsg ?? ""}`,
-      );
-    }
-
-    if (response.get_updates_buf) {
-      this.syncBuffer = response.get_updates_buf;
-      this.saveSyncBuffer(this.syncBuffer);
-    }
-
-    const messages: InboundWechatMessage[] = [];
-    let ignoredBacklogCount = 0;
-
-    for (const rawMessage of response.msgs ?? []) {
-      if (rawMessage.message_type !== MSG_TYPE_USER) {
-        continue;
-      }
-
-      const extracted = extractInboundMessageContent(rawMessage);
-      if (!extracted.text && extracted.attachments.length === 0) {
-        continue;
-      }
-
-      const senderId = rawMessage.from_user_id ?? "unknown";
-      if (rawMessage.context_token) {
-        this.cacheContextToken(senderId, rawMessage.context_token);
-      }
-
-      // Filter pre-start backlog BEFORE claiming/remembering the message so a
-      // skipped message is not permanently locked away from other processes.
-      // A missing create_time_ms is treated as fresh rather than dropped.
-      const createdAtMs = rawMessage.create_time_ms ?? 0;
-      if (
-        typeof options.minCreatedAtMs === "number" &&
-        Number.isFinite(createdAtMs) &&
-        createdAtMs > 0 &&
-        createdAtMs < options.minCreatedAtMs
-      ) {
-        ignoredBacklogCount += 1;
-        continue;
-      }
-
-      const messageKey = buildMessageKey(rawMessage);
-      if (!this.rememberMessage(messageKey)) {
-        continue;
-      }
-      if (!tryClaimInboundMessage(buildScopedMessageClaimKey(account.accountId, messageKey))) {
-        continue;
-      }
-
-      const { attachments, failureLines } = await this.downloadInboundAttachments(
-        extracted.attachments,
-        rawMessage,
-      );
-      const text = appendInboundAttachmentFailureText(extracted.text, failureLines);
-
-      messages.push({
-        senderId,
-        sender: normalizeSender(senderId),
-        sessionId: rawMessage.session_id ?? "",
-        text,
-        attachments,
-        contextToken: rawMessage.context_token,
-        createdAt: formatTimestamp(rawMessage.create_time_ms),
-        createdAtMs,
-      });
-    }
-
-    return { messages, ignoredBacklogCount };
   }
 
   private async downloadInboundAttachments(
@@ -1747,6 +1785,7 @@ export class WeChatTransport {
   private async getUpdates(
     account: AccountData,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<GetUpdatesResp> {
     try {
       const raw = await apiFetch({
@@ -1758,6 +1797,7 @@ export class WeChatTransport {
         }),
         token: account.token,
         timeoutMs,
+        signal,
       });
 
       return JSON.parse(raw) as GetUpdatesResp;

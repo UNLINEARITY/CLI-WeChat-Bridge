@@ -44,6 +44,10 @@ export interface LocalClientEndpointProvider {
   getLocalClientEndpoint(): LocalClientEndpoint | null;
 }
 
+export interface VisibleClientSessionPreparer {
+  prepareVisibleClientSession(): Promise<boolean>;
+}
+
 export interface RuntimeHost extends BridgeAdapter {
   readonly runtimeKind: RuntimeKind;
 }
@@ -52,4 +56,10 @@ export function hasLocalClientEndpointProvider(
   runtime: BridgeAdapter,
 ): runtime is BridgeAdapter & LocalClientEndpointProvider {
   return typeof (runtime as Partial<LocalClientEndpointProvider>).getLocalClientEndpoint === "function";
+}
+
+export function hasVisibleClientSessionPreparer(
+  runtime: BridgeAdapter,
+): runtime is BridgeAdapter & VisibleClientSessionPreparer {
+  return typeof (runtime as Partial<VisibleClientSessionPreparer>).prepareVisibleClientSession === "function";
 }
