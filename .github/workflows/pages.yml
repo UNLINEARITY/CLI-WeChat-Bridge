@@ -8,6 +8,11 @@ on:
       - ".github/workflows/pages.yml"
       - "docs/images/logo.png"
       - "docs/images/animation.webp"
+      - "docs/images/image-8.png"
+      - "docs/images/image-10.png"
+      - "docs/images/image-12.png"
+      - "docs/images/image-13.png"
+      - "docs/images/wechat-tip.png"
   workflow_dispatch:
 
 permissions:

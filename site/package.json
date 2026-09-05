@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "node scripts/sync-assets.mjs && astro dev",
-    "build": "node scripts/sync-assets.mjs && astro build",
+    "build": "node scripts/sync-assets.mjs && node scripts/fetch-metrics.mjs && astro build",
     "preview": "astro preview"
   },
   "devDependencies": {
