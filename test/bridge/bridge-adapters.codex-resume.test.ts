@@ -93,6 +93,43 @@ describe("Codex app-server resume discovery", () => {
 });
 
 describe("Codex visible thread resume", () => {
+  test("lists and selects a model through app-server settings", async () => {
+    const cwd = path.resolve("tmp/codex-model-selection");
+    const adapter = buildAdapter(cwd) as any;
+    adapter.sharedThreadId = "thread_model";
+    adapter.state.sharedThreadId = "thread_model";
+    adapter.sendRpcRequest = async (method: string) => {
+      if (method === "model/list") return { data: [{ id: "gpt-5.2", displayName: "GPT-5.2" }] };
+      if (method === "thread/read") return { thread: { model: "gpt-5.1", reasoningEffort: null } };
+      if (method === "thread/settings/update") return {};
+      throw new Error(`unexpected method ${method}`);
+    };
+
+    const models = await adapter.listModels();
+    expect(models).toEqual([{ id: "gpt-5.2", displayName: "GPT-5.2", isCurrent: false, supportedReasoningEfforts: undefined }]);
+    await expect(adapter.selectModel("gpt-5.2")).resolves.toMatchObject({ id: "gpt-5.2" });
+  });
+
+  test("sets and restores Codex plan mode through thread settings", async () => {
+    const cwd = path.resolve("tmp/codex-plan-mode");
+    const adapter = buildAdapter(cwd) as any;
+    adapter.sharedThreadId = "thread_plan";
+    adapter.state.sharedThreadId = "thread_plan";
+    const updates: Record<string, unknown>[] = [];
+    adapter.sendRpcRequest = async (method: string, params: Record<string, unknown>) => {
+      if (method === "thread/read") return { thread: { model: "gpt-5.2", reasoningEffort: "medium" } };
+      if (method === "collaborationMode/list") return { data: [{ name: "Plan", mode: "plan", model: "gpt-5.2" }] };
+      if (method === "thread/settings/update") { updates.push(params); return {}; }
+      throw new Error(`unexpected method ${method}`);
+    };
+
+    await expect(adapter.setPlanMode(true)).resolves.toBe(true);
+    await expect(adapter.setPlanMode(false)).resolves.toBe(false);
+    expect(updates).toHaveLength(2);
+    expect(updates[0]?.collaborationMode).toMatchObject({ mode: "plan" });
+    expect(updates[1]?.collaborationMode).toMatchObject({ mode: "default" });
+  });
+
   test("commits shared state only after the visible supervisor opens the target", async () => {
     const cwd = path.resolve("tmp/codex-visible-resume");
     const adapter = buildAdapter(cwd) as any;

@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
+  CodexModelOption,
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
@@ -184,6 +185,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private appServerAuthToken: string | null = null;
   private appServerAuthTokenFilePath: string | null = null;
   private rpcSocket: WebSocket | null = null;
+  private lastRpcCloseDetail = "";
   private rpcShuttingDown = false;
   private rpcReconnectPromise: Promise<boolean> | null = null;
   private cleanPanelExitInProgress = false;
@@ -192,6 +194,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private subscribedThreadIds = new Set<string>();
   private pendingThreadSubscriptions = new Map<string, Promise<boolean>>();
   private sharedThreadId: string | null = null;
+  private previousCollaborationMode: Record<string, unknown> | null = null;
   private announcedThreadId: string | null = null;
   private localThreadFollowBlockedUntilMs = 0;
   private pendingThreadStatusChecks = new Map<string, Promise<void>>();
@@ -384,6 +387,73 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       );
     }
     await this.resumeVisibleSharedThread(threadId);
+  }
+
+  override async listModels(): Promise<CodexModelOption[]> {
+    if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
+      throw new Error("Codex model selection requires an active app-server thread.");
+    }
+    const response = await this.sendRpcRequest("model/list", { includeHidden: false });
+    const data = isRecord(response) && Array.isArray(response.data) ? response.data : [];
+    const current = await this.readCodexThreadSettings();
+    const models = data.flatMap((item) => {
+      if (!isRecord(item)) return [];
+      const id = typeof item.id === "string" ? item.id : typeof item.model === "string" ? item.model : "";
+      if (!id) return [];
+      const displayName = typeof item.displayName === "string" ? item.displayName : id;
+      const efforts = Array.isArray(item.supportedReasoningEfforts)
+        ? item.supportedReasoningEfforts.filter((value): value is string => typeof value === "string")
+        : undefined;
+      return [{ id, displayName, isCurrent: id === current.model, supportedReasoningEfforts: efforts }];
+    });
+    return models;
+  }
+
+  override async selectModel(modelId: string): Promise<CodexModelOption> {
+    const models = await this.listModels();
+    const selected = models.find((model) => model.id === modelId);
+    if (!selected) throw new Error(`Codex model ${modelId} is not available.`);
+    await this.sendRpcRequest("thread/settings/update", { threadId: this.sharedThreadId, model: selected.id });
+    return selected;
+  }
+
+  override async setPlanMode(enabled: boolean): Promise<boolean> {
+    if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
+      throw new Error("Codex plan mode requires an active app-server thread.");
+    }
+    const settings = await this.readCodexThreadSettings();
+    if (enabled) {
+      const response = await this.sendRpcRequest("collaborationMode/list", {});
+      const modes = isRecord(response) && Array.isArray(response.data) ? response.data : [];
+      const plan = modes.find((item) => isRecord(item) && (item.mode === "plan" || item.name?.toString().toLowerCase() === "plan"));
+      if (!isRecord(plan)) throw new Error("Codex plan mode is not available in this app-server.");
+      this.previousCollaborationMode = isRecord(settings.collaborationMode) ? settings.collaborationMode : null;
+      const mode = typeof plan.mode === "string" ? plan.mode : "plan";
+      const model = typeof plan.model === "string" ? plan.model : settings.model;
+      const effort = plan.reasoning_effort ?? plan.reasoningEffort ?? null;
+      await this.sendRpcRequest("thread/settings/update", {
+        threadId: this.sharedThreadId,
+        collaborationMode: { mode, settings: { model, reasoning_effort: effort, developer_instructions: null } },
+      });
+      return true;
+    }
+    const previous = this.previousCollaborationMode ?? {
+      mode: "default",
+      settings: { model: settings.model, reasoning_effort: settings.effort ?? null, developer_instructions: null },
+    };
+    await this.sendRpcRequest("thread/settings/update", {
+      threadId: this.sharedThreadId,
+      collaborationMode: previous,
+    });
+    this.previousCollaborationMode = null;
+    return false;
+  }
+
+  private async readCodexThreadSettings(): Promise<{ model: string; effort?: unknown; collaborationMode?: unknown }> {
+    const response = await this.sendRpcRequest("thread/read", { threadId: this.sharedThreadId, includeTurns: false });
+    const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
+    if (!thread || typeof thread.model !== "string") throw new Error("Codex did not return the current thread model.");
+    return { model: thread.model, effort: thread.reasoningEffort, collaborationMode: thread.collaborationMode };
   }
 
   override async interrupt(): Promise<boolean> {
@@ -1522,8 +1592,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     socket.addEventListener("message", (event) => {
       this.handleRpcMessageData(event.data);
     });
-    socket.addEventListener("close", () => {
-      this.handleRpcSocketClosed();
+    socket.addEventListener("close", (event) => {
+      this.handleRpcSocketClosed(event.code, event.reason);
     });
   }
 
@@ -1568,13 +1638,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.rpcShuttingDown = false;
   }
 
-  private handleRpcSocketClosed(): void {
+  private handleRpcSocketClosed(code?: number, reason?: string): void {
     const expectedShutdown = shouldSuppressCodexTransportFatalError({
       transportShuttingDown: this.rpcShuttingDown,
       shuttingDown: this.shuttingDown,
       cleanPanelExitInProgress: this.cleanPanelExitInProgress,
     });
     this.rpcSocket = null;
+    this.lastRpcCloseDetail = `close_code=${code ?? "unknown"}${reason ? ` reason=${truncatePreview(reason, 240)}` : ""}`;
     this.subscribedThreadIds.clear();
     this.rejectPendingRpcRequests("Codex websocket connection closed.");
     this.rpcShuttingDown = false;
@@ -1615,7 +1686,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         const details = this.describeAppServerLog();
         this.emit({
           type: "fatal_error",
-          message: `codex app-server websocket closed unexpectedly.${details}`,
+          message: `codex app-server websocket closed unexpectedly (${this.lastRpcCloseDetail || "no close details"}).${details}`,
           timestamp: nowIso(),
         });
         this.terminateCodexClient();
@@ -1659,7 +1730,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       }
       this.emit({
         type: "fatal_error",
-        message: `codex app-server websocket closed unexpectedly and could not reconnect: ${lastError}.${details}`,
+        message: `codex app-server websocket closed unexpectedly and could not reconnect (${this.lastRpcCloseDetail || "no close details"}): ${lastError}.${details}`,
         timestamp: nowIso(),
       });
       this.terminateCodexClient();

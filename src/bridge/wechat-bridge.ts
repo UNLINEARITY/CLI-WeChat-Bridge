@@ -37,6 +37,7 @@ import {
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
+import { formatCodexModelList, selectCodexModel, type CodexModelSnapshot } from "./codex-control.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
@@ -128,6 +129,8 @@ type DeferredInboundMessage = {
   message: InboundWechatMessage;
   channelMessage?: ChannelInboundMessage;
 };
+
+const codexModelSnapshots = new WeakMap<BridgeAdapter, CodexModelSnapshot>();
 
 type WechatSendResult =
   | { status: "sent" }
@@ -1642,6 +1645,43 @@ async function handleInboundMessage(params: {
   });
 
   switch (systemCommand?.type) {
+    case "model":
+      if (options.adapter !== "codex" || !adapter.listModels || !adapter.selectModel) {
+        await queueWechatMessage(message.senderId, "`/model` is currently available only for Codex.");
+        return null;
+      }
+      try {
+        if (!systemCommand.target) {
+          const models = await adapter.listModels();
+          codexModelSnapshots.set(adapter, { createdAtMs: Date.now(), threadId: adapter.getState().sharedThreadId, models });
+          await queueWechatMessage(message.senderId, formatCodexModelList(models));
+        } else {
+          const snapshot = codexModelSnapshots.get(adapter) ?? null;
+          if (snapshot?.threadId !== adapter.getState().sharedThreadId) {
+            throw new Error("The Codex model list belongs to another thread. Send /model again to refresh it.");
+          }
+          const selected = selectCodexModel(snapshot, systemCommand.target);
+          const applied = await adapter.selectModel(selected.id);
+          await queueWechatMessage(message.senderId, `Codex model switched to ${applied.displayName}.`);
+        }
+      } catch (error) {
+        await queueWechatMessage(message.senderId, error instanceof Error ? error.message : String(error));
+      }
+      return null;
+    case "plan":
+      if (options.adapter !== "codex" || !adapter.setPlanMode) {
+        await queueWechatMessage(message.senderId, "`/plan` is currently available only for Codex.");
+        return null;
+      }
+      try {
+        const enabled = await adapter.setPlanMode(systemCommand.enabled);
+        await queueWechatMessage(message.senderId, enabled
+          ? "Codex plan mode enabled. Send /plan off to restore the previous mode."
+          : "Codex plan mode disabled. The previous mode has been restored.");
+      } catch (error) {
+        await queueWechatMessage(message.senderId, error instanceof Error ? error.message : String(error));
+      }
+      return null;
     case "status":
       await queueWechatMessage(
         message.senderId,

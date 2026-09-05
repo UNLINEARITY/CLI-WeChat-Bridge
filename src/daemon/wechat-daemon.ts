@@ -112,6 +112,7 @@ import {
 import { hasVisibleClientSessionPreparer } from "../runtime/runtime-types.ts";
 import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
+import { formatCodexModelList, selectCodexModel, type CodexModelSnapshot } from "../bridge/codex-control.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
@@ -896,6 +897,7 @@ class WechatDaemon {
   private shutdownPromise: Promise<void> | null = null;
   private ipcServer: net.Server | null = null;
   private endpointToken = "";
+  private codexModelSnapshot: CodexModelSnapshot | null = null;
 
   constructor(params: {
     cwd: string;
@@ -2011,6 +2013,44 @@ class WechatDaemon {
     command: NonNullable<ReturnType<typeof parseWechatControlCommand>>,
   ): Promise<void> {
     switch (command.type) {
+      case "model": {
+        if (activeSlot.adapter !== "codex" || !activeSlot.runtime.listModels || !activeSlot.runtime.selectModel) {
+          await this.queueWechatMessage(message.senderId, "`/model` is currently available only for Codex.");
+          return;
+        }
+        try {
+          if (!command.target) {
+            const models = await activeSlot.runtime.listModels();
+            this.codexModelSnapshot = { createdAtMs: Date.now(), threadId: activeSlot.runtime.getState().sharedThreadId, models };
+            await this.queueWechatMessage(message.senderId, formatCodexModelList(models));
+            return;
+          }
+          if (this.codexModelSnapshot?.threadId !== activeSlot.runtime.getState().sharedThreadId) {
+            throw new Error("The Codex model list belongs to another thread. Send /model again to refresh it.");
+          }
+          const selected = selectCodexModel(this.codexModelSnapshot, command.target);
+          const applied = await activeSlot.runtime.selectModel(selected.id);
+          await this.queueWechatMessage(message.senderId, `Codex model switched to ${applied.displayName}.`);
+        } catch (error) {
+          await this.queueWechatMessage(message.senderId, error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
+      case "plan": {
+        if (activeSlot.adapter !== "codex" || !activeSlot.runtime.setPlanMode) {
+          await this.queueWechatMessage(message.senderId, "`/plan` is currently available only for Codex.");
+          return;
+        }
+        try {
+          const enabled = await activeSlot.runtime.setPlanMode(command.enabled);
+          await this.queueWechatMessage(message.senderId, enabled
+            ? "Codex plan mode enabled. Send /plan off to restore the previous mode."
+            : "Codex plan mode disabled. The previous mode has been restored.");
+        } catch (error) {
+          await this.queueWechatMessage(message.senderId, error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
       case "status":
         await this.queueWechatMessage(
           message.senderId,

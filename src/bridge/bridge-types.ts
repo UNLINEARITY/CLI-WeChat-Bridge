@@ -68,6 +68,13 @@ export type PendingUserInputRequest = UserInputRequest & {
   createdAt: string;
 };
 
+export type CodexModelOption = {
+  id: string;
+  displayName: string;
+  isCurrent?: boolean;
+  supportedReasoningEfforts?: string[];
+};
+
 export type BridgeResumeSessionCandidate = {
   sessionId: string;
   title: string;
@@ -220,6 +227,9 @@ export interface BridgeAdapter {
   listResumeSessions(limit?: number): Promise<BridgeResumeSessionCandidate[]>;
   resumeSession(sessionId: string): Promise<void>;
   createSession?(): Promise<void>;
+  listModels?(): Promise<CodexModelOption[]>;
+  selectModel?(modelId: string): Promise<CodexModelOption>;
+  setPlanMode?(enabled: boolean): Promise<boolean>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny"): Promise<boolean>;

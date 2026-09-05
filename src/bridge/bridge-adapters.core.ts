@@ -21,6 +21,7 @@ import type {
   BridgeAdapter,
   BridgeAdapterKind,
   BridgeAdapterState,
+  CodexModelOption,
   BridgeEvent,
   BridgeLifecycleMode,
   BridgeResumeSessionCandidate,
@@ -796,6 +797,18 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
 
   setEventSink(sink: EventSink): void {
     this.eventSink = sink;
+  }
+
+  async listModels(): Promise<CodexModelOption[]> {
+    throw new Error(`/${this.options.kind} model selection is not available.`);
+  }
+
+  async selectModel(_modelId: string): Promise<CodexModelOption> {
+    throw new Error(`/${this.options.kind} model selection is not available.`);
+  }
+
+  async setPlanMode(_enabled: boolean): Promise<boolean> {
+    throw new Error(`/${this.options.kind} plan mode is not available.`);
   }
 
   async start(): Promise<void> {

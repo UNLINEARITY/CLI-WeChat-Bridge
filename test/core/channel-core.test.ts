@@ -73,6 +73,13 @@ describe("channel-neutral bridge core", () => {
     expect(parseBridgeControlCommand("ordinary text")).toBeNull();
   });
 
+  test("parses Codex model and plan commands", () => {
+    expect(parseBridgeControlCommand("/model")).toEqual({ type: "model", target: undefined });
+    expect(parseBridgeControlCommand("/model 2")).toEqual({ type: "model", target: "2" });
+    expect(parseBridgeControlCommand("/plan")).toEqual({ type: "plan", enabled: true });
+    expect(parseBridgeControlCommand("/plan off")).toEqual({ type: "plan", enabled: false });
+  });
+
   test("orders command, pending-state, defer, busy, and dispatch gates", async () => {
     const calls: string[] = [];
     const result = await routeBridgeMessage({
