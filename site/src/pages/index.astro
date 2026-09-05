@@ -11,16 +11,16 @@ const install = "npm install -g cli-wechat-bridge@latest";
 
 // 文案集中管理:模板只取结构,当前渲染 zh。未来启用双语时补一份 en 对象并在此切换。
 const zh = {
-  title: "CLI WeChat Bridge｜把本地 CLI 接到微信上",
-  description: "通过微信或企业微信，把消息送进本地运行的 Codex、Claude Code、OpenCode 和 Pi。",
-  ogAlt: "CLI WeChat Bridge：微信消息进入本地终端执行",
+  title: "CLI WeChat Bridge｜微信 × 本地 CLI 原生双向",
+  description: "微信发指令，本地原生执行，结果、状态与审批实时回流。Codex、Claude Code、OpenCode 和 Pi 保持原生终端体验，微信与企业微信是双向通道。",
+  ogAlt: "CLI WeChat Bridge：微信与本地 CLI 原生双向，输入回流两端同步",
   nav: { how: "怎么工作", adapters: "支持的 CLI", start: "开始使用", github: "GitHub ↗" },
   install: { node: "Node ≥ 22.13.0", copy: "复制", npm: "npm ↗" },
   hero: {
-    kicker: "微信 / 企业微信 × 本地 CLI",
-    titleA: "把本地 CLI",
-    titleB: "接到微信上。",
-    lede: "在手机里发消息，在自己的电脑上执行。Codex、Claude Code、OpenCode 和 Pi 不需要换地方。",
+    kicker: "原生双向 · 微信 / 企业微信 × 本地 CLI",
+    titleA: "不只是连接，",
+    titleB: "而是原生双向。",
+    lede: "远程输入、结果回流、状态同步——Codex、Claude Code、OpenCode 和 Pi 保持原生终端体验，微信只是你的双向遥控器。",
     quickstart: [
       { label: "扫码登录微信通道", cmd: "wechat-setup" },
       { label: "单桥接 · 直接接一个 CLI（codex / opencode / pi 同理）", cmd: "wechat-claude" },
@@ -61,7 +61,7 @@ const zh = {
     kicker: "怎么工作",
     titleA: "手机负责发消息，",
     titleB: "电脑负责干活。",
-    lede: "daemon 绑定启动时的工作目录，保持通道在线；direct 命令则直接打开一个 CLI。",
+    lede: "daemon 绑定工作目录并保持通道在线，输出、状态与审批实时回流微信；direct 命令则直接打开一个原生 CLI。",
     steps: [
       { title: "登录通道", text: "微信运行 `wechat-setup` 扫码登录；企业微信运行 `wecom-setup` 完成配对。" },
       { title: "启动本地 CLI", text: "运行 `wechat-daemon`，它会在当前工作区管理 Codex、Claude Code、OpenCode 和 Pi。" },
