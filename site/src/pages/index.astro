@@ -1,35 +1,304 @@
 ---
 import "../styles/global.css";
+import pkg from "../../../package.json";
 const base = import.meta.env.BASE_URL.endsWith("/") ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
+const siteUrl = "https://unlinearity.github.io/CLI-WeChat-Bridge/";
 const repoUrl = "https://github.com/UNLINEARITY/CLI-WeChat-Bridge";
 const npmUrl = "https://www.npmjs.com/package/cli-wechat-bridge";
+const architectureUrl = `${repoUrl}/blob/main/docs/architecture.md`;
+const quickStartUrl = `${repoUrl}#二快速开始`;
 const install = "npm install -g cli-wechat-bridge@latest";
-const adapters = [
-  { name: "Codex", command: "wechat-codex", protocol: "WebSocket RPC", icon: "codex", text: "在本地继续使用 Codex 的线程和工作区。" },
-  { name: "Claude Code", command: "wechat-claude", protocol: "PTY + Hook", icon: "anthropic", text: "保留真实终端交互、会话和审批流程。" },
-  { name: "OpenCode", command: "wechat-opencode", protocol: "HTTP + SSE", icon: "opencode", text: "通过本地服务继续处理会话和问题。" },
-  { name: "Pi", command: "wechat-pi", protocol: "TUI + extension", icon: "pi", text: "原生 TUI 留在你的终端里运行。" },
-];
+
+// 文案集中管理:模板只取结构,当前渲染 zh。未来启用双语时补一份 en 对象并在此切换。
+const zh = {
+  title: "CLI WeChat Bridge｜把本地 CLI 接到微信上",
+  description: "通过微信或企业微信，把消息送进本地运行的 Codex、Claude Code、OpenCode 和 Pi。",
+  ogAlt: "CLI WeChat Bridge：微信消息进入本地终端执行",
+  nav: { how: "怎么工作", adapters: "支持的 CLI", start: "开始使用", github: "GitHub ↗" },
+  install: { node: "Node ≥ 22.13.0", copy: "复制", npm: "npm ↗" },
+  hero: {
+    kicker: "微信 / 企业微信 × 本地 CLI",
+    titleA: "把本地 CLI",
+    titleB: "接到微信上。",
+    lede: "在手机里发消息，在自己的电脑上执行。Codex、Claude Code、OpenCode 和 Pi 不需要换地方。",
+    quickstart: [
+      { label: "扫码登录微信通道", cmd: "wechat-setup" },
+      { label: "单桥接 · 直接接一个 CLI（codex / opencode / pi 同理）", cmd: "wechat-claude" },
+      { label: "多 CLI 工作区 · daemon 模式", cmd: "wechat-daemon" },
+    ],
+    note: "企业微信通道把 `wechat-` 前缀换成 `wecom-`；npm 阻止安装脚本时见 README 的 allow-scripts 说明。",
+    primary: "看它怎么工作 ↓",
+    quiet: "看源码 ↗",
+  },
+  art: {
+    label: "REAL MESSAGE / LOCAL EXECUTION",
+    phone: {
+      app: "微信",
+      time: "9:41",
+      date: "今天 9:41",
+      title: "文件传输助手",
+      bubbles: [
+        { kind: "bot", text: "Daemon 已就绪 · 发送 /claude /codex /pi" },
+        { kind: "me", text: "检查当前工作区状态" },
+        { kind: "me", text: "/codex 修复测试失败" },
+        { kind: "done", text: "✓ 已完成", code: ["✓ test/bridge.spec.ts", "✓ src/daemon.ts"] },
+      ],
+      input: "输入消息…",
+    },
+    terminal: {
+      title: "CLI-WeChat-Bridge",
+      lines: [
+        { kind: "cmd", text: "wechat-daemon" },
+        { kind: "dim", label: "workspace", text: "~/projects/cli-wechat-bridge" },
+        { kind: "ok", label: "channel", text: "✓ wechat ready" },
+        { kind: "ok", label: "adapter", text: "✓ codex · claude · opencode · pi" },
+      ],
+      ok: "waiting for messages...",
+    },
+  },
+  metrics: { stars: "GitHub Stars", npmVersion: "npm 最新版本", downloads: "npm 总下载量", node: "最低 Node.js" },
+  how: {
+    kicker: "怎么工作",
+    titleA: "手机负责发消息，",
+    titleB: "电脑负责干活。",
+    lede: "daemon 绑定启动时的工作目录，保持通道在线；direct 命令则直接打开一个 CLI。",
+    steps: [
+      { title: "登录通道", text: "微信运行 `wechat-setup` 扫码登录；企业微信运行 `wecom-setup` 完成配对。" },
+      { title: "启动本地 CLI", text: "运行 `wechat-daemon`，它会在当前工作区管理 Codex、Claude Code、OpenCode 和 Pi。" },
+      { title: "从微信继续操作", text: "普通消息和 `/codex`、`/claude`、`/status` 等指令都会回到同一个工作区。" },
+    ],
+  },
+  adapters: {
+    kicker: "支持的 CLI",
+    titleA: "你熟悉的工具，",
+    titleB: "继续在本地运行。",
+    items: [
+      { name: "Codex", wechat: "wechat-codex", wecom: "wecom-codex", protocol: "WebSocket RPC", icon: "codex", text: "在本地继续使用 Codex 的线程和工作区。" },
+      { name: "Claude Code", wechat: "wechat-claude", wecom: "wecom-claude", protocol: "PTY + Hook", icon: "anthropic", text: "保留真实终端交互、会话和审批流程。" },
+      { name: "OpenCode", wechat: "wechat-opencode", wecom: "wecom-opencode", protocol: "HTTP + SSE", icon: "opencode", text: "通过本地服务继续处理会话和问题。" },
+      { name: "Pi", wechat: "wechat-pi", wecom: "wecom-pi", protocol: "TUI + extension", icon: "pi", text: "原生 TUI 留在你的终端里运行。" },
+    ],
+    note: "微信与企业微信命令一一对应：把 `wechat-` 前缀换成 `wecom-` 即可切换通道。",
+  },
+  proof: {
+    kicker: "真实运行记录",
+    titleA: "不是概念图，",
+    titleB: "这是实际工作流。",
+    lede: "下面是仓库自带的真实演示与截图：微信消息、本地终端、daemon 和结果回流。",
+    animation: { caption: "完整流程演示：微信发消息，本地终端执行，结果回到聊天", alt: "演示动图：从微信发送消息到本地 CLI 执行并返回结果" },
+    multiCli: { caption: "多 CLI 并行：同一问题广播到 /codex /claude /opencode，各自作答", alt: "本地终端与微信对照：同一问题广播到三个 CLI 并行回答" },
+    wechatBindings: { caption: "微信端：/bindings 查看 emoji 与指令绑定", alt: "微信聊天窗口中的 /bindings 指令输出" },
+    wechatCommands: { caption: "微信端：daemon 就绪后用 /claude、/codex、/pi 切换会话", alt: "微信聊天窗口中的多个 CLI 会话切换" },
+    terminals: { caption: "本地端：四个 CLI 在终端中同时在线", alt: "四个终端窗口并排运行 Codex、OpenCode、Claude Code 和 Pi" },
+  },
+  closing: {
+    kicker: "本地工作区仍然是你的",
+    titleA: "从微信发一句话，",
+    titleB: "电脑继续把事情做完。",
+    primary: "安装 cli-wechat-bridge ↗",
+    quiet: "打开 GitHub ↗",
+  },
+  footer: { license: "AGPL-3.0 · UNLINEARITY", github: "GitHub", npm: "npm" },
+};
+const t = zh;
+// 文案中的 `命令` 片段渲染为行内 code。
+const fmt = (text) => text.replace(/`([^`]+)`/g, "<code>$1</code>");
 ---
+
 <!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 <script is:inline>document.documentElement.classList.add("js");</script>
-<meta name="theme-color" content="#f4f5ef" /><meta name="description" content="通过微信或企业微信，把消息送进本地运行的 Codex、Claude Code、OpenCode 和 Pi。" />
-<link rel="icon" href={`${base}assets/real/logo.png`} /><link rel="canonical" href="https://unlinearity.github.io/CLI-WeChat-Bridge/" />
-<title>CLI WeChat Bridge｜把本地 CLI 接到微信上</title>
+<meta name="theme-color" content="#f4f5ef" /><meta name="description" content={t.description} />
+<link rel="canonical" href={siteUrl} />
+<link rel="icon" href={`${base}assets/icons/favicon.svg`} type="image/svg+xml" sizes="any" />
+<link rel="icon" href={`${base}assets/generated/favicon-32.png`} type="image/png" sizes="32x32" />
+<link rel="apple-touch-icon" href={`${base}assets/generated/apple-touch-icon.png`} />
+<title>{t.title}</title>
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="CLI WeChat Bridge" />
+<meta property="og:title" content={t.title} />
+<meta property="og:description" content={t.description} />
+<meta property="og:url" content={siteUrl} />
+<meta property="og:image" content={`${siteUrl}assets/generated/og-image.jpg`} />
+<meta property="og:image:width" content="1200" /><meta property="og:image:height" content="630" />
+<meta property="og:image:alt" content={t.ogAlt} />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content={t.title} />
+<meta name="twitter:description" content={t.description} />
+<meta name="twitter:image" content={`${siteUrl}assets/generated/og-image.jpg`} />
 </head>
 <body>
-<header class="site-nav"><a class="brand" href={`${base}#top`}><img src={`${base}assets/real/logo.png`} alt="CLI WeChat Bridge" /></a><nav><a href={`${base}#how`}>怎么工作</a><a href={`${base}#adapters`}>支持的 CLI</a><a href={`${base}#start`}>开始使用</a></nav><div class="nav-actions"><button data-lang-toggle type="button">EN</button><a href={repoUrl} target="_blank" rel="noreferrer">GitHub ↗</a><button class="menu-toggle" data-menu-toggle type="button" aria-label="打开菜单" aria-expanded="false"><span></span><span></span></button></div></header>
+<header class="site-nav">
+  <a class="brand" href={`${base}#top`}><img src={`${base}assets/real/logo.png`} alt="CLI WeChat Bridge" /></a>
+  <nav>
+    <a href={`${base}#how`}>{t.nav.how}</a>
+    <a href={`${base}#adapters`}>{t.nav.adapters}</a>
+    <a href={`${base}#quickstart`}>{t.nav.start}</a>
+  </nav>
+  <div class="nav-actions">
+    <a href={repoUrl} target="_blank" rel="noreferrer"><img class="nav-icon" src={`${base}assets/icons/github.svg`} alt="" />{t.nav.github}</a>
+    <button class="menu-toggle" data-menu-toggle type="button" aria-label="打开菜单" aria-expanded="false"><span></span><span></span></button>
+  </div>
+</header>
 <main id="top">
-<section class="install-bar"><div><strong>先安装，再把消息发进本地工作区</strong><span>Node.js ≥ 22.13.0</span></div><code>{install}</code><div class="install-actions"><button data-copy={install}><span data-copy-label>复制</span></button><a href={npmUrl} target="_blank" rel="noreferrer">打开 npm ↗</a></div></section>
-<section class="hero section"><div class="hero-copy reveal"><p class="kicker">微信 / 企业微信 × 本地 CLI</p><h1>把本地 CLI<br /><em>接到微信上。</em></h1><p class="hero-lede">在手机里发消息，在自己的电脑上执行。Codex、Claude Code、OpenCode 和 Pi 不需要换地方。</p><div class="hero-actions"><a class="button primary" href={`${base}#start`}>查看 3 条启动命令 ↓</a><a class="button quiet" href={repoUrl} target="_blank" rel="noreferrer">看源码 ↗</a></div><div class="hero-stats"><span><b>2</b> 个远程通道</span><span><b>4</b> 个本地 CLI</span><span><b>1</b> 个启动工作区</span></div></div><div class="hero-art reveal reveal-delay"><div class="art-halo"></div><div class="art-label">REAL MESSAGE / LOCAL EXECUTION</div><div class="art-phone"><div class="wechat-head"><span>微信</span><b>9:41</b></div><div class="wechat-title">文件传输助手</div><div class="wechat-bubble">检查当前工作区状态</div><div class="wechat-bubble me">收到，正在本地执行</div><div class="wechat-bubble done">✓ 已连接到 Codex</div><div class="wechat-input">输入消息… <b>↑</b></div></div><div class="art-terminal"><div class="terminal-head"><i></i><i></i><i></i><span>CLI-WeChat-Bridge</span></div><p><b>$</b> wechat-daemon --adapter codex</p><p class="dim">workspace / current directory</p><p class="ok">✓ waiting for a WeChat message<span></span></p></div><div class="art-line"></div><button class="demo-trigger" type="button" data-demo-trigger>&#36816;&#34892;&#19968;&#27425;&#28436;&#31034; &rarr;</button></div></section>
-<section class="metrics section-pad reveal"><div><strong data-metric="stars">&mdash;</strong><span>GitHub Stars</span></div><div><strong data-metric="npmVersion">1.1.7</strong><span>npm &#26368;&#26032;&#29256;&#26412;</span></div><div><strong data-metric="downloads">&mdash;</strong><span>&#19978;&#21608; npm &#19979;&#36733;</span></div><div><strong>22.13.0</strong><span>&#26368;&#20302; Node.js</span></div></section>
-<section class="how section" id="how"><div class="section-intro reveal"><p class="kicker">怎么工作</p><h2>手机负责发消息，<br /><em>电脑负责干活。</em></h2><p>daemon 绑定启动时的工作目录，保持通道在线；direct 命令则直接打开一个 CLI。</p></div><div class="steps reveal reveal-delay"><article><b>01</b><h3>登录通道</h3><p>微信运行 <code>wechat-setup</code> 扫码登录；企业微信运行 <code>wecom-setup</code> 完成配对。</p></article><article><b>02</b><h3>启动本地 CLI</h3><p>运行 <code>wechat-daemon</code>，它会在当前工作区管理 Codex、Claude Code、OpenCode 和 Pi。</p></article><article><b>03</b><h3>从微信继续操作</h3><p>普通消息和 <code>/codex</code>、<code>/claude</code>、<code>/status</code> 等指令都会回到同一个工作区。</p></article></div></section>
-<section class="adapters section" id="adapters"><div class="section-intro reveal"><p class="kicker">支持的 CLI</p><h2>你熟悉的工具，<br /><em>继续在本地运行。</em></h2></div><div class="adapter-list">{adapters.map((adapter) => <article class="adapter reveal"><span class="adapter-icon" aria-hidden="true"><img src={`${base}assets/icons/${adapter.icon}.svg`} alt="" /></span><div><h3>{adapter.name}</h3><p>{adapter.text}</p><code>{adapter.command}</code></div><small>{adapter.protocol}</small></article>)}</div></section>
-<section class="proof section"><div class="section-intro reveal"><p class="kicker">真实运行记录</p><h2>不是概念图，<br /><em>这是实际工作流。</em></h2><p>仓库里的截图展示了微信消息、本地终端、daemon 和结果回流。</p></div><div class="proof-grid reveal reveal-delay"><figure class="proof-large"><img src={`${base}assets/real/image-10.png`} alt="微信消息与本地工作流" loading="lazy" /><figcaption>微信消息 / 本地响应</figcaption></figure><figure><img src={`${base}assets/real/image-12.png`} alt="daemon 与 CLI 会话" loading="lazy" /><figcaption>daemon / CLI 会话</figcaption></figure><figure><img src={`${base}assets/real/image-13.png`} alt="终端与微信结果回流" loading="lazy" /><figcaption>终端 / 结果回流</figcaption></figure></div></section>
-<section class="start section" id="start"><div class="section-intro reveal"><p class="kicker">开始使用</p><h2>三条命令，<br /><em>把第一条消息发进来。</em></h2><p>先安装，再登录对应通道，最后启动 daemon。命令都可以直接选中运行。</p></div><div class="command-panel reveal reveal-delay"><div class="command-tabs" role="tablist"><button class="is-active" data-command-tab="wechat" role="tab" aria-selected="true" type="button">微信</button><button data-command-tab="wecom" role="tab" aria-selected="false" type="button">企业微信</button></div><div data-command-panel="wechat"><div class="command-row"><b>01</b><code>{install}</code><button data-copy={install}>复制</button></div><div class="command-row"><b>02</b><code>wechat-setup</code><button data-copy="wechat-setup">复制</button></div><div class="command-row"><b>03</b><code>wechat-daemon</code><button data-copy="wechat-daemon">复制</button></div></div><div data-command-panel="wecom" hidden><div class="command-row"><b>01</b><code>{install}</code><button data-copy={install}>复制</button></div><div class="command-row"><b>02</b><code>wecom-setup</code><button data-copy="wecom-setup">复制</button></div><div class="command-row"><b>03</b><code>wecom-daemon</code><button data-copy="wecom-daemon">复制</button></div></div><div class="command-note">安装后如果 npm 提示阻止生命周期脚本，请按 README 的 allow-scripts 说明重新安装。</div></div></section>
-<section class="closing section reveal"><p class="kicker">本地工作区仍然是你的</p><h2>从微信发一句话，<br /><em>电脑继续把事情做完。</em></h2><div class="closing-actions"><a class="button primary" href={npmUrl} target="_blank" rel="noreferrer">安装 cli-wechat-bridge ↗</a><a class="button quiet" href={repoUrl} target="_blank" rel="noreferrer">打开 GitHub ↗</a></div></section>
-</main><footer class="footer section-pad"><img src={`${base}assets/real/logo.png`} alt="CLI WeChat Bridge" /><span>AGPL-3.0 · UNLINEARITY</span><span><a href={repoUrl} target="_blank" rel="noreferrer">GitHub</a> · <a href={npmUrl} target="_blank" rel="noreferrer">npm</a></span></footer><script src="../scripts/site.js"></script>
-</body></html>
+<div class="section logo-anchor" aria-hidden="true">
+  <img class="logo-big" src={`${base}assets/real/logo.png`} alt="" />
+</div>
+<section class="hero section">
+  <div class="hero-copy">
+    <p class="kicker">{t.hero.kicker}</p>
+    <h1>{t.hero.titleA}<br /><em>{t.hero.titleB}</em></h1>
+    <p class="hero-lede">{t.hero.lede}</p>
+    <div class="install-cmd">
+      <code><b>$</b> {install}</code>
+      <span class="install-node">{t.install.node}</span>
+      <div class="install-actions">
+        <button data-copy={install} type="button">{t.install.copy}</button>
+        <a href={npmUrl} target="_blank" rel="noreferrer">{t.install.npm}</a>
+      </div>
+    </div>
+    <div class="quickstart" id="quickstart">
+      {t.hero.quickstart.map((item, index) => (
+        <div class="qs-row">
+          <b>{String(index + 1).padStart(2, "0")}</b>
+          <code>{item.cmd}</code>
+          <span>{item.label}</span>
+          <button data-copy={item.cmd} type="button">{t.install.copy}</button>
+        </div>
+      ))}
+    </div>
+    <p class="quickstart-note" set:html={fmt(t.hero.note)} />
+    <div class="hero-actions">
+      <a class="button primary" href={`${base}#how`}>{t.hero.primary}</a>
+      <a class="button quiet" href={repoUrl} target="_blank" rel="noreferrer">{t.hero.quiet}</a>
+    </div>
+  </div>
+  <div class="hero-art">
+    <div class="art-halo"></div>
+    <div class="art-label">{t.art.label}</div>
+    <div class="art-phone">
+      <div class="wechat-head"><span>{t.art.phone.app}</span><b>{t.art.phone.time}</b></div>
+      <div class="wechat-title">{t.art.phone.title}</div>
+      <div class="wechat-date">{t.art.phone.date}</div>
+      {t.art.phone.bubbles.map((bubble) => (
+        <div class={`wechat-bubble ${bubble.kind}`}>
+          {bubble.text}
+          {bubble.code && <span class="bubble-code">{bubble.code.map((line) => <i>{line}</i>)}</span>}
+        </div>
+      ))}
+      <div class="wechat-input">{t.art.phone.input} <b>↑</b></div>
+    </div>
+    <div class="art-terminal">
+      <div class="terminal-head"><i></i><i></i><i></i><span>{t.art.terminal.title}</span></div>
+      {t.art.terminal.lines.map((line) => (
+        <p class={`tl ${line.kind}`}>
+          {line.kind === "cmd" ? <span class="prompt">$ </span> : line.label && <span class="kv">{line.label}</span>}{line.text}
+        </p>
+      ))}
+      <p class="ok ok-wait">{t.art.terminal.ok}</p>
+    </div>
+    <div class="art-line"></div>
+  </div>
+</section>
+<section class="metrics section-pad" data-scrub-stagger>
+  <div><strong data-metric="stars">&mdash;</strong><span>{t.metrics.stars}</span></div>
+  <div><strong data-metric="npmVersion">{pkg.version}</strong><span>{t.metrics.npmVersion}</span></div>
+  <div><strong data-metric="downloads">&mdash;</strong><span>{t.metrics.downloads}</span></div>
+  <div><strong>22.13.0</strong><span>{t.metrics.node}</span></div>
+</section>
+<section class="how section" id="how">
+  <div class="section-intro" data-scrub>
+    <p class="kicker">{t.how.kicker}</p>
+    <h2>{t.how.titleA}<br /><em>{t.how.titleB}</em></h2>
+    <p>{t.how.lede}</p>
+    <p class="how-links">
+      <a href={architectureUrl} target="_blank" rel="noreferrer">docs/architecture.md</a> ·
+      <a href={quickStartUrl} target="_blank" rel="noreferrer">README 快速开始</a>
+    </p>
+  </div>
+  <div class="steps" data-scrub-stagger>
+    {t.how.steps.map((step, index) => (
+      <article>
+        <b>{String(index + 1).padStart(2, "0")}</b>
+        <h3>{step.title}</h3>
+        <p set:html={fmt(step.text)} />
+      </article>
+    ))}
+  </div>
+</section>
+<section class="adapters section" id="adapters">
+  <div class="section-intro" data-scrub>
+    <p class="kicker">{t.adapters.kicker}</p>
+    <h2>{t.adapters.titleA}<br /><em>{t.adapters.titleB}</em></h2>
+  </div>
+  <div class="adapter-list" data-scrub-stagger>
+    {t.adapters.items.map((adapter) => (
+      <article class="adapter">
+        <header>
+          <span class="adapter-icon" aria-hidden="true"><img src={`${base}assets/icons/${adapter.icon}.svg`} alt="" /></span>
+          <h3>{adapter.name}</h3>
+          <small>{adapter.protocol}</small>
+        </header>
+        <p>{adapter.text}</p>
+        <div class="adapter-commands">
+          <button class="adapter-cmd wechat" data-copy={adapter.wechat} type="button"><i>微信</i><code>{adapter.wechat}</code></button>
+          <button class="adapter-cmd wecom" data-copy={adapter.wecom} type="button"><i>企业微信</i><code>{adapter.wecom}</code></button>
+        </div>
+      </article>
+    ))}
+    <p class="adapters-note" set:html={fmt(t.adapters.note)} />
+  </div>
+</section>
+<section class="proof section" id="proof">
+  <div class="section-intro" data-scrub>
+    <p class="kicker">{t.proof.kicker}</p>
+    <h2>{t.proof.titleA}<br /><em>{t.proof.titleB}</em></h2>
+    <p>{t.proof.lede}</p>
+  </div>
+  <div class="proof-grid" data-scrub-stagger>
+    <figure class="proof-animation">
+      <img src={`${base}assets/real/animation.webp`} alt={t.proof.animation.alt} width="1500" height="924" loading="lazy" />
+      <figcaption>{t.proof.animation.caption}</figcaption>
+    </figure>
+    <figure class="proof-multi">
+      <img src={`${base}assets/real/image-9.webp`} alt={t.proof.multiCli.alt} width="1200" height="827" loading="lazy" />
+      <figcaption>{t.proof.multiCli.caption}</figcaption>
+    </figure>
+    <figure class="proof-wechat-a">
+      <img src={`${base}assets/real/image-10.webp`} alt={t.proof.wechatBindings.alt} width="1100" height="1064" loading="lazy" />
+      <figcaption>{t.proof.wechatBindings.caption}</figcaption>
+    </figure>
+    <figure class="proof-wechat-b">
+      <img src={`${base}assets/real/image-12.webp`} alt={t.proof.wechatCommands.alt} width="800" height="589" loading="lazy" />
+      <figcaption>{t.proof.wechatCommands.caption}</figcaption>
+    </figure>
+    <figure class="proof-wide">
+      <img src={`${base}assets/real/image-13.webp`} alt={t.proof.terminals.alt} width="1400" height="592" loading="lazy" />
+      <figcaption>{t.proof.terminals.caption}</figcaption>
+    </figure>
+  </div>
+</section>
+</main>
+<div class="outro">
+<section class="closing section" data-scrub>
+  <p class="kicker">{t.closing.kicker}</p>
+  <h2>{t.closing.titleA}<br /><em>{t.closing.titleB}</em></h2>
+  <div class="closing-actions">
+    <a class="button primary" href={npmUrl} target="_blank" rel="noreferrer"><img class="nav-icon" src={`${base}assets/icons/npm.svg`} alt="" />{t.closing.primary}</a>
+    <a class="button quiet" href={repoUrl} target="_blank" rel="noreferrer"><img class="nav-icon" src={`${base}assets/icons/github.svg`} alt="" />{t.closing.quiet}</a>
+  </div>
+</section>
+<footer class="footer section-pad">
+  <span class="footer-brand">CLI WeChat Bridge</span>
+  <span>{t.footer.license}</span>
+  <span>
+    <a href={repoUrl} target="_blank" rel="noreferrer">{t.footer.github}</a> ·
+    <a href={npmUrl} target="_blank" rel="noreferrer">{t.footer.npm}</a>
+  </span>
+</footer>
+</div>
+<script src="../scripts/site.js"></script>
+</body>
+</html>

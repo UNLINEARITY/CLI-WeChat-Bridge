@@ -8,11 +8,10 @@ on:
       - ".github/workflows/pages.yml"
       - "docs/images/logo.png"
       - "docs/images/animation.webp"
-      - "docs/images/image-8.png"
+      - "docs/images/image-9.png"
       - "docs/images/image-10.png"
       - "docs/images/image-12.png"
       - "docs/images/image-13.png"
-      - "docs/images/wechat-tip.png"
   workflow_dispatch:
 
 permissions:
@@ -32,6 +31,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -46,6 +48,8 @@ jobs:
       - name: Build site
         working-directory: site
         run: npm run build
+        env:
+          SITE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3

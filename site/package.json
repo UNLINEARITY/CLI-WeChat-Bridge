@@ -3,11 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/sync-assets.mjs && astro dev",
+    "dev": "node scripts/sync-assets.mjs && node scripts/fetch-metrics.mjs && astro dev",
     "build": "node scripts/sync-assets.mjs && node scripts/fetch-metrics.mjs && astro build",
     "preview": "astro preview"
   },
   "devDependencies": {
-    "astro": "^7.3.1"
+    "astro": "^7.3.1",
+    "sharp": "^0.35.0"
   }
 }
