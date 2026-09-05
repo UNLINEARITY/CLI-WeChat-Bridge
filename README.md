@@ -21,8 +21,6 @@
 
 <p align="center">
   <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/"><strong>产品主页 ↗</strong></a>
-  <span>&nbsp;&nbsp;·&nbsp;&nbsp;</span>
-  <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/?lang=en">English ↗</a>
 </p>
 
 <p align='center'><img src='docs/images/animation.webp' width=90%></p>
@@ -255,7 +253,7 @@ wechat-daemon --adapter claude --profile work
 | `opencode` | 已接入 | `wechat-opencode` / `wecom-opencode` 自动启动或复用 OpenCode；支持本地 session 跟随及远程通道 `/new` / `/new-session` |
 | `pi` | 已接入 | `wechat-pi` / `wecom-pi` 启动用户原生 Pi TUI，并通过本地 extension 让远程通道接管同一 session，支持最终回复、停止、新建和恢复 session |
 
-Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。
+Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。Pi `0.85.0` 及更新版本要求 Node.js `>=22.19.0`，低于该版本时 `wechat-pi` / `wecom-pi` 会在启动前明确提示。
 
 ### Codex 示例
 

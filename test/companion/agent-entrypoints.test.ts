@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   isSupportedNodeVersion,
+  isSupportedPiNodeVersion,
   MIN_NODE_VERSION_TEXT,
+  MIN_PI_NODE_VERSION_TEXT,
 } from "../../bin/_run-entry.mjs";
 
 const REPO_ROOT = path.resolve(import.meta.dir, "..", "..");
@@ -23,6 +25,13 @@ describe("agent CLI entrypoints", () => {
     expect(isSupportedNodeVersion("22.12.9")).toBe(false);
     expect(isSupportedNodeVersion("20.19.0")).toBe(false);
     expect(isSupportedNodeVersion("not-a-version")).toBe(false);
+  });
+
+  test("documents the newer Pi runtime floor", () => {
+    expect(MIN_PI_NODE_VERSION_TEXT).toBe("22.19.0");
+    expect(isSupportedPiNodeVersion("22.19.0")).toBe(true);
+    expect(isSupportedPiNodeVersion("22.18.9")).toBe(false);
+    expect(isSupportedPiNodeVersion("24.0.0")).toBe(true);
   });
 
   test("publishes only the supported smart launchers", () => {

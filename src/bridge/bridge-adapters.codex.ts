@@ -1847,6 +1847,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (typeof thread.parentThreadId === "string") {
       throw new Error(`Codex thread ${targetThreadId} is a subagent thread and cannot be resumed.`);
     }
+    if (thread.canAcceptDirectInput === false) {
+      throw new Error(`Codex thread ${targetThreadId} is owned by a parent agent and cannot accept direct input.`);
+    }
     if (thread.ephemeral === true) {
       throw new Error(`Codex thread ${targetThreadId} is ephemeral and cannot be resumed.`);
     }
@@ -1877,6 +1880,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
     if (typeof thread.parentThreadId === "string") {
       throw new Error(`Codex thread ${targetThreadId} is a subagent thread.`);
+    }
+    if (thread.canAcceptDirectInput === false) {
+      throw new Error(`Codex thread ${targetThreadId} is owned by a parent agent.`);
     }
     if (thread.ephemeral === true) {
       throw new Error(`Codex thread ${targetThreadId} is ephemeral.`);

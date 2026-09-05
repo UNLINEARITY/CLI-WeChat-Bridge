@@ -197,6 +197,19 @@ describe("Codex visible thread resume", () => {
     expect(methods).toEqual(["thread/read"]);
   });
 
+  test("rejects a parent-owned multi-agent thread that cannot accept direct input", async () => {
+    const cwd = path.resolve("tmp/codex-parent-owned");
+    const adapter = buildAdapter(cwd) as any;
+    const targetThreadId = "019e1505-1c23-7fb1-aee3-c24f89836864";
+    adapter.state.status = "idle";
+    adapter.sendRpcRequest = async (method: string) => {
+      expect(method).toBe("thread/read");
+      return { thread: buildThread(targetThreadId, cwd, { canAcceptDirectInput: false }) };
+    };
+
+    await expect(adapter.resumeSession(targetThreadId)).rejects.toThrow("cannot accept direct input");
+  });
+
   test("interrupts a WeChat turn and immediately follows a local visible switch", async () => {
     const cwd = path.resolve("tmp/codex-local-follow");
     const adapter = buildAdapter(cwd) as any;
