@@ -6,7 +6,7 @@ on:
     paths:
       - ".github/workflows/star-history.yml"
   schedule:
-    - cron: "17 3 * * *"
+    - cron: "17 3 */3 * *"
   workflow_dispatch:
 
 permissions:
