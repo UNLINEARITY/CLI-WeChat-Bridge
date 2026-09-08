@@ -345,6 +345,8 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/opencode [prompt]` | daemon | 切换到 OpenCode；可选 prompt 在切换成功后转发 |
 | `/pi [prompt]` | daemon | 切换到 Pi；可选 prompt 在切换成功后转发 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
+| `/model`、`/model <编号>` | Codex、Claude Code、OpenCode | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |
+| `/plan`、`/plan on`、`/plan off` | Codex、Claude Code、OpenCode | 开启计划模式，或恢复进入前的模式 / primary agent |
 | `/stop` | 直接启动、daemon | 中断当前任务 |
 | `/reset` | 直接启动、daemon | 重建当前本地会话 |
 | `/new`、`/new-session` | OpenCode、Pi | 创建新的 session |
@@ -356,6 +358,12 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、OpenCode 等适配器的结构化回答 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信首次配置 | 在 `wecom-setup` 提示后完成操作者配对 |
+
+Claude Code 的模型、计划模式控制需要可见 CLI 处于空闲原生提示符，且没有待审批、本地草稿或打开的弹窗。操作会短暂打开原生选择器并等待确认；控制期间操作本地键盘会取消远程控制。Claude Code 使用选择器的 `s`（仅当前会话）切换模型，需要 CLI 支持此选项；`/plan off` 会恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
+
+OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥接通过 OpenCode server 的会话 API 查询已连接模型、提交模型与 primary agent，并回读 session 确认结果；微信和企业微信消息直接通过 SDK 提交，同时显式携带已生效的 agent、model 和 variant。OpenCode 的 `/plan` 选择 `plan` primary agent；缺少该 agent 时会提示错误，`/plan off` 没有历史记录时恢复 `build` 或首个非 plan primary agent。
+
+模型列表绑定当前会话、CLI 进程和操作者；切换会话或 daemon 活动 CLI 后请重新发送 `/model`。Claude 原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端；OpenCode 只有在 server 回读确认后才报告切换成功。
 
 ### 5.2 会话恢复与本地同步
 

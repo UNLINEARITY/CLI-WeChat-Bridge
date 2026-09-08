@@ -4,7 +4,7 @@ import crypto from "node:crypto";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
-  CodexModelOption,
+  BridgeModelOption,
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
@@ -389,7 +389,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     await this.resumeVisibleSharedThread(threadId);
   }
 
-  override async listModels(): Promise<CodexModelOption[]> {
+  override async listModels(): Promise<BridgeModelOption[]> {
     if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
       throw new Error("Codex model selection requires an active app-server thread.");
     }
@@ -409,7 +409,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return models;
   }
 
-  override async selectModel(modelId: string): Promise<CodexModelOption> {
+  override async selectModel(modelId: string): Promise<BridgeModelOption> {
     const models = await this.listModels();
     const selected = models.find((model) => model.id === modelId);
     if (!selected) throw new Error(`Codex model ${modelId} is not available.`);

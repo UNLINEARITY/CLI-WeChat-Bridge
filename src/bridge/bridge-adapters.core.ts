@@ -21,7 +21,7 @@ import type {
   BridgeAdapter,
   BridgeAdapterKind,
   BridgeAdapterState,
-  CodexModelOption,
+  BridgeModelOption,
   BridgeEvent,
   BridgeLifecycleMode,
   BridgeResumeSessionCandidate,
@@ -57,7 +57,7 @@ const {
  * the script path contains spaces: node-pty quotes the already-quoted path,
  * making cmd.exe treat the literal quotes as part of the filename.
  */
-function unwrapCmdExeForPty(rawTarget: SpawnTarget): SpawnTarget {
+export function unwrapCmdExeForPty(rawTarget: SpawnTarget): SpawnTarget {
   if (process.platform !== "win32") {
     return rawTarget;
   }
@@ -238,6 +238,18 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     await this.sendRequest({
       command: "create_session",
     });
+  }
+
+  async listModels(): Promise<BridgeModelOption[]> {
+    return await this.sendRequest({ command: "list_models" }) as BridgeModelOption[];
+  }
+
+  async selectModel(modelId: string): Promise<BridgeModelOption> {
+    return await this.sendRequest({ command: "select_model", modelId }) as BridgeModelOption;
+  }
+
+  async setPlanMode(enabled: boolean): Promise<boolean> {
+    return await this.sendRequest({ command: "set_plan_mode", enabled }) as boolean;
   }
 
   async interrupt(): Promise<boolean> {
@@ -799,11 +811,11 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     this.eventSink = sink;
   }
 
-  async listModels(): Promise<CodexModelOption[]> {
+  async listModels(): Promise<BridgeModelOption[]> {
     throw new Error(`/${this.options.kind} model selection is not available.`);
   }
 
-  async selectModel(_modelId: string): Promise<CodexModelOption> {
+  async selectModel(_modelId: string): Promise<BridgeModelOption> {
     throw new Error(`/${this.options.kind} model selection is not available.`);
   }
 

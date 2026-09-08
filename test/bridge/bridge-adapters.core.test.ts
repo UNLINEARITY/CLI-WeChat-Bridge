@@ -14,6 +14,7 @@ import {
   shouldStopBridgeAfterCompanionDisconnect,
 } from "../../src/bridge/bridge-adapters.core.ts";
 import {
+  attachLocalCompanionMessageListener,
   clearLocalCompanionEndpoint,
   readLocalCompanionEndpoint,
   sendLocalCompanionMessage,
@@ -197,6 +198,46 @@ describe("local companion proxy lifecycle", () => {
 });
 
 describe("companion ready gate", () => {
+  test("proxies model and plan commands with results and remote errors", async () => {
+    const cwd = path.resolve("tmp/control-proxy");
+    const adapter = new LocalCompanionProxyAdapter({ kind: "claude", command: "claude", cwd, lifecycle: "persistent", companionLaunchMode: "daemon_auto" });
+    await adapter.start();
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "claude" });
+    const socket = net.connect({ host: "127.0.0.1", port: endpoint!.port });
+    const commands: string[] = [];
+    const model = { id: "model-id", displayName: "Model" };
+    let acknowledge = () => {};
+    const handshake = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const detach = attachLocalCompanionMessageListener(socket, (message) => {
+      if (message.type === "hello_ack") acknowledge();
+      if (message.type !== "request" || message.payload.command === "dispose") return;
+      commands.push(message.payload.command);
+      if (message.payload.command === "set_plan_mode" && !message.payload.enabled) {
+        sendLocalCompanionMessage(socket, { type: "response", id: message.id, ok: false, error: "Native terminal disconnected" });
+        return;
+      }
+      const result = message.payload.command === "list_models" ? [model] : message.payload.command === "select_model" ? model : true;
+      sendLocalCompanionMessage(socket, { type: "response", id: message.id, ok: true, result });
+    });
+    try {
+      await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+      sendLocalCompanionMessage(socket, { type: "hello", token: endpoint!.token, companionPid: 22_222 });
+      sendLocalCompanionMessage(socket, { type: "state", state: { kind: "claude", command: "claude", cwd, status: "idle", pid: 33_333 } });
+      await handshake;
+      expect(await adapter.listModels()).toEqual([model]);
+      expect(await adapter.selectModel("model-id")).toEqual(model);
+      expect(await adapter.setPlanMode(true)).toBe(true);
+      let failure = "";
+      try { await adapter.setPlanMode(false); }
+      catch (error) { failure = error instanceof Error ? error.message : String(error); }
+      expect(failure).toBe("Native terminal disconnected");
+      expect(commands).toEqual(["list_models", "select_model", "set_plan_mode", "set_plan_mode"]);
+    } finally {
+      detach(); socket.destroy(); await adapter.dispose();
+      clearLocalCompanionEndpoint(cwd, undefined, { adapter: "claude" });
+    }
+  });
+
   test("sendRequest waits for the first state frame instead of failing immediately", async () => {
     const cwd = path.resolve("tmp/ready-gate");
     clearLocalCompanionEndpoint(cwd, undefined, { adapter: "opencode" });

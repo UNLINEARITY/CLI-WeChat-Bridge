@@ -28,6 +28,7 @@ import type {
   ApprovalRequest,
   BridgeAdapter,
   BridgeAdapterState,
+  BridgeModelOption,
   BridgeSessionSwitchReason,
   BridgeSessionSwitchSource,
   BridgeResumeSessionCandidate,
@@ -73,6 +74,24 @@ type SdkSession = {
   version: string;
   time: { created: number; updated: number; compacting?: number };
   share?: { url: string };
+  agent?: string;
+  model?: {
+    id: string;
+    providerID: string;
+    variant?: string;
+  };
+};
+
+type OpenCodeControlModel = BridgeModelOption & {
+  providerID: string;
+  modelID: string;
+  variants: string[];
+};
+
+type OpenCodeAgent = {
+  name: string;
+  mode?: string;
+  hidden?: boolean;
 };
 
 type SdkSessionStatus =
@@ -94,6 +113,31 @@ type SdkMessageRecord = {
 };
 
 type OpenCodeSdkClient = {
+  provider: {
+    list(parameters?: { directory?: string; workspace?: string }, options?: { signal: AbortSignal }): Promise<SdkResult<{
+      all: Array<{ id: string; name: string; models: Record<string, { id: string; name: string; status?: string; variants?: Record<string, unknown> }> }>;
+      connected: string[];
+    }>>;
+  };
+  app: {
+    agents(parameters?: { directory?: string; workspace?: string }, options?: { signal: AbortSignal }): Promise<SdkResult<OpenCodeAgent[]>>;
+  };
+  v2: {
+    session: {
+      switchAgent(parameters: {
+        sessionID: string;
+        agent: string;
+      }): Promise<SdkResult<unknown>>;
+      switchModel(parameters: {
+        sessionID: string;
+        model: {
+          id: string;
+          providerID: string;
+          variant?: string;
+        };
+      }): Promise<SdkResult<unknown>>;
+    };
+  };
   session: {
     list(parameters?: Record<string, unknown>): Promise<SdkResult<SdkSession[]>>;
     status(parameters?: Record<string, unknown>): Promise<SdkResult<Record<string, SdkSessionStatus>>>;
@@ -113,13 +157,16 @@ type OpenCodeSdkClient = {
       directory?: string;
       workspace?: string;
       parts: Array<{ type: string; text: string }>;
+      model?: { providerID: string; modelID: string };
+      agent?: string;
+      variant?: string;
     }): Promise<SdkResult<void>>;
     messages?(parameters: {
       sessionID: string;
       directory?: string;
       workspace?: string;
       limit?: number;
-    }): Promise<SdkResult<SdkMessageRecord[]>>;
+    }, options?: { signal: AbortSignal }): Promise<SdkResult<SdkMessageRecord[]>>;
   };
   permission: {
     reply(parameters: {
@@ -307,6 +354,161 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private pendingPermission: OpenCodePendingPermission | null = null;
   private pendingQuestion: OpenCodePendingQuestion | null = null;
+  private readonly previousAgentBySession = new Map<string, string>();
+
+  async listModels(): Promise<BridgeModelOption[]> {
+    this.assertRemoteControlReady();
+    const session = await this.ensureControlSession();
+    const models = await this.listControlModels();
+    return models.map((model) => ({
+      id: model.id,
+      displayName: model.displayName,
+      isCurrent:
+        session.model?.providerID === model.providerID &&
+        session.model.id === model.modelID,
+    }));
+  }
+
+  async selectModel(modelId: string): Promise<BridgeModelOption> {
+    this.assertRemoteControlReady();
+    const session = await this.ensureControlSession();
+    const models = await this.listControlModels();
+    const target = models.find((model) => model.id === modelId);
+    if (!target) {
+      throw new Error("This OpenCode model is no longer available. Send /model again.");
+    }
+
+    const currentVariant = session.model?.variant;
+    const variant =
+      currentVariant && currentVariant !== "default" && target.variants.includes(currentVariant)
+        ? currentVariant
+        : "default";
+    const result = await this.client!.v2.session.switchModel({
+      sessionID: session.id,
+      model: {
+        providerID: target.providerID,
+        id: target.modelID,
+        variant,
+      },
+    });
+    this.unwrapOrThrow(result);
+
+    const updated = await this.getSessionForCurrentDirectory(session.id);
+    if (
+      !updated ||
+      updated.model?.providerID !== target.providerID ||
+      updated.model.id !== target.modelID ||
+      (updated.model.variant ?? "default") !== variant
+    ) {
+      throw new Error("OpenCode did not confirm the selected model.");
+    }
+
+    return { id: target.id, displayName: target.displayName, isCurrent: true };
+  }
+
+  async setPlanMode(enabled: boolean): Promise<boolean> {
+    this.assertRemoteControlReady();
+    const session = await this.ensureControlSession();
+    const agents = await this.listPrimaryAgents();
+    const planAgent = agents.find((agent) => agent.name === "plan");
+    if (!planAgent) {
+      throw new Error("OpenCode primary agent 'plan' is not available.");
+    }
+
+    const currentAgent = session.agent ?? agents[0]?.name;
+    if (!currentAgent) {
+      throw new Error("OpenCode did not return any primary agents.");
+    }
+    if (enabled && currentAgent === "plan") {
+      return true;
+    }
+    if (!enabled && currentAgent !== "plan") {
+      this.previousAgentBySession.delete(session.id);
+      return false;
+    }
+
+    const previousAgent = this.previousAgentBySession.get(session.id);
+    const target = enabled
+      ? "plan"
+      : agents.some((agent) => agent.name === previousAgent)
+        ? previousAgent!
+        : agents.find((agent) => agent.name === "build")?.name ??
+          agents.find((agent) => agent.name !== "plan")?.name;
+    if (!target) {
+      throw new Error("OpenCode did not return an agent that can replace plan mode.");
+    }
+
+    const result = await this.client!.v2.session.switchAgent({
+      sessionID: session.id,
+      agent: target,
+    });
+    this.unwrapOrThrow(result);
+    const updated = await this.getSessionForCurrentDirectory(session.id);
+    if (!updated || updated.agent !== target) {
+      throw new Error("OpenCode did not confirm the selected agent.");
+    }
+
+    if (enabled) {
+      this.previousAgentBySession.set(session.id, currentAgent);
+    } else {
+      this.previousAgentBySession.delete(session.id);
+    }
+    return enabled;
+  }
+
+  private assertRemoteControlReady(): void {
+    if (!this.client) {
+      throw new Error("OpenCode is not running.");
+    }
+    if (this.state.status === "busy") {
+      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.pendingPermission) {
+      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+    }
+    if (this.pendingQuestion) {
+      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+    }
+  }
+
+  private async ensureControlSession(): Promise<SdkSession> {
+    const session = await this.ensureSession();
+    if (session.id !== this.activeSessionId) {
+      this.switchSharedSession(session, {
+        source: "wechat",
+        reason: "wechat_resume",
+        syncVisible: true,
+        forceVisibleSync: true,
+      });
+    }
+    return session;
+  }
+
+  private async listPrimaryAgents(): Promise<OpenCodeAgent[]> {
+    if (!this.client) throw new Error("OpenCode is not running.");
+    const agents = this.unwrapOrThrow(
+      await this.client.app.agents(
+        {
+          directory: this.options.cwd,
+          workspace: this.activeWorkspaceId ?? undefined,
+        },
+        { signal: AbortSignal.timeout(10_000) },
+      ),
+    );
+    return agents.filter((agent) => agent.mode !== "subagent" && !agent.hidden);
+  }
+
+  private async listControlModels(): Promise<OpenCodeControlModel[]> {
+    if (!this.client) throw new Error("OpenCode is not running.");
+    const providers = this.unwrapOrThrow(await this.client.provider.list({ directory: this.options.cwd, workspace: this.activeWorkspaceId ?? undefined }, { signal: AbortSignal.timeout(10_000) }));
+    return providers.all.filter((provider) => providers.connected.includes(provider.id)).flatMap((provider) =>
+      Object.entries(provider.models).filter(([id, model]) => model.status !== "deprecated" && !(provider.id === "opencode" && id.includes("-nano"))).map(([id, model]) => ({
+        id: `${provider.id}/${id}`, displayName: `${model.name || id} (${provider.name})`,
+        providerID: provider.id, modelID: id,
+        variants: Object.keys(model.variants ?? {}),
+      })),
+    );
+  }
 
   constructor(options: AdapterOptions) {
     this.options = options;
@@ -411,10 +613,21 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.beginTrackedTurn(normalized, "wechat");
 
     try {
+      const selection = await this.getSessionForCurrentDirectory(session.id) ?? session;
       const result = await this.client.session.promptAsync({
         sessionID: session.id,
         directory: this.options.cwd,
         workspace: session.workspaceID ?? this.activeWorkspaceId ?? undefined,
+        ...(selection.agent ? { agent: selection.agent } : {}),
+        ...(selection.model
+          ? {
+              model: {
+                providerID: selection.model.providerID,
+                modelID: selection.model.id,
+              },
+              variant: selection.model.variant ?? "default",
+            }
+          : {}),
         parts: [{ type: "text", text: normalized }],
       });
       if (result.error !== undefined) {
@@ -694,6 +907,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.clearObservedMessageTracking();
     this.recentSdkEventObservations.clear();
+    this.previousAgentBySession.clear();
     this.outputBatcher.clear();
     this.clearStreamedPartState();
 
@@ -2034,7 +2248,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const sessionId = this.extractSessionId(properties);
-    if (!sessionId || sessionId !== this.activeSessionId) {
+    if (!sessionId) {
+      return;
+    }
+    this.previousAgentBySession.delete(sessionId);
+    if (sessionId !== this.activeSessionId) {
       return;
     }
 

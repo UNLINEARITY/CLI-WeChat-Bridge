@@ -1,4 +1,6 @@
-﻿import fs from "node:fs";
+import { NativeTerminalControl, readClaudePermissionMode } from "./native-terminal-control.ts";
+import { ClaudeNativeControls } from "./claude-native-controls.ts";
+import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -26,6 +28,7 @@ import {
 import type {
   ApprovalRequest,
   BridgeNoticeLevel,
+  BridgeModelOption,
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
@@ -494,6 +497,22 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private remoteSubmitRetryIndex = 0;
   private remoteSubmitText: string | null = null;
 
+  private readonly terminalControl: NativeTerminalControl = new NativeTerminalControl({
+    write: (text) => this.writeToPty(text),
+    identity: () => JSON.stringify([this.state.pid, this.runtimeSessionId, this.resumeConversationId]),
+    isPromptEmpty: () => readClaudePermissionMode(this.terminalControl.text) !== null,
+    assertReady: () => {
+      if (!this.pty || this.state.status !== "idle" || this.pendingApproval || this.pendingResume) {
+        throw new Error("Claude must be idle with no pending approval before using remote controls.");
+      }
+    },
+  });
+  private readonly nativeControls = new ClaudeNativeControls(this.terminalControl, () => this.resumeConversationId ?? this.runtimeSessionId ?? "");
+
+  override async listModels(): Promise<BridgeModelOption[]> { return this.nativeControls.listModels(); }
+  override async selectModel(modelId: string): Promise<BridgeModelOption> { return this.nativeControls.selectModel(modelId); }
+  override async setPlanMode(enabled: boolean): Promise<boolean> { return this.nativeControls.setPlanMode(enabled); }
+
   constructor(options: AdapterOptions) {
     super(options);
     const shouldRestoreInitialSession = options.sessionStartMode !== "new";
@@ -565,6 +584,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async sendInput(text: string): Promise<void> {
+    if (this.terminalControl.active) throw new Error("A Claude control operation is in progress.");
     if (!this.pty) {
       throw new Error("claude adapter is not running.");
     }
@@ -613,6 +633,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async resumeSession(sessionId: string): Promise<void> {
+    if (this.terminalControl.active) throw new Error("A CLI control operation is in progress. Wait for it to finish before switching sessions.");
     if (!this.pty) {
       throw new Error("Claude is not running yet.");
     }
@@ -727,6 +748,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async interrupt(): Promise<boolean> {
+    this.terminalControl.cancel("The remote control operation was interrupted.");
     if (!this.pty) {
       return false;
     }
@@ -759,6 +781,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async reset(): Promise<void> {
+    if (this.terminalControl.active) throw new Error("A CLI control operation is in progress. Wait for it to finish before switching sessions.");
     this.rejectPendingResume(new Error("Claude was reset during session switching."));
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
@@ -841,6 +864,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async dispose(): Promise<void> {
+    this.terminalControl.cancel("Claude is shutting down.");
     this.rejectPendingResume(new Error("Claude is shutting down during session switching."));
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
@@ -874,6 +898,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   protected override handleData(rawText: string): void {
+    this.terminalControl.feed(rawText);
     this.renderLocalOutput(rawText);
 
     const text = normalizeOutput(rawText);
@@ -963,6 +988,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   protected override handleExit(exitCode: number | undefined): void {
+    this.terminalControl.cancel("Claude exited during the control operation.");
     this.detachLocalTerminal();
     this.clearWechatWorkingNotice(true);
     this.clearRemoteSubmitRetry();
@@ -1158,6 +1184,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     this.localTerminalInputListener = (chunk) => {
       const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+      this.terminalControl.localInput(text);
       this.writeToPty(text);
     };
     process.stdin.on("data", this.localTerminalInputListener);
@@ -1189,11 +1216,12 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private resizePtyToTerminal(): void {
-    if (!this.pty || !process.stdout.isTTY) {
+    if (!this.pty) {
       return;
     }
 
     try {
+      this.terminalControl.resize(process.stdout.columns || DEFAULT_COLS, process.stdout.rows || DEFAULT_ROWS);
       this.pty.resize?.(process.stdout.columns || DEFAULT_COLS, process.stdout.rows || DEFAULT_ROWS);
     } catch {
       // Best effort resize sync.

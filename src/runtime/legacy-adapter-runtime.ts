@@ -1,4 +1,4 @@
-import type { BridgeAdapter, BridgeResumeSessionCandidate } from "../bridge/bridge-types.ts";
+import type { BridgeAdapter, BridgeModelOption, BridgeResumeSessionCandidate } from "../bridge/bridge-types.ts";
 import type { RuntimeHost } from "./runtime-types.ts";
 
 export class LegacyAdapterRuntime implements RuntimeHost {
@@ -34,6 +34,21 @@ export class LegacyAdapterRuntime implements RuntimeHost {
       throw new Error(`/${this.adapter.getState().kind} does not support creating sessions from WeChat.`);
     }
     await this.adapter.createSession();
+  }
+
+  async listModels(): Promise<BridgeModelOption[]> {
+    if (!this.adapter.listModels) throw new Error("Model listing is not supported by this companion.");
+    return this.adapter.listModels();
+  }
+
+  async selectModel(modelId: string): Promise<BridgeModelOption> {
+    if (!this.adapter.selectModel) throw new Error("Model selection is not supported by this companion.");
+    return this.adapter.selectModel(modelId);
+  }
+
+  async setPlanMode(enabled: boolean): Promise<boolean> {
+    if (!this.adapter.setPlanMode) throw new Error("Plan mode is not supported by this companion.");
+    return this.adapter.setPlanMode(enabled);
   }
 
   async interrupt(): Promise<boolean> {

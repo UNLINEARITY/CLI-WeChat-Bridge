@@ -26,6 +26,9 @@ export type LocalCompanionCommand =
   | { command: "resume_session"; sessionId: string }
   | { command: "resume_thread"; threadId: string }
   | { command: "create_session" }
+  | { command: "list_models" }
+  | { command: "select_model"; modelId: string }
+  | { command: "set_plan_mode"; enabled: boolean }
   | { command: "interrupt" }
   | { command: "reset" }
   | { command: "dispose" }

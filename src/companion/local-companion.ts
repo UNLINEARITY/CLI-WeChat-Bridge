@@ -310,6 +310,20 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           publishState();
           sendResponse(socket, message.id, true);
           break;
+        case "list_models":
+          if (!adapter.listModels) throw new Error("Model listing is not supported by this companion.");
+          sendResponse(socket, message.id, true, await adapter.listModels());
+          break;
+        case "select_model":
+          if (!adapter.selectModel) throw new Error("Model selection is not supported by this companion.");
+          sendResponse(socket, message.id, true, await adapter.selectModel(message.payload.modelId));
+          publishState();
+          break;
+        case "set_plan_mode":
+          if (!adapter.setPlanMode) throw new Error("Plan mode is not supported by this companion.");
+          sendResponse(socket, message.id, true, await adapter.setPlanMode(message.payload.enabled));
+          publishState();
+          break;
         case "interrupt":
           sendResponse(socket, message.id, true, await adapter.interrupt());
           break;
