@@ -189,3 +189,14 @@ npm pack --dry-run --json
 - 状态文件、日志和迁移排查见 `docs/troubleshooting.md`。
 - `bin/*.mjs` 是发布包入口源文件，不是生成文件；修改后需要保持 LF 行尾。
 - release 流程见 `docs/releases/README.md` 和 AGENTS.md 中的发布清单。
+
+## Daemon IPC 扩展
+
+`src/daemon/daemon-link.ts` 定义本地 token 鉴权 IPC。除内部启动器使用的 `status`、`ensure_slot`、`switch_adapter` 和 `shutdown` 外，daemon 还支持外部控制层使用以下最小扩展：
+
+| 命令 | 用途 |
+| --- | --- |
+| `send_text` | 请求当前 daemon 通过其远程通道发送一段文本，可指定 `recipientId`、`conversationId`、`context` 和 metadata |
+| `forward_input` | 请求当前 daemon 将一段普通文本提交给 active adapter 或指定 adapter，可携带 sender/conversation 上下文 |
+
+这两个 IPC 面向本地控制层和编排器，不改变微信内公开命令语法。调用方仍必须读取 `daemon-endpoint.json` 中的随机 token，且只能连接 `127.0.0.1` 上的当前 daemon endpoint。

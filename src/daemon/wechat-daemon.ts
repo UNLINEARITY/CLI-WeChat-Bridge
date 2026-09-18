@@ -1281,7 +1281,109 @@ class WechatDaemon {
           sessionStartMode: request.sessionStartMode,
           reuseExistingVisible: request.reuseExistingVisible ?? true,
         });
+      case "send_text":
+        return await this.handleDaemonSendText(request);
+      case "forward_input":
+        return await this.handleDaemonForwardInput(request);
     }
+  }
+
+  private async handleDaemonSendText(
+    request: Extract<DaemonRequest, { command: "send_text" }>,
+  ): Promise<{ sent: boolean; recipientId: string; conversationId?: string }> {
+    if (!request.text.trim()) {
+      throw new Error("send_text requires non-empty text.");
+    }
+    if (request.channel && request.channel !== this.channelId) {
+      throw new Error(
+        `${this.channelId}-daemon cannot send to ${request.channel}.`,
+      );
+    }
+    const target =
+      this.channelId === "wecom"
+        ? ({
+            channelId: "wecom",
+            conversationId: request.conversationId ?? request.recipientId,
+            recipientId: request.recipientId,
+            metadata: request.metadata,
+          } satisfies ChannelConversationRef)
+        : undefined;
+    const sent = await this.queueWechatMessage(
+      request.recipientId,
+      request.text,
+      (request.context ?? "message") as WechatSendContext,
+      target,
+    );
+    return {
+      sent,
+      recipientId: request.recipientId,
+      ...(request.conversationId ? { conversationId: request.conversationId } : {}),
+    };
+  }
+
+  private async handleDaemonForwardInput(
+    request: Extract<DaemonRequest, { command: "forward_input" }>,
+  ): Promise<{
+    forwarded: boolean;
+    adapter: DaemonAdapterKind;
+    conversationId: string;
+  }> {
+    if (!request.text.trim()) {
+      throw new Error("forward_input requires non-empty text.");
+    }
+    if (request.cwd && !isSameWorkspaceCwd(request.cwd, this.cwd)) {
+      throw new Error(
+        `${this.channelId}-daemon is bound to ${this.cwd}; requested cwd was ${request.cwd}.`,
+      );
+    }
+
+    let slot: DaemonSlot | null | undefined;
+    if (request.adapter) {
+      slot = this.slots.get(request.adapter);
+      if (!slot) {
+        await this.ensureSlot(request.adapter, {
+          openVisible: true,
+          reuseExistingVisible: true,
+        });
+        slot = this.slots.get(request.adapter);
+      }
+    } else {
+      slot = this.getActiveSlot();
+    }
+    if (!slot) {
+      throw new Error("No active adapter slot is available.");
+    }
+
+    const senderId = request.senderId ?? this.authorizedUserId;
+    const conversationId = request.conversationId ?? senderId;
+    const conversation: ChannelConversationRef = {
+      channelId: this.channelId,
+      conversationId,
+      recipientId: request.recipientId ?? senderId,
+      ...(request.contextToken ? { opaqueRef: request.contextToken } : {}),
+      ...(request.metadata ? { metadata: request.metadata } : {}),
+    };
+    this.currentInboundConversation = conversation;
+    slot.activeConversation = conversation;
+    slot.lastConversation = conversation;
+    await this.dispatchInboundWechatText(
+      {
+        senderId,
+        sender: senderId,
+        sessionId: conversationId,
+        text: request.text,
+        attachments: [],
+        contextToken: request.contextToken,
+        createdAt: new Date().toISOString(),
+        createdAtMs: Date.now(),
+      },
+      slot,
+    );
+    return {
+      forwarded: true,
+      adapter: slot.adapter,
+      conversationId,
+    };
   }
 
   private async ensureSlot(

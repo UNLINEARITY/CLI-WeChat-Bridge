@@ -59,6 +59,26 @@ export type DaemonRequest =
       sessionStartMode?: BridgeSessionStartMode;
       reuseExistingVisible?: boolean;
     }
+  | {
+      command: "send_text";
+      channel?: BridgeChannelId;
+      recipientId: string;
+      conversationId?: string;
+      text: string;
+      context?: string;
+      metadata?: Record<string, string>;
+    }
+  | {
+      command: "forward_input";
+      adapter?: DaemonAdapterKind;
+      cwd?: string;
+      text: string;
+      senderId?: string;
+      conversationId?: string;
+      recipientId?: string;
+      contextToken?: string;
+      metadata?: Record<string, string>;
+    }
   | { command: "status" }
   | { command: "shutdown" };
 
