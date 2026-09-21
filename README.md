@@ -344,6 +344,7 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/claude [prompt]` | daemon | 切换到 Claude Code；可选 prompt 在切换成功后转发 |
 | `/opencode [prompt]` | daemon | 切换到 OpenCode；可选 prompt 在切换成功后转发 |
 | `/pi [prompt]` | daemon | 切换到 Pi；可选 prompt 在切换成功后转发 |
+| `/all <prompt>` | daemon | 将同一段提示词同时下发给全部已启动的 CLI；未启动的列为跳过，任一 CLI 忙碌时整条取消 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
 | `/model`、`/model <编号>` | Codex、Claude Code、OpenCode、Pi | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |
 | `/plan`、`/plan on`、`/plan off` | Codex、Claude Code、OpenCode | 开启计划模式，或恢复进入前的模式 / primary agent |
@@ -365,7 +366,17 @@ OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥
 
 Pi 的 `/model` 通过已连接原生 TUI extension 读取当前 scoped model 列表；没有 scoped models 时使用 model registry 中可用的模型，并通过 `pi.setModel()` 切换。Pi 的 `/plan` 仍由可选扩展定义，不作为 bridge 的通用控制命令。
 
-模型列表绑定当前会话、CLI 进程和操作者；切换会话或 daemon 活动 CLI 后请重新发送 `/model`。Claude 原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端；OpenCode 只有在 server 回读确认后才报告切换成功。
+模型列表绑定当前会话、CLI 进程和操作者；切换会话或 daemon 活动 CLI 后请重新发送 `/model`。
+
+### 「正在输入」状态与回复投递
+
+从微信派发任务后，聊天窗口会显示原生的「对方正在输入…」状态，并以 5 秒心跳保持，直到回复送达、任务失败或 daemon 关闭。typing 凭证按联系人从微信官方配置端点获取并自动刷新，获取失败时整体静默降级，不影响消息收发。
+
+较长的回复现在作为一条完整消息发出，不再按固定长度拆分，与微信官方机器人客户端的行为一致。若服务器拒收超长消息，既有的重试与待发队列机制仍会记录失败，回复不会无声丢失。
+
+### daemon IPC（外部程序接入）
+
+`wechat-daemon` 与 `wecom-daemon` 在本地开放带 token 认证的 IPC 接口，外部程序（网页面板、脚本、自建机器人前端等）可以将文本按与聊天消息完全一致的处理规则下发给任意 CLI，或借用通道发送消息：忙碌时拒绝、有待审批或结构化输入时等待、Codex 本地任务期间自动排队，回复始终发回所属会话，输入被拒绝或失败时自动回滚状态。接口语义见 [docs/development.md](docs/development.md)。Claude 原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端；OpenCode 只有在 server 回读确认后才报告切换成功。
 
 ### 5.2 会话恢复与本地同步
 

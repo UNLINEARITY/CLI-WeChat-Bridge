@@ -4,6 +4,10 @@
 
 ## 版本列表
 
+### [v1.2.0](./1.2.0.md) / [中文说明](./1.2.0_CN.md)
+**daemon IPC 外部接入 + /all 广播 + 「正在输入」状态 + 回复投递对齐官方**
+1.2.0 向外部程序开放 daemon：带 token 认证的本地 IPC 接口支持 `forward_input`（与聊天消息完全一致的处理规则）与 `send_text`，网页面板、脚本和自建前端可以像聊天一样驱动任意 CLI。新增 `/all <提示词>` 将同一段提示词一次下发给全部已启动的 CLI——未启动的列为跳过，任一 CLI 忙碌则整条取消。微信派发任务期间聊天窗口显示原生「对方正在输入…」（5 秒心跳，回复送达自动取消，凭证按联系人自动刷新）。长回复改为单条完整发送，与官方客户端一致；待发队列收敛为仅保留重要回复（30 分钟有效期、上限 10 条），不再出现历史消息轰炸。全部源文件添加 SPDX AGPL-3.0-or-later 版权头（含联系邮箱与仓库地址），README 协议章节明确 AI 修改场景的同等开源义务。daemon IPC 由 XuanHua（@2769194950）贡献。
+
 ### [v1.1.8](./1.1.8.md) / [中文说明](./1.1.8_CN.md)
 **全适配器模型/计划控制 + 会话路由正确性 + Codex 0.155 与 Pi 0.85 兼容**
 1.1.8 将 `/model` 与 `/plan` 扩展到 Codex、Claude Code、OpenCode 与 Pi：Codex 走 app-server 设置 API，Claude 驱动受保护的原生选择器，OpenCode 全部经权威 server session API，Pi 通过原生 extension 切换模型。企业微信并发 conversation 不再串线：入站回复绑定独立 async 上下文，异步事件入队时捕获目标，槽位持有原子 turn 租约并支持失败回滚与迟到事件防护。Codex 已验证范围扩展至 0.155，可见客户端改为始终新建会话以绕过惰性落盘导致的 `no rollout found` 崩溃；Pi 每个 turn 结束都会报告完成，修复后续消息被永久 busy 拒绝的问题。daemon 增加带认证的 supervisor 退出控制与 Ctrl+C 长轮询中止；新增每周四 CLI 兼容性 workflow，修复 CI 依赖安装，Star History 改为周更。

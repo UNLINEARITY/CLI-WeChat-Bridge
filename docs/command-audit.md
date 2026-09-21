@@ -202,6 +202,7 @@ standalone 模式按以下顺序处理：
 | `/status` | daemon、standalone | daemon 返回工作区、active adapter 和所有 slot；standalone 返回当前 bridge/adapter 状态 | 两种模式输出粒度不同 | 核心保留 |
 | `/model [编号]` | daemon、standalone | Codex、Claude Code、OpenCode、Pi 列出并切换当前会话模型；Pi 通过原生 extension API 执行 | 编号快照绑定操作者、进程和 session，5 分钟失效 | 核心会话命令 |
 | `/plan [on|off]` | daemon、standalone | Codex、Claude Code、OpenCode 切换计划模式；Pi 基础运行时不保证 plan extension，因此不开放 | 各 adapter 原生计划模式语义不同 | 高级保留 |
+| `/all <prompt>` | daemon | 将同一段提示词同时下发给全部已启动的 CLI；未启动的列为跳过并提示启动命令；任一已启动 CLI 忙碌（任务中/待审批/待输入/排队中）则整条取消；active adapter 不变；各 CLI 回复带名称前缀 | standalone 提示仅 daemon 可用；全有全无语义与逐个发送不同 | 核心多 agent 命令 |
 | `/resume [target]` | daemon、standalone | 四个 adapter：无 target 时列出最近 8 条并缓存 5 分钟，target 可用编号、完整 ID 或唯一 ID 前缀；busy/审批/待回答状态拒绝切换。电脑端主动切换会反向更新 shared thread/session、清除旧编号快照；若微信任务仍在运行则先中断旧任务。Codex 通过 app-server 预检与 token-protected visible supervisor 确认，Claude 通过 SessionEnd/SessionStart Hook 确认，OpenCode 通过临时 route reporter 确认，Pi 通过 extension session state 确认 | 仅限当前工作目录；成功回执在可见 TUI/Hook 控制调用完成后发送；active Codex thread 与运行中的 Claude background session 不接管 | 核心会话命令；四个 adapter 已形成统一入口 |
 | `/new` | daemon、standalone | 调用 adapter `createSession()`；不支持时返回提示 | 与 `/reset` 容易混淆 | 高级保留 |
 | `/new-session` | daemon、standalone | `/new` 的完全别名 | 增加命令面但语义清晰 | 候选合并；保留 `/new` 即可满足功能 |
