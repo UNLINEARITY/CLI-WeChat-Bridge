@@ -2422,6 +2422,9 @@ export class WechatDaemon {
         await activeSlot.runtime.createSession();
         appendDaemonLog(`new_session: adapter=${activeSlot.adapter}`);
         return;
+      case "broadcast":
+        await this.handleBroadcastCommand(message, command.text);
+        return;
       case "stop": {
         const interrupted = await activeSlot.runtime.interrupt();
         await this.queueWechatMessage(
@@ -2629,6 +2632,66 @@ export class WechatDaemon {
       return null;
     }
     return this.slots.get(this.activeAdapter) ?? null;
+  }
+
+  private isSlotBusyForBroadcast(slot: DaemonSlot): boolean {
+    const state = slot.runtime.getState();
+    if (slot.turns.hasActiveTask) return true;
+    if (slot.pendingConfirmations.length > 0 || slot.pendingUserInput) return true;
+    if (slot.deferredInputs.length > 0) return true;
+    if (state.status === "busy" || state.status === "awaiting_approval" || state.status === "awaiting_input") {
+      return true;
+    }
+    return false;
+  }
+
+  private async handleBroadcastCommand(
+    message: InboundWechatMessage,
+    text: string,
+  ): Promise<void> {
+    const startedSlots = DAEMON_ADAPTERS
+      .map((adapter) => this.slots.get(adapter))
+      .filter((slot): slot is DaemonSlot => Boolean(slot));
+    if (startedSlots.length === 0) {
+      await this.queueWechatMessage(
+        message.senderId,
+        "/all needs at least one running adapter. Open one first with /codex, /claude, /opencode, or /pi.",
+      );
+      return;
+    }
+
+    const busySlots = startedSlots.filter((slot) => this.isSlotBusyForBroadcast(slot));
+    if (busySlots.length > 0) {
+      const names = busySlots.map((slot) => slot.adapter).join(", ");
+      appendDaemonLog(`broadcast_canceled_busy: busy=[${names}]`);
+      await this.queueWechatMessage(
+        message.senderId,
+        `/all canceled: ${busySlots.length > 1 ? "these workers are" : "this worker is"} still busy — ${names}. Wait for the current replies or use /stop first.`,
+      );
+      return;
+    }
+
+    const broadcastMessage: InboundWechatMessage = { ...message, text };
+    const dispatched: string[] = [];
+    const skipped: string[] = [];
+    for (const adapter of DAEMON_ADAPTERS) {
+      const slot = this.slots.get(adapter);
+      if (!slot) {
+        skipped.push(adapter);
+        continue;
+      }
+      appendDaemonLog(`broadcast_input: adapter=${adapter} text=${truncatePreview(text)}`);
+      await this.dispatchInboundWechatText(broadcastMessage, slot);
+      dispatched.push(adapter);
+    }
+
+    const lines = [
+      `Broadcast dispatched to ${dispatched.length} ${dispatched.length > 1 ? "workers" : "worker"}: ${dispatched.join(", ")}. Each reply arrives prefixed with its adapter name.`,
+    ];
+    if (skipped.length > 0) {
+      lines.push(`Not started (skipped): ${skipped.join(", ")}. Start them with their /command to include them next time.`);
+    }
+    await this.queueWechatMessage(message.senderId, lines.join("\n"));
   }
 
   private async dispatchInboundWechatText(

@@ -372,6 +372,131 @@ function stdout(text: string): BridgeEvent {
   };
 }
 
+
+describe("wechat-daemon handlers: /all broadcast", () => {
+  type InboundMessageParams = {
+    senderId?: string;
+    text: string;
+    sessionId?: string;
+  };
+
+  function inboundMessage(params: InboundMessageParams): InboundWechatMessage {
+    return {
+      senderId: params.senderId ?? OPERATOR_ID,
+      sender: params.senderId ?? OPERATOR_ID,
+      sessionId: params.sessionId ?? OPERATOR_ID,
+      text: params.text,
+      attachments: [],
+      createdAt: new Date().toISOString(),
+      createdAtMs: Date.now(),
+    };
+  }
+
+  async function sendInbound(
+    daemon: WechatDaemon,
+    params: InboundMessageParams,
+  ): Promise<void> {
+    await (daemon as unknown as {
+      handleInboundMessage(message: InboundWechatMessage): Promise<void>;
+    }).handleInboundMessage(inboundMessage(params));
+  }
+
+  function lastNotice(env: FakeDaemonEnvironment): string {
+    return env.wecom.sent[env.wecom.sent.length - 1]!.text;
+  }
+
+  test("broadcasts to every started slot and lists skipped adapters", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "warm codex", conversationId: "conv-1" });
+    await forwardInput(daemon, { adapter: "pi", text: "warm pi", conversationId: "conv-2" });
+    for (const adapter of ["codex", "pi"] as const) {
+      env.runtime(adapter).emit({
+        type: "final_reply",
+        text: "warm done",
+        timestamp: new Date().toISOString(),
+      });
+      env.runtime(adapter).emit({
+        type: "task_complete",
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await tick(20);
+    env.wecom.sent.length = 0;
+
+    await sendInbound(daemon, { text: "/all compare notes on task X" });
+
+    expect(env.runtime("codex").inputs.at(-1)).toContain("compare notes on task X");
+    expect(env.runtime("pi").inputs.at(-1)).toContain("compare notes on task X");
+    const notice = lastNotice(env);
+    expect(notice).toContain("Broadcast dispatched to 2 workers: codex, pi.");
+    expect(notice).toContain("Not started (skipped): claude, opencode.");
+  });
+
+  test("cancels the whole broadcast when any started slot is busy", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "warm codex", conversationId: "conv-1" });
+    await forwardInput(daemon, { adapter: "pi", text: "warm pi", conversationId: "conv-2" });
+    // Turn 1 in flight on pi: turns.hasActiveTask is true until completion.
+    env.wecom.sent.length = 0;
+
+    await sendInbound(daemon, { text: "/all shared prompt" });
+
+    const notice = lastNotice(env);
+    expect(notice).toContain("/all canceled");
+    expect(notice).toContain("pi");
+    expect(env.runtime("codex").inputs).toHaveLength(1);
+    expect(env.runtime("pi").inputs).toHaveLength(1);
+  });
+
+  test("cancels when a slot has a pending approval", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "warm", conversationId: "conv-1" });
+    env.runtime("codex").emit({
+      type: "approval_required",
+      request: pendingApproval,
+      timestamp: new Date().toISOString(),
+    });
+    await tick();
+    env.wecom.sent.length = 0;
+
+    await sendInbound(daemon, { text: "/all anything" });
+
+    expect(lastNotice(env)).toContain("/all canceled");
+    expect(env.runtime("codex").inputs).toHaveLength(1);
+  });
+
+  test("answers with the standard guidance when no adapter slot is running", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+
+    await sendInbound(daemon, { text: "/all hello" });
+
+    expect(lastNotice(env)).toContain("No active terminal is selected.");
+  });
+
+  test("keeps the active adapter unchanged after a broadcast", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "warm", conversationId: "conv-1" });
+    await forwardInput(daemon, { adapter: "pi", text: "warm", conversationId: "conv-2" });
+    for (const adapter of ["codex", "pi"] as const) {
+      env.runtime(adapter).emit({
+        type: "task_complete",
+        timestamp: new Date().toISOString(),
+      });
+    }
+    await tick(20);
+    const activeBefore = daemon.getStatus().activeAdapter;
+
+    await sendInbound(daemon, { text: "/all ping everyone" });
+
+    expect(daemon.getStatus().activeAdapter).toBe(activeBefore);
+  });
+});
+
 describe("wechat-daemon handlers: send_text", () => {
   test("delivers text to the requested WeCom conversation", async () => {
     const env = new FakeDaemonEnvironment();

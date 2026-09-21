@@ -1577,6 +1577,12 @@ async function handleInboundMessage(params: {
     case "plan":
       await queueWechatMessage(message.senderId, await handleAdapterControl(adapter, message.senderId, systemCommand));
       return null;
+    case "broadcast":
+      await queueWechatMessage(
+        message.senderId,
+        "/all is only available in daemon mode. Start the daemon with wechat-daemon or wecom-daemon to broadcast to all workers.",
+      );
+      return null;
     case "status":
       await queueWechatMessage(
         message.senderId,

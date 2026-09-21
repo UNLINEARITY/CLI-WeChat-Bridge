@@ -8,7 +8,8 @@ export type BridgeControlCommand =
   | { type: "deny" }
   | { type: "answer"; raw: string }
   | { type: "model"; target?: string }
-  | { type: "plan"; enabled: boolean };
+  | { type: "plan"; enabled: boolean }
+  | { type: "broadcast"; text: string };
 
 /** Parse the canonical control command grammar shared by all channels. */
 export function parseBridgeControlCommand(
@@ -48,6 +49,8 @@ export function parseBridgeControlCommand(
       if (!argument || argument.toLowerCase() === "on") return { type: "plan", enabled: true };
       if (argument.toLowerCase() === "off") return { type: "plan", enabled: false };
       return null;
+    case "/all":
+      return argument ? { type: "broadcast", text: argument } : null;
     default:
       return null;
   }
