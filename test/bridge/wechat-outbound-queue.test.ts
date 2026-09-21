@@ -66,3 +66,54 @@ describe("pending WeChat outbound messages", () => {
     }
   });
 });
+
+describe("pending WeChat outbound queue hygiene", () => {
+  function tempStore() {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbound-"));
+    const filePath = path.join(directory, "pending.json");
+    return { directory, store: new PendingWechatMessageStore(filePath), filePath };
+  }
+
+  test("drops low-value contexts instead of queuing them", () => {
+    const { directory, store } = tempStore();
+    try {
+      expect(store.enqueue("u1", "mirror", "mirrored_user_input")).toBeNull();
+      expect(store.enqueue("u1", "notice", "notice")).toBeNull();
+      expect(store.enqueue("u1", "switched", "thread_switched")).toBeNull();
+      expect(store.enqueue("u1", "reply", "final_reply")).not.toBeNull();
+      expect(store.list()).toHaveLength(1);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("caps the backlog at ten entries, dropping the oldest first", () => {
+    const { directory, store } = tempStore();
+    try {
+      for (let i = 1; i <= 12; i += 1) {
+        store.enqueue("u1", `reply ${i}`, "final_reply");
+      }
+      const list = store.list();
+      expect(list).toHaveLength(10);
+      expect(list[0]!.text).toBe("reply 3");
+      expect(list.at(-1)!.text).toBe("reply 12");
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  test("expires entries older than the TTL on list and enqueue", () => {
+    const { directory, store, filePath } = tempStore();
+    try {
+      store.enqueue("u1", "old reply", "final_reply");
+      // Age the persisted entry past the 30-minute TTL.
+      const aged = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      aged.messages[0].queuedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
+      fs.writeFileSync(filePath, JSON.stringify(aged));
+
+      expect(new PendingWechatMessageStore(filePath).list()).toEqual([]);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

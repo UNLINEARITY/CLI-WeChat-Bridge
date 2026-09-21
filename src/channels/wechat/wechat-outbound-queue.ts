@@ -23,6 +23,28 @@ type PendingWechatMessageFile = {
   messages?: unknown;
 };
 
+/** Contexts worth redelivering after the channel recovers. */
+const PENDING_WORTHY_CONTEXTS = new Set<WechatSendContext>([
+  "final_reply",
+  "approval_required",
+  "user_input_required",
+  "task_failed",
+  "fatal_error",
+]);
+
+/** Drop queued messages older than this — stale replies are noise, not value. */
+const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
+/** Cap the backlog so one recovery never floods the chat. */
+const PENDING_MAX_MESSAGES = 10;
+
+function isExpired(message: PendingWechatMessage, now = Date.now()): boolean {
+  const queuedAtMs = Date.parse(message.queuedAt);
+  if (!Number.isFinite(queuedAtMs)) {
+    return true;
+  }
+  return now - queuedAtMs > PENDING_MAX_AGE_MS;
+}
+
 export function getPendingWechatMessagesFile(cwd: string): string {
   return getPendingChannelMessagesFile(cwd, "wechat");
 }
@@ -73,6 +95,7 @@ export class PendingWechatMessageStore {
   }
 
   list(): PendingWechatMessage[] {
+    this.compact();
     return this.messages.map((message) => ({
       ...message,
       target: message.target ? { ...message.target } : undefined,
@@ -90,6 +113,9 @@ export class PendingWechatMessageStore {
     if (!normalizedRecipientId || !normalizedText) {
       return null;
     }
+    if (!PENDING_WORTHY_CONTEXTS.has(context)) {
+      return null;
+    }
 
     const message: PendingWechatMessage = {
       id: crypto.randomUUID(),
@@ -100,8 +126,19 @@ export class PendingWechatMessageStore {
       target: target ? { ...target } : undefined,
     };
     this.messages.push(message);
+    this.compact();
     this.persist();
     return { ...message };
+  }
+
+  /** Drop expired entries and trim the backlog to the cap (oldest first). */
+  private compact(): void {
+    const now = Date.now();
+    const fresh = this.messages.filter((message) => !isExpired(message, now));
+    while (fresh.length > PENDING_MAX_MESSAGES) {
+      fresh.shift();
+    }
+    this.messages = fresh;
   }
 
   remove(id: string): boolean {
