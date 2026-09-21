@@ -13,5 +13,11 @@ tmp-codex-*.log
 plan/
 architecture/
 git-log.md
+
+# Internal planning/audit documents — local-only per AGENTS.md Mandatory Owner Workflow rule 3.
+# Kept untracked so a blanket `git add docs/` cannot pick them up accidentally.
+docs/channel-agnostic-orchestration-plan.md
+docs/turn-routing-hardening-plan.md
+docs/cli-compatibility-and-routing-audit.md
 .worktrees/
 .omc/

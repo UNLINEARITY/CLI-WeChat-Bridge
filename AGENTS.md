@@ -10,19 +10,30 @@ There are two runtime shapes:
 
 Runtime data now lives under `~/.cli-bridge` by default. Legacy data is copy-migrated from `~/.claude/channels/wechat` and from `CLAUDE_WECHAT_CHANNEL_DATA_DIR` only as a migration source. Use `CLI_BRIDGE_DATA_DIR` for the active data directory.
 
+## Mandatory Owner Workflow (Hard Rules)
+These rules are owner-imposed and override anything else in this file, including agent defaults:
+
+1. **No git writes without explicit approval.** Never create a commit, push, tag, or publish unless the owner approves that specific action in this session. Prepare the change, summarize what would be committed, and ask. "Ready to commit" means ask, not act.
+2. **No double-log writes without explicit instruction.** Never write to `log.md` or `git-log.md` unless the owner explicitly asks for that entry. When asked, keep the `## [日期] 标题` headers identical across both files.
+3. **Internal documents are local-only.** Planning, audit, and research documents that are not end-user documentation must never be staged, committed, pushed, or packaged. This includes `docs/channel-agnostic-orchestration-plan.md`, `docs/turn-routing-hardening-plan.md`, `docs/cli-compatibility-and-routing-audit.md`, and any future plan/audit/working notes. Only user-facing documentation belongs in git: `README.md`, `docs/releases/*`, `docs/architecture.md`, `docs/development.md`, `docs/configuration.md`, `docs/command-audit.md`, and similar.
+4. **No retroactive history edits.** Never rewrite published commits, tags, or release docs without direct instruction.
+
 ## Project Structure
 - `src/wechat`: iLink setup, channel config, long polling, message send, inbound media download/decryption, stale context-token handling, and transport logging.
+- `src/channels/wechat`: WeChat channel port, channel-neutral message conversion, and forwarding helpers on top of `src/wechat`.
 - `src/channels/wecom`: official smart-bot setup/pairing, WebSocket transport, message conversion, media transfer, and channel-specific reply formatting.
+- `src/core`: channel-neutral orchestration primitives — channel types and `BridgeChannelPort`, `routeBridgeMessage`, `InboundConversationContext`/`TurnCoordinator` turn ownership, bridge event forwarding, control-command parsing, inbound message claims, and shared text utilities. Keep orchestration logic channel-neutral here; channel specifics live under `src/channels/*` and `src/wechat`.
 - `src/bridge`: bridge lifecycle, adapter selection, controller orchestration, approvals, user-input requests, final-reply forwarding, locks, workspace state, process cleanup, and shared formatting.
 - `src/bridge/bridge-adapters.*.ts`: adapter-specific Codex, Claude Code, OpenCode, and Pi behavior. Keep adapter conditionals here or in closely related companion modules.
 - `src/companion`: visible local CLI companion launchers, IPC endpoint files, daemon delegation, and local companion proxy support.
 - `src/daemon`: persistent WeChat/WeCom daemon, daemon IPC, multi-slot switching, visible terminal auto-open, and pre-start cleanup of stale single bridges.
 - `src/runtime`: bridge-owned runtime host creation, including the Codex runtime host and legacy adapter runtime wrapper.
-- `src/media`: shared media/attachment metadata types.
+- `src/i18n`: localized user-facing strings.
+- `src/types` and `src/media`: shared type and attachment metadata definitions.
 - `src/commands` and `src/utils`: global command helpers and update checking.
 - `bin/*.mjs`: published CLI wrappers. These are tracked source files, not generated output.
-- `scripts`: release and packaging helpers, especially `publish-dual.mjs` and `smoke-global-install.mjs`.
-- `test/<area>` mirrors the runtime areas: `bridge`, `companion`, `daemon`, `wechat`, and `wecom`.
+- `scripts`: release and packaging helpers, especially `publish-dual.mjs`, `smoke-global-install.mjs`, and `smoke-cli-compatibility.mjs`.
+- `test/<area>` mirrors the runtime areas: `bridge`, `companion`, `core`, `daemon`, `wechat`, and `wecom`.
 - `docs/releases`: release notes and the release index. Keep English and Chinese notes aligned when preparing a release.
 
 ## Runtime State And Files
@@ -38,7 +49,7 @@ Default active state is in `~/.cli-bridge`:
 - `wecom/inbound-attachments/<date>/`: downloaded WeCom media files.
 - `inbound-message-claims/`: cross-process inbound message deduplication claims.
 
-Do not commit local credentials, runtime state, logs, generated `dist/`, `node_modules/`, or ignored local planning/artifact directories. `log.md` and `git-log.md` are intentionally local-only in this public repository; only edit them when the user explicitly asks for the repo's double log, and never stage, commit, push, publish, or package them.
+Do not commit local credentials, runtime state, logs, generated `dist/`, `node_modules/`, or ignored local planning/artifact directories. `log.md` and `git-log.md` are intentionally local-only in this public repository; only edit them when the user explicitly asks for the repo's double log, and never stage, commit, push, publish, or package them. Internal planning/audit/research documents are local-only in the same way (see Mandatory Owner Workflow).
 
 ## Build, Test, And Development Commands
 Install dependencies:
@@ -83,6 +94,7 @@ Packaging and global smoke validation:
 npm pack --dry-run --json
 npm run smoke:global -- --purge-global --clean-cache
 npm run smoke:global -- --purge-global --clean-cache --full
+npm run smoke:cli-compat
 ```
 
 The project runs TypeScript directly in source mode with Node 24 strip-types support, but published packages must ship compiled `dist/*.js`. Keep `prepack` and `npm run build` working before any npm release.
@@ -99,8 +111,9 @@ Use `bun:test`. Name files `*.test.ts` and place them under the matching `test/<
 
 Add focused regression coverage when changing:
 - bridge ownership, locks, stale lock cleanup, daemon takeover, or process reaping;
+- conversation routing, turn ownership, busy dispatch rejection, rollback, or slot output targeting (shared `TurnCoordinator` behavior);
 - daemon switching, visible CLI auto-open, daemon IPC, or same-cwd delegation;
-- adapter final replies, session/thread following, approvals, or Codex `request_user_input`;
+- adapter final replies, session/thread following, approvals, Codex `request_user_input`, or adapter task completion (`task_complete` must fire on every settled turn);
 - WeChat transport, retry classification, stale context-token handling, inbound media download, AES decryption, or attachment prompt injection;
 - global command wrappers, package metadata, release scripts, or npm install behavior.
 
@@ -112,6 +125,16 @@ For release-facing changes, run `npm run quality` plus package/smoke checks. For
 Daemon startup should clean stale or still-running single-bridge state automatically when possible. Do not push cleanup work onto the user if the code can safely detect and clear stale locks, dead endpoints, peer bridge processes, or orphan OpenCode processes. When changing cleanup logic, update daemon tests and make logs explicit enough to diagnose what was cleaned.
 
 Internal transient bridges must refuse to start when a live daemon owns the workspace. If an endpoint is stale, clear it and continue using existing helper functions.
+
+Visible CLI clients always start fresh sessions by default (`new`) in both daemon and direct-launch modes. Do not pre-create shared sessions for visible clients: Codex 0.155 persists app-server threads lazily, and resuming a fresh, not-yet-persisted thread id crashes the visible TUI with "no rollout found". Restores of already persisted threads remain available through explicit `--session-start-mode restore`, WeChat `/resume`, and reuse of an already connected visible window.
+
+## CLI Compatibility Maintenance
+The bridge tracks the latest stable CLI releases it depends on:
+- Codex validated range: 0.149.x through 0.155.x (see `isCodexVersionInCompatibilityRange`).
+- Claude Code, OpenCode, and Pi are validated against the latest stable releases via capability probes, not version ranges.
+- Pi 0.85 requires Node.js >= 22.19.0; launchers and the daemon enforce this before starting the visible TUI.
+
+`.github/workflows/cli-compatibility.yml` runs every Monday 04:23 UTC (and on demand), installs the latest stable CLIs, and runs `npm run smoke:cli-compat` (`scripts/smoke-cli-compatibility.mjs`) to verify Codex schema generation, Claude `--settings`, OpenCode server health, and Pi extension capabilities. It is deliberately not a required check; triage failures by comparing the smoke output against `src/bridge/bridge-adapters.*.ts` usage.
 
 ## WeChat, WeCom, Attachments, And Transport
 Inbound WeChat images and files are downloaded to `~/.cli-bridge/inbound-attachments/<date>/` and forwarded to the selected CLI as local paths in the prompt. This project saves and exposes attachment paths; it does not implement OCR or document parsing inside the bridge.
@@ -149,7 +172,7 @@ README badges cannot natively combine download counts for two npm packages. Keep
 ## Release Process
 Use this checklist for a normal release:
 1. Inspect the real diff since the previous release/tag and identify user-visible changes.
-2. Update `package.json` and `package-lock.json` to the target version.
+2. Update `package.json`, `package-lock.json`, and the root workspace `version` in `bun.lock` to the target version.
 3. Update `README.md` only for real workflow, install, migration, or compatibility changes. Keep README edits additive and preserve existing user-authored prose unless a broader rewrite is explicitly requested.
 4. Add or update `docs/releases/<version>.md`, `docs/releases/<version>_CN.md`, and `docs/releases/README.md`.
 5. Run `npm run quality`.
@@ -157,18 +180,19 @@ Use this checklist for a normal release:
 7. Run `npm run smoke:global -- --purge-global --clean-cache`; use `--full` when validating the complete release path.
 8. Run `npm publish --dry-run --access public`.
 9. Run `npm run publish:dual -- --dry-run`.
-10. Publish with `npm run publish:dual -- --otp <code>` when npm requests OTP, or without `--otp` when web auth is already valid.
-11. Verify both registries:
+10. Push `main` and the plain `x.y.z` tag together (for example `git push origin main 1.1.8`). The Release workflow runs the full quality gate and creates the GitHub Release whose body combines `docs/releases/<tag>_CN.md` with GitHub's auto-generated changelog. The tag must point at a commit that contains both the release notes and `.github/workflows/release.yml`; verify the workflow run and the resulting release before proceeding. Do not publish npm packages before the tag-release gate passes.
+11. Publish with `npm run publish:dual -- --otp <code>` when npm requests OTP, or without `--otp` when web auth is already valid.
+12. Verify both registries:
 ```bash
 npm view cli-wechat-bridge version dist-tags --registry=https://registry.npmjs.org/ --json
 npm view @unlinearity/cli-wechat-bridge version dist-tags --registry=https://registry.npmjs.org/ --json
 ```
-12. Only after live registry verification, update `log.md` and `git-log.md` if the user asks for double log entries.
+13. Only after live registry verification, update `log.md` and `git-log.md` if the user asks for double log entries.
 
 If npm returns `EOTP`, `E401`, or `E404` during real publish, record it as an auth/registry blocker until registry reads prove otherwise. Dry-runs are validation, not publication.
 
 ## Commit And PR Guidance
-Use Conventional Commit prefixes such as `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`, and `chore:`. Keep subjects imperative and behavior-focused, for example `fix: preserve daemon visible companion occupancy`.
+All commits require explicit owner approval first (see Mandatory Owner Workflow). Use Conventional Commit prefixes such as `feat:`, `fix:`, `refactor:`, `docs:`, `test:`, `build:`, and `chore:`. Keep subjects imperative and behavior-focused, for example `fix: preserve daemon visible companion occupancy`.
 
 PRs should describe:
 - affected adapter(s) or runtime area;
@@ -177,7 +201,7 @@ PRs should describe:
 - commands run;
 - relevant WeChat output or terminal snippets for approval, onboarding, daemon switching, or message formatting changes.
 
-Before committing, inspect `git status --short --ignored`. Do not commit ignored local runtime state or the local-only `log.md` and `git-log.md` files.
+Before committing, inspect `git status --short --ignored`. Do not commit ignored local runtime state, the local-only `log.md` and `git-log.md`, or local-only internal planning/audit documents (see Mandatory Owner Workflow).
 
 ## Troubleshooting Workflow For Agents
 When behavior is unclear, inspect real state before changing code:
