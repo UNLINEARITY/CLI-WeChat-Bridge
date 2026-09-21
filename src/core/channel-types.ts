@@ -40,6 +40,26 @@ export type ChannelInboundMessage = {
   metadata?: Record<string, unknown>;
 };
 
+/**
+ * Why an outbound message is being sent. The name is historical; the values
+ * are channel-neutral and live here so the core stays free of channel-layer
+ * imports. `channels/wechat/wechat-forwarding.ts` re-exports it for existing
+ * callers until the Phase 4 rename.
+ */
+export type WechatSendContext =
+  | "final_reply"
+  | "message"
+  | "notice"
+  | "approval_required"
+  | "user_input_required"
+  | "mirrored_user_input"
+  | "session_switched"
+  | "thread_switched"
+  | "task_failed"
+  | "fatal_error"
+  | "inbound_error"
+  | "thinking";
+
 export type ChannelOutputKind =
   | "status"
   | "notice"

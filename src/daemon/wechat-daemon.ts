@@ -40,6 +40,7 @@ import type {
 import {
   buildOneTimeCode,
   buildWechatInboundPrompt,
+  type WechatInboundPromptAttachment,
   formatApprovalMessage,
   formatDuration,
   formatMirroredUserInputMessage,
@@ -61,14 +62,8 @@ import {
   shouldForwardSessionSwitchEvent,
 } from "../bridge/bridge-session-resume.ts";
 import {
-  WECHAT_SEND_MAX_ATTEMPTS,
-  computeWechatSendRetryDelayMs,
   formatUserFacingBridgeFatalError,
   formatUserFacingInboundError,
-  formatWechatContextTokenStaleLogEntry,
-  formatWechatSendFailureLogEntry,
-  isWechatContextUnavailableError,
-  isRetryableWechatSendError,
   shouldForwardBridgeEventToWechat,
   shouldSuppressCodexLocalThreadNotice,
   type WechatSendContext,
@@ -97,7 +92,6 @@ import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
   describeWechatTransportError,
-  isWechatContextTokenStaleError,
   WeChatTransport,
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
@@ -113,6 +107,7 @@ import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
 import { InboundConversationContext } from "../core/conversation-routing.ts";
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
+import { resolveDaemonOutboundTarget } from "../core/outbound-target.ts";
 import { handleAdapterControl, invalidateModelSnapshot } from "../bridge/adapter-control.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
@@ -120,10 +115,12 @@ import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
 import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
 import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
-import {
-  buildWecomInboundPrompt,
-  formatWecomVisibleText,
-} from "../channels/wecom/wecom-message.ts";
+import { WecomChannelDriver } from "../channels/wecom/wecom-driver.ts";
+import { WechatChannelDriver } from "../channels/wechat/wechat-driver.ts";
+import type {
+  ChannelDriver,
+  ChannelSendResult,
+} from "../core/channel-driver.ts";
 import type {
   BridgeChannelId,
   BridgeChannelPort,
@@ -181,14 +178,7 @@ type DaemonSlot = {
   eventForwardChain: Promise<void>;
 };
 
-type WechatSendResult =
-  | { status: "sent" }
-  | {
-      status: "context_unavailable";
-      error: unknown;
-      target?: ChannelConversationRef;
-    }
-  | { status: "failed" };
+type WechatSendResult = ChannelSendResult;
 
 const MODULE_FILE = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_FILE);
@@ -231,23 +221,6 @@ function computePollRetryDelayMs(consecutiveFailures: number): number {
   const normalizedFailures = Math.max(1, consecutiveFailures);
   const exponent = Math.min(normalizedFailures - 1, 5);
   return Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * 2 ** exponent);
-}
-
-function toWecomOutputKind(context: WechatSendContext): ChannelOutputKind {
-  switch (context) {
-    case "notice":
-    case "thinking":
-    case "final_reply":
-    case "approval_required":
-    case "user_input_required":
-    case "task_failed":
-    case "fatal_error":
-      return context;
-    case "mirrored_user_input":
-      return "mirrored_input";
-    default:
-      return "notice";
-  }
 }
 
 function toWechatSendContext(kind: ChannelOutputKind): WechatSendContext {
@@ -879,6 +852,7 @@ class WechatDaemon {
   private readonly profile?: string;
   private readonly authorizedUserId: string;
   private readonly transport: WeChatTransport;
+  private readonly channelDriver: ChannelDriver;
   private readonly channelId: BridgeChannelId;
   private readonly wecomTransport: WecomTransport | null;
   private readonly inboundConversationContext =
@@ -906,6 +880,7 @@ class WechatDaemon {
     authorizedUserId: string;
     transport: WeChatTransport;
     channelId?: BridgeChannelId;
+    accountId?: string;
     wecomTransport?: WecomTransport | null;
   }) {
     this.cwd = params.cwd;
@@ -914,12 +889,25 @@ class WechatDaemon {
     this.transport = params.transport;
     this.channelId = params.channelId ?? "wechat";
     this.wecomTransport = params.wecomTransport ?? null;
-    this.fallbackConversation = {
-      channelId: this.channelId,
-      conversationId: params.authorizedUserId,
-      recipientId: params.authorizedUserId,
-      metadata: this.channelId === "wecom" ? { chatType: "direct" } : undefined,
-    };
+    this.channelDriver = this.wecomTransport
+      ? new WecomChannelDriver({
+          transport: this.wecomTransport,
+          accountId: params.accountId,
+          operatorId: params.authorizedUserId,
+          logError,
+        })
+      : new WechatChannelDriver({
+          transport: this.transport,
+          logError,
+          buildInboundPrompt: (text, attachments) =>
+            buildWechatInboundPrompt(
+              text,
+              attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
+                attachment.kind === "image" || attachment.kind === "file"),
+            ),
+        });
+    this.fallbackConversation = this.channelDriver.defaultConversation()
+      ?? this.channelDriver.directConversation(params.authorizedUserId);
     this.pendingWechatMessages = new PendingWechatMessageStore(
       this.channelId === "wechat"
         ? getPendingWechatMessagesFile(this.cwd)
@@ -1020,9 +1008,9 @@ class WechatDaemon {
 
   async runPollLoop(): Promise<void> {
     let consecutivePollFailures = 0;
-    if (this.wecomTransport) {
-      this.wecomTransport.setHandlers({
-        onMessage: async (channelMessage) => {
+    if (this.channelDriver.start) {
+      await this.channelDriver.start({
+        onInboundMessage: async (channelMessage) => {
           if (this.shutdownPromise) {
             return;
           }
@@ -1038,41 +1026,39 @@ class WechatDaemon {
             },
           );
         },
-        onUnauthorized: async (senderId, chatType) => {
+        onUnauthorizedSender: async (senderId, chatType) => {
           appendDaemonLog(
             `wecom_unauthorized: sender=${senderId} chat_type=${chatType}`,
           );
           if (chatType === "direct") {
-            await this.wecomTransport!.sendText(
-              {
-                channelId: "wecom",
-                conversationId: senderId,
-                recipientId: senderId,
-                metadata: { chatType: "direct" },
-              },
-              "Unauthorized.",
-              "notice",
-            );
+            const result = await this.channelDriver.sendText({
+              target: this.channelDriver.directConversation(senderId),
+              text: "Unauthorized.",
+              context: "notice",
+              log: appendDaemonLog,
+            });
+            if (result.status !== "sent") {
+              logError(`Failed to reply unauthorized notice to ${senderId}`);
+            }
           }
         },
-        onFatal: async (error) => {
+        onChannelFatal: async (error: Error) => {
           appendDaemonLog(`wecom_fatal_error: ${error.message}`);
           await this.shutdown();
         },
-        onConnected: async () => {
+        onChannelConnected: async () => {
           if (this.pendingWechatMessages.list().length > 0) {
             await this.flushPendingWechatMessages();
           }
         },
       });
-      this.wecomTransport.start();
-      await this.wecomTransport.waitUntilConnected();
+      await this.channelDriver.waitUntilReady?.();
     }
 
-    log(`${this.channelId === "wecom" ? "WeCom" : "WeChat"} daemon is ready.`);
+    log(`${this.channelDriver.displayName} daemon is ready.`);
     log(`Working directory: ${this.cwd}`);
     log(
-      `Switch from ${this.channelId === "wecom" ? "WeCom" : "WeChat"} with /codex, /claude, /opencode, or /pi.`,
+      `Switch from ${this.channelDriver.displayName} with /codex, /claude, /opencode, or /pi.`,
     );
     appendDaemonLog(`started: channel=${this.channelId} cwd=${this.cwd}`);
 
@@ -1084,7 +1070,7 @@ class WechatDaemon {
     });
     await this.queueWechatMessage(this.authorizedUserId, welcomeText);
 
-    if (this.channelId === "wecom") {
+    if (this.channelDriver.capabilities.pushInbound) {
       while (!this.shutdownPromise) {
         await delay(1_000);
       }
@@ -1606,7 +1592,7 @@ class WechatDaemon {
     slot.controller.syncLocalClientEndpoint();
     const adapterState = slot.runtime.getState();
     const channelPort = this.createWechatChannelPort(slot.adapter);
-    const eventTarget = this.channelId === "wecom"
+    const eventTarget = this.channelDriver.capabilities.multiConversation
       ? this.resolveSlotOutputTarget(slot)
       : this.fallbackConversation;
     const eventTask = slot.turns.activeTask;
@@ -1758,7 +1744,7 @@ class WechatDaemon {
 
   private bindCurrentWecomConversation(slot: DaemonSlot | null): void {
     const conversation = this.inboundConversationContext.get();
-    if (this.channelId !== "wecom" || !slot || !conversation) {
+    if (!this.channelDriver.capabilities.multiConversation || !slot || !conversation) {
       return;
     }
     slot.turns.observeConversation(conversation);
@@ -1768,9 +1754,7 @@ class WechatDaemon {
     if (message.senderId !== this.authorizedUserId) {
       await this.queueWechatMessage(
         message.senderId,
-        this.channelId === "wecom"
-          ? "Unauthorized. This daemon only accepts messages from the paired WeCom operator."
-          : "Unauthorized. This daemon only accepts messages from the configured WeChat owner.",
+        `Unauthorized. This daemon only accepts messages from ${this.channelDriver.operatorDescription}.`,
       );
       return;
     }
@@ -1912,7 +1896,7 @@ class WechatDaemon {
         },
       });
       if (
-        this.channelId === "wecom" &&
+        this.channelDriver.capabilities.multiConversation &&
         this.inboundConversationContext.get() &&
         currentSlot.turns.activeTask &&
         currentSlot.turns.activeTask !== previousTask
@@ -2007,7 +1991,7 @@ class WechatDaemon {
         if (!isWechatResumeEnabled(activeSlot.adapter)) {
           await this.queueWechatMessage(
             message.senderId,
-            `${this.channelId === "wecom" ? "WeCom" : "WeChat"} /resume is disabled for ${activeSlot.adapter} in daemon mode. Use /resume directly inside the visible terminal; the remote channel will follow that local session.`,
+            `${this.channelDriver.displayName} /resume is disabled for ${activeSlot.adapter} in daemon mode. Use /resume directly inside the visible terminal; the remote channel will follow that local session.`,
           );
           return;
         }
@@ -2280,7 +2264,7 @@ class WechatDaemon {
       startedAt: Date.now(),
       inputPreview: truncatePreview(preview, 180),
     };
-    const inboundConversation = this.channelId === "wecom"
+    const inboundConversation = this.channelDriver.capabilities.multiConversation
       ? this.inboundConversationContext.get()
       : undefined;
     await slot.turns.dispatch({
@@ -2300,9 +2284,7 @@ class WechatDaemon {
           `forwarded_input: adapter=${slot.adapter} text=${truncatePreview(preview)}`,
         );
         await slot.runtime.sendInput(
-          this.channelId === "wecom"
-            ? buildWecomInboundPrompt(message.text, message.attachments)
-            : buildWechatInboundPrompt(message.text, message.attachments),
+          this.channelDriver.buildInboundPrompt(message.text, message.attachments),
         );
       },
     });
@@ -2332,101 +2314,25 @@ class WechatDaemon {
     context: WechatSendContext = "message",
     targetOverride?: ChannelConversationRef,
   ): Promise<WechatSendResult> {
-    if (this.channelId === "wecom") {
-      const activeSlot = this.getActiveSlot();
-      const target = targetOverride ??
-        (senderId === this.authorizedUserId
-          ? this.inboundConversationContext.get() ??
-            (activeSlot ? this.resolveSlotOutputTarget(activeSlot) : this.fallbackConversation)
-          : {
-              channelId: "wecom",
-              conversationId: senderId,
-              recipientId: senderId,
-              metadata: { chatType: "direct" },
-            });
-      const startedAtMs = Date.now();
-      appendDaemonLog(
-        `wecom_send_started: context=${context} recipient=${target.recipientId} chars=${Array.from(text).length}`,
-      );
-      try {
-        await this.wecomTransport!.sendText(
-          target,
-          formatWecomVisibleText(text),
-          toWecomOutputKind(context),
-        );
-        appendDaemonLog(
-          `wecom_send_completed: context=${context} recipient=${target.recipientId} elapsed_ms=${Date.now() - startedAtMs}`,
-        );
-        return { status: "sent" };
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        appendDaemonLog(
-          `wecom_send_failed: context=${context} recipient=${target.recipientId} error=${truncatePreview(message, 400)}`,
-        );
-        logError(`Failed to send WeCom ${context}: ${message}`);
-        return { status: "context_unavailable", error, target };
-      }
-    }
-
-    const startedAtMs = Date.now();
-    appendDaemonLog(
-      `wechat_send_started: context=${context} recipient=${senderId} chars=${Array.from(text).length}`,
-    );
-    for (let attempt = 1; attempt <= WECHAT_SEND_MAX_ATTEMPTS; attempt += 1) {
-      try {
-        await this.transport.sendText(senderId, text);
-        appendDaemonLog(
-          `wechat_send_completed: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
-        );
-        return { status: "sent" };
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          appendDaemonLog(
-            `wechat_send_timeout: context=${context} recipient=${senderId} attempt=${attempt} elapsed_ms=${Date.now() - startedAtMs}`,
-          );
-        }
-        if (isWechatContextUnavailableError(error)) {
-          if (isWechatContextTokenStaleError(error)) {
-            this.transport.clearCachedContextToken(senderId);
-          }
-          appendDaemonLog(
-            isWechatContextTokenStaleError(error)
-              ? formatWechatContextTokenStaleLogEntry({
-                  context,
-                  recipientId: senderId,
-                  error,
-                })
-              : formatWechatSendFailureLogEntry({
-                  context,
-                  recipientId: senderId,
-                  error,
-                }),
-          );
-          return { status: "context_unavailable", error };
-        }
-
-        if (attempt < WECHAT_SEND_MAX_ATTEMPTS && isRetryableWechatSendError(error)) {
-          const delayMs = computeWechatSendRetryDelayMs(attempt);
-          appendDaemonLog(
-            `wechat_send_retry: context=${context} recipient=${senderId} attempt=${attempt} delay_ms=${delayMs} error=${truncatePreview(describeWechatTransportError(error), 400)}`,
-          );
-          await delay(delayMs);
-          continue;
-        }
-
-        logError(`Failed to send WeChat ${context}: ${describeWechatTransportError(error)}`);
-        appendDaemonLog(
-          formatWechatSendFailureLogEntry({
-            context,
-            recipientId: senderId,
-            error,
-          }),
-        );
-        return { status: "failed" };
-      }
-    }
-
-    return { status: "failed" };
+    const activeSlot = this.getActiveSlot();
+    const target = resolveDaemonOutboundTarget({
+      senderId,
+      operatorId: this.authorizedUserId,
+      override: targetOverride,
+      multiConversation: this.channelDriver.capabilities.multiConversation,
+      inboundConversation: this.channelDriver.capabilities.multiConversation
+        ? this.inboundConversationContext.get()
+        : null,
+      activeSlotTarget: activeSlot ? this.resolveSlotOutputTarget(activeSlot) : null,
+      fallbackConversation: this.fallbackConversation,
+      directConversation: (id) => this.channelDriver.directConversation(id),
+    });
+    return this.channelDriver.sendText({
+      target,
+      text,
+      context,
+      log: appendDaemonLog,
+    });
   }
 
   private queueWechatMessage(
@@ -2436,7 +2342,7 @@ class WechatDaemon {
     targetOverride?: ChannelConversationRef,
   ): Promise<boolean> {
     const activeSlot = this.getActiveSlot();
-    const queuedTarget = this.channelId === "wecom" && senderId === this.authorizedUserId
+    const queuedTarget = this.channelDriver.capabilities.multiConversation && senderId === this.authorizedUserId
       ? targetOverride ??
         this.inboundConversationContext.get() ??
         (activeSlot ? this.resolveSlotOutputTarget(activeSlot) : this.fallbackConversation)
@@ -2448,7 +2354,7 @@ class WechatDaemon {
         context,
         queuedTarget,
       );
-      if (result.status === "context_unavailable") {
+      if (result.status === "target_stale") {
         const pending = this.pendingWechatMessages.enqueue(
           senderId,
           text,
@@ -2481,7 +2387,7 @@ class WechatDaemon {
           );
           continue;
         }
-        if (result.status === "context_unavailable") {
+        if (result.status === "target_stale") {
           break;
         }
         appendDaemonLog(
@@ -2997,6 +2903,7 @@ export async function runDaemon(
     authorizedUserId: credentials.userId,
     transport: new WeChatTransport({ log, logError }),
     channelId: options.channelId,
+    accountId: wecomAccount?.botId,
     wecomTransport: wecomAccount
       ? new WecomTransport({
           account: wecomAccount,
