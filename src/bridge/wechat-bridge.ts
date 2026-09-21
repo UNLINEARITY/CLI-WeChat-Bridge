@@ -794,6 +794,11 @@ async function main(): Promise<void> {
     } catch {
       // Best effort shutdown.
     }
+    try {
+      await channelDriver.endAllTyping?.();
+    } catch {
+      // Best effort shutdown.
+    }
     controller.clearLocalClientEndpoint();
     stateStore.releaseLock();
   };
@@ -966,7 +971,10 @@ async function main(): Promise<void> {
                     });
                   },
                 });
-                return result.status === "dispatched" ? nextActiveTask : null;
+                if (result.status === "dispatched") {
+                void channelDriver.beginTyping?.(message.senderId);
+              }
+              return result.status === "dispatched" ? nextActiveTask : null;
               },
               deferInboundMessage: async (nextMessage) => {
                 deferredInboundMessages.push({
@@ -1183,6 +1191,9 @@ async function main(): Promise<void> {
                   });
                 },
               });
+              if (result.status === "dispatched") {
+                void channelDriver.beginTyping?.(message.senderId);
+              }
               return result.status === "dispatched" ? nextActiveTask : null;
             },
             deferInboundMessage: async (nextMessage) => {
@@ -1370,6 +1381,7 @@ function wireAdapterEvents(params: {
         }
       },
       finalReply: (next) => {
+        void channelDriver.endTyping?.(authorizedUserId);
         lastFinalReplyAtMs = Date.now();
         stateStore.appendLog(`final_reply: ${truncatePreview(next.text)}`);
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
@@ -1468,6 +1480,7 @@ function wireAdapterEvents(params: {
         void maybeDrainDeferredInboundMessages();
       },
       taskComplete: () => {
+        void channelDriver.endTyping?.(authorizedUserId);
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           stateStore.clearPendingUserInput();
@@ -1476,6 +1489,7 @@ function wireAdapterEvents(params: {
         }));
       },
       taskFailed: (next) => {
+        void channelDriver.endTyping?.(authorizedUserId);
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
           stateStore.clearPendingConfirmation();
           stateStore.clearPendingUserInput();
@@ -1485,6 +1499,7 @@ function wireAdapterEvents(params: {
         }));
       },
       fatalError: (next) => {
+        void channelDriver.endTyping?.(authorizedUserId);
         logError(next.message);
         stateStore.appendLog(`fatal_error: ${next.message}`);
         stateStore.clearPendingConfirmation();

@@ -1248,6 +1248,11 @@ export class WechatDaemon {
       // Best effort shutdown.
     }
     try {
+      await this.channelDriver.endAllTyping?.();
+    } catch {
+      // Best effort shutdown.
+    }
+    try {
       this.wecomTransport?.stop();
     } catch {
       // Best effort shutdown.
@@ -1991,6 +1996,7 @@ export class WechatDaemon {
         }
       },
       finalReply: (next) => {
+        void this.channelDriver.endTyping?.(this.authorizedUserId);
         slot.lastFinalReplyAtMs = Date.now();
         appendDaemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
@@ -2070,6 +2076,7 @@ export class WechatDaemon {
         }
       },
       taskComplete: () => {
+        void this.channelDriver.endTyping?.(this.authorizedUserId);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(() => {
           slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
@@ -2080,6 +2087,7 @@ export class WechatDaemon {
         }));
       },
       taskFailed: (next) => {
+        void this.channelDriver.endTyping?.(this.authorizedUserId);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
           slot.pendingConfirmations = [];
           slot.pendingUserInput = null;
@@ -2091,6 +2099,7 @@ export class WechatDaemon {
         }));
       },
       fatalError: (next) => {
+        void this.channelDriver.endTyping?.(this.authorizedUserId);
         logError(`${slot.adapter}: ${next.message}`);
         appendDaemonLog(`fatal_error: adapter=${slot.adapter} message=${next.message}`);
         slot.pendingConfirmations = [];
@@ -2707,7 +2716,7 @@ export class WechatDaemon {
     const inboundConversation = this.channelDriver.capabilities.multiConversation
       ? conversationOverride ?? this.inboundConversationContext.get()
       : undefined;
-    return slot.turns.dispatch({
+    const dispatchResult = await slot.turns.dispatch({
       task: nextTask,
       conversation: inboundConversation,
       onBusy: async () => {
@@ -2730,6 +2739,10 @@ export class WechatDaemon {
         );
       },
     });
+    if (dispatchResult.status === "dispatched") {
+      void this.channelDriver.beginTyping?.(message.senderId);
+    }
+    return dispatchResult;
   }
 
   private queueWechatTextAction<T>(action: () => Promise<T>): Promise<T> {

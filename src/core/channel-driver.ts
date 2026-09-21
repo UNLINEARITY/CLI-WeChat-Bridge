@@ -90,6 +90,13 @@ export interface ChannelDriver {
   /** Prompt text handed to the CLI adapter for one inbound message. */
   buildInboundPrompt(text: string, attachments: ChannelAttachment[]): string;
 
+  /** Show a "typing…" indicator for a recipient while a remote turn runs. */
+  beginTyping?(recipientId: string): Promise<void>;
+  /** Stop the indicator started by {@link beginTyping}. */
+  endTyping?(recipientId: string): Promise<void>;
+  /** Stop every active indicator; called during shutdown. */
+  endAllTyping?(): Promise<void>;
+
   /** Visible formatting for outbound text; identity when not implemented. */
   formatVisibleText?(text: string): string;
 }

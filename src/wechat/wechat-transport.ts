@@ -1235,6 +1235,8 @@ function buildInboundAttachmentFilePath(params: {
   return path.join(directory, `${uniquePrefix}-${safeFileName}`);
 }
 
+const WECHAT_TYPING_TIMEOUT_MS = 8_000;
+
 export class WeChatTransport {
   private readonly logger: TransportLogger;
   private readonly recentMessageKeys = new Set<string>();
@@ -1467,6 +1469,79 @@ export class WeChatTransport {
     }
 
     return { attachments, failureLines };
+  }
+
+  /** Typing status values for {@link sendTyping}. 1 = typing, 2 = cancel. */
+  static readonly TYPING_STATUS = { TYPING: 1, CANCEL: 2 } as const;
+
+  /**
+   * Fetch the per-user typing ticket from ilink/bot/getconfig.
+   * Returns "" when the endpoint fails or reports no ticket.
+   */
+  async fetchTypingTicket(recipientId?: string): Promise<string> {
+    const account = this.requireAccount();
+    const resolvedRecipientId = recipientId?.trim() ||
+      [...this.contextTokenCache.keys()].at(-1);
+    if (!resolvedRecipientId) {
+      return "";
+    }
+    try {
+      const raw = await apiFetch({
+        baseUrl: account.baseUrl,
+        endpoint: "ilink/bot/getconfig",
+        body: JSON.stringify({
+          ilink_user_id: resolvedRecipientId,
+          ...(this.contextTokenCache.has(resolvedRecipientId)
+            ? { context_token: this.contextTokenCache.get(resolvedRecipientId) }
+            : {}),
+        }),
+        token: account.token,
+        timeoutMs: WECHAT_TYPING_TIMEOUT_MS,
+      });
+      const resp = JSON.parse(raw) as { ret?: number; typing_ticket?: string };
+      return resp.ret === 0 ? (resp.typing_ticket ?? "") : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /**
+   * Send or cancel a "typing…" indicator. Failures are logged only; the
+   * indicator is best-effort and never blocks message flow.
+   */
+  async sendTyping(
+    recipientId: string,
+    typingTicket: string,
+    status: 1 | 2,
+  ): Promise<boolean> {
+    if (!typingTicket) {
+      return false;
+    }
+    const account = this.requireAccount();
+    try {
+      const raw = await apiFetch({
+        baseUrl: account.baseUrl,
+        endpoint: "ilink/bot/sendtyping",
+        body: JSON.stringify({
+          ilink_user_id: recipientId,
+          typing_ticket: typingTicket,
+          status,
+        }),
+        token: account.token,
+        timeoutMs: WECHAT_TYPING_TIMEOUT_MS,
+      });
+      const resp = JSON.parse(raw) as { ret?: number; errmsg?: string };
+      if (resp.ret !== undefined && resp.ret !== 0) {
+        this.logger.logError(`sendTyping ret=${resp.ret} errmsg=${resp.errmsg ?? "(none)"}`);
+        return false;
+      }
+      return true;
+    } catch (error) {
+      this.logger.logError(
+        `sendTyping failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
   }
 
   async sendText(senderId: string, text: string): Promise<void> {
