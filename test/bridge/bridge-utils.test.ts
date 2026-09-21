@@ -35,7 +35,6 @@ import {
   parseSystemCommand,
   parseWechatControlCommand,
   shouldDropStartupBacklogMessage,
-  splitWechatTextIntoChunks,
   WECHAT_TEXT_CHUNK_MAX_CHARS,
 } from "../../src/bridge/bridge-utils.ts";
 
@@ -102,31 +101,6 @@ describe("user input request helpers", () => {
   });
 });
 
-describe("splitWechatTextIntoChunks", () => {
-  test("keeps short text as a single chunk", () => {
-    expect(splitWechatTextIntoChunks("hello")).toEqual(["hello"]);
-    expect(splitWechatTextIntoChunks("   ")).toEqual([]);
-  });
-
-  test("splits long text into bounded chunks preferring newline boundaries", () => {
-    const paragraph = "段落内容".repeat(80); // 320 chars
-    const text = Array.from({ length: 8 }, () => paragraph).join("\n");
-    const chunks = splitWechatTextIntoChunks(text);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(WECHAT_TEXT_CHUNK_MAX_CHARS);
-    }
-    expect(chunks.join("\n")).toBe(text);
-  });
-
-  test("hard-splits text without newlines", () => {
-    const text = "x".repeat(WECHAT_TEXT_CHUNK_MAX_CHARS * 2 + 100);
-    const chunks = splitWechatTextIntoChunks(text);
-    expect(chunks.length).toBe(3);
-    expect(chunks.join("")).toBe(text);
-  });
-});
 
 describe("parseSystemCommand", () => {
   test("parses supported control commands", () => {

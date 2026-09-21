@@ -3,7 +3,6 @@ import {
   formatFinalReplyMessage,
   parseWechatFinalReply,
   sanitizeWechatFinalReplyText,
-  splitWechatTextIntoChunks,
 } from "../../bridge/bridge-utils.ts";
 
 export type WechatFinalReplySender = {
@@ -32,30 +31,21 @@ export async function forwardWechatFinalReply(params: {
   const visibleText = formatFinalReplyMessage(adapter, sanitizedText).trim();
 
   if (visibleText) {
-    // Send long replies in bounded chunks: a single oversized sendmessage call
-    // can be rejected by the WeChat API, silently losing the whole reply.
-    const chunks = splitWechatTextIntoChunks(visibleText);
-    for (let index = 0; index < chunks.length; index += 1) {
-      const sent = await sender.sendText(chunks[index]!);
-      if (sent === false) {
-        // The send channel is failing (e.g. an expired context token).
-        // Report what was dropped instead of ending mid-reply silently;
-        // this notice itself is best effort and may also fail.
-        const remainingChunks = chunks.length - index - 1;
-        if (remainingChunks > 0 || parsed.attachments.length > 0) {
-          const parts: string[] = [];
-          if (remainingChunks > 0) {
-            parts.push(`${remainingChunks} reply chunk(s)`);
-          }
-          if (parsed.attachments.length > 0) {
-            parts.push(`${parsed.attachments.length} attachment(s)`);
-          }
-          await sender.sendText(
-            `[bridge] Reply delivery was interrupted; ${parts.join(" and ")} could not be sent. Send a new message to retry.`,
-          );
-        }
-        return;
+    // Send the reply as a single message, matching the official WeChat bot
+    // client: it posts the full text in one sendmessage call without
+    // chunking. A failed send surfaces through the sender's own retry and
+    // pending-queue handling instead of being split up.
+    const sent = await sender.sendText(visibleText);
+    if (sent === false) {
+      // The send channel is failing (e.g. an expired context token).
+      // Report what was dropped instead of ending silently; this notice
+      // itself is best effort and may also fail.
+      if (parsed.attachments.length > 0) {
+        await sender.sendText(
+          `[bridge] Reply delivery was interrupted; ${parsed.attachments.length} attachment(s) could not be sent. Send a new message to retry.`,
+        );
       }
+      return;
     }
   } else if (adapter === "opencode" && parsed.visibleText.trim()) {
     onEmptyVisibleReply?.({

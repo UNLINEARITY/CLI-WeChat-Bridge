@@ -1468,43 +1468,6 @@ export function isStrictApprovalModeEnabled(
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
-// Outbound WeChat text size cap shared by the streaming OutputBatcher and the
-// final-reply forwarder. Long replies sent as a single sendmessage call can be
-// rejected by the server, which previously made long final replies vanish.
-export const WECHAT_TEXT_CHUNK_MAX_CHARS = 1_200;
-
-export function splitWechatTextIntoChunks(
-  text: string,
-  maxChars = WECHAT_TEXT_CHUNK_MAX_CHARS,
-): string[] {
-  const normalized = text.trim();
-  if (!normalized) {
-    return [];
-  }
-  if (normalized.length <= maxChars) {
-    return [normalized];
-  }
-
-  const chunks: string[] = [];
-  let remaining = normalized;
-  while (remaining.length > maxChars) {
-    // Prefer breaking at a newline reasonably close to the cap so paragraphs
-    // stay intact; fall back to a hard split.
-    const window = remaining.slice(0, maxChars + 1);
-    const newlineIndex = window.lastIndexOf("\n");
-    const splitIndex = newlineIndex > maxChars / 2 ? newlineIndex : maxChars;
-    const chunk = remaining.slice(0, splitIndex).trim();
-    if (chunk) {
-      chunks.push(chunk);
-    }
-    remaining = remaining.slice(splitIndex).trim();
-  }
-  if (remaining) {
-    chunks.push(remaining);
-  }
-  return chunks;
-}
-
 export function shouldDropStartupBacklogMessage(
   createdAtMs: number | undefined,
   bridgeStartedAtMs: number,
