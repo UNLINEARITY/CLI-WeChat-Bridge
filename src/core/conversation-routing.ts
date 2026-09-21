@@ -30,6 +30,7 @@ export type TurnOwnershipState<TTask> = {
 export type TurnLease<TTask> = {
   task: TTask;
   previousConversation?: ChannelConversationRef | null;
+  previousLastConversation?: ChannelConversationRef | null;
 };
 
 export function tryBeginTurn<TTask>(
@@ -44,6 +45,7 @@ export function tryBeginTurn<TTask>(
   const lease: TurnLease<TTask> = {
     task,
     previousConversation: state.activeConversation,
+    previousLastConversation: state.lastConversation,
   };
   state.activeTask = task;
   if (conversation) {
@@ -56,6 +58,7 @@ export function tryBeginTurn<TTask>(
 export function rollbackTurn<TTask>(
   state: TurnOwnershipState<TTask>,
   lease: TurnLease<TTask>,
+  options: { restoreLastConversation?: boolean } = {},
 ): boolean {
   if (state.activeTask !== lease.task) {
     return false;
@@ -63,6 +66,9 @@ export function rollbackTurn<TTask>(
 
   state.activeTask = null;
   state.activeConversation = lease.previousConversation;
+  if (options.restoreLastConversation) {
+    state.lastConversation = lease.previousLastConversation;
+  }
   return true;
 }
 

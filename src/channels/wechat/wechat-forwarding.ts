@@ -10,6 +10,26 @@ import type { WechatSendContext } from "../../core/channel-types.ts";
 
 export type { WechatSendContext };
 
+export const WECHAT_SEND_CONTEXTS = [
+  "final_reply",
+  "message",
+  "notice",
+  "approval_required",
+  "user_input_required",
+  "mirrored_user_input",
+  "session_switched",
+  "thread_switched",
+  "task_failed",
+  "fatal_error",
+  "inbound_error",
+  "thinking",
+] as const satisfies readonly WechatSendContext[];
+
+export function isWechatSendContext(value: unknown): value is WechatSendContext {
+  return typeof value === "string" &&
+    (WECHAT_SEND_CONTEXTS as readonly string[]).includes(value);
+}
+
 export const WECHAT_SEND_MAX_ATTEMPTS = 3;
 export const CODEX_LOCAL_THREAD_NOTICE_SUPPRESS_MS = 500;
 

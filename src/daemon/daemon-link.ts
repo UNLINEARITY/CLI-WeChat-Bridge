@@ -8,6 +8,7 @@ import {
 } from "../wechat/channel-config.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 import type { BridgeChannelId } from "../core/channel-types.ts";
+import type { WechatSendContext } from "../channels/wechat/wechat-forwarding.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode" | "pi";
@@ -39,6 +40,27 @@ export type DaemonStatus = {
   slots: DaemonSlotSummary[];
 };
 
+export type DaemonSendTextResult = {
+  sent: boolean;
+  recipientId: string;
+  conversationId?: string;
+};
+
+export type DaemonForwardInputResult = {
+  forwarded: boolean;
+  queued?: boolean;
+  queuePosition?: number;
+  adapter: DaemonAdapterKind;
+  conversationId: string;
+  reason?:
+    | "busy"
+    | "pending_approval"
+    | "pending_user_input"
+    | "deferred"
+    | "not_activated";
+  message?: string;
+};
+
 export type DaemonRequest =
   | {
       command: "ensure_slot";
@@ -58,6 +80,26 @@ export type DaemonRequest =
       openVisible?: boolean;
       sessionStartMode?: BridgeSessionStartMode;
       reuseExistingVisible?: boolean;
+    }
+  | {
+      command: "send_text";
+      channel?: BridgeChannelId;
+      recipientId: string;
+      conversationId?: string;
+      text: string;
+      context?: WechatSendContext;
+      metadata?: Record<string, string>;
+    }
+  | {
+      command: "forward_input";
+      adapter?: DaemonAdapterKind;
+      cwd?: string;
+      text: string;
+      senderId?: string;
+      conversationId?: string;
+      recipientId?: string;
+      contextToken?: string;
+      metadata?: Record<string, string>;
     }
   | { command: "status" }
   | { command: "shutdown" };

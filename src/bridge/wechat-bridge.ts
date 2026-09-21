@@ -30,6 +30,12 @@ import {
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
+import {
+  canDrainDeferredCodexInboundQueue,
+  formatDeferredCodexInboundQueueMessage,
+  isRetryableDeferredCodexDrainError,
+  shouldDeferCodexInboundMessage,
+} from "../core/bridge-defer.ts";
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
 import { resolveOutboundConversationTarget } from "../core/outbound-target.ts";
 import { handleAdapterControl } from "./adapter-control.ts";
@@ -58,8 +64,6 @@ import type {
   BridgeAdapterKind,
   BridgeLifecycleMode,
   BridgeSessionStartMode,
-  BridgeTurnOrigin,
-  BridgeWorkerStatus,
   PendingApproval,
   PendingUserInputRequest,
   UserInputRequest,
@@ -200,55 +204,12 @@ function toPendingUserInput(request: UserInputRequest | PendingUserInputRequest)
   };
 }
 
-export function shouldDeferCodexInboundMessage(params: {
-  adapter: BridgeAdapterKind;
-  status: BridgeWorkerStatus;
-  activeTurnOrigin?: BridgeTurnOrigin;
-  hasPendingConfirmation: boolean;
-  hasSystemCommand: boolean;
-}): boolean {
-  return (
-    params.adapter === "codex" &&
-    !params.hasPendingConfirmation &&
-    !params.hasSystemCommand &&
-    params.activeTurnOrigin === "local" &&
-    (params.status === "busy" || params.status === "awaiting_approval")
-  );
-}
-
-export function canDrainDeferredCodexInboundQueue(params: {
-  adapter: BridgeAdapterKind;
-  deferredCount: number;
-  status: BridgeWorkerStatus;
-  activeTurnId?: string;
-  hasPendingConfirmation: boolean;
-  hasPendingUserInput: boolean;
-  hasPendingApproval: boolean;
-  hasActiveTask: boolean;
-}): boolean {
-  return (
-    params.adapter === "codex" &&
-    params.deferredCount > 0 &&
-    !params.hasPendingConfirmation &&
-    !params.hasPendingUserInput &&
-    !params.hasPendingApproval &&
-    !params.hasActiveTask &&
-    !params.activeTurnId &&
-    params.status !== "busy" &&
-    params.status !== "awaiting_approval" &&
-    params.status !== "awaiting_input"
-  );
-}
-
-export function formatDeferredCodexInboundQueueMessage(queuePosition: number): string {
-  return `Queued for delivery after the current local Codex turn finishes. Queue position: ${queuePosition}.`;
-}
-
-export function isRetryableDeferredCodexDrainError(errorText: string): boolean {
-  return /still working|approval request is pending|waiting for local terminal input/i.test(
-    errorText,
-  );
-}
+export {
+  canDrainDeferredCodexInboundQueue,
+  formatDeferredCodexInboundQueueMessage,
+  isRetryableDeferredCodexDrainError,
+  shouldDeferCodexInboundMessage,
+} from "../core/bridge-defer.ts";
 
 export function parseCliArgs(argv: string[]): BridgeCliOptions {
   let adapter: BridgeAdapterKind | null = null;

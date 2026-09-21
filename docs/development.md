@@ -169,6 +169,8 @@ npm pack --dry-run --json
 | `src/bridge/wechat-bridge.ts` | bridge 主事件循环 |
 | `src/daemon/wechat-daemon.ts` | 常驻 WeChat/WeCom daemon 与多 CLI slot 管理 |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |
+| `src/core/bridge-message-router.ts` | 统一处理授权、命令、approval、user input、defer 与 busy 顺序 |
+| `src/core/bridge-defer.ts` | Codex 本地回合期间的输入延迟判断、队列提示与排空条件 |
 | `src/bridge/bridge-adapters.ts` | `codex` / `claude` / `opencode` / `pi` 适配器入口 |
 | `src/bridge/bridge-adapters.opencode.ts` | OpenCode 适配器实现 |
 | `src/bridge/bridge-adapters.pi.ts` | Pi 原生 TUI adapter、extension IPC、session 跟随与最终回复实现 |
@@ -182,6 +184,27 @@ npm pack --dry-run --json
 | `src/wechat/wechat-transport.ts` | iLink 消息收发 |
 | `src/bridge/bridge-state.ts` | bridge 状态、锁与日志 |
 | `src/wechat/setup.ts` | 登录与凭据初始化 |
+
+## daemon IPC 请求
+
+daemon 启动后会在本机写入 endpoint 文件，外部程序通过其中的端口和 token
+发送一行一个 JSON 请求。`send_text` 只负责向 WeChat 或 WeCom 会话发送文本；
+`forward_input` 则把外部输入交给指定 adapter slot，仍然经过 daemon 原有的
+approval、structured user input、busy 和 Codex 本地回合 defer 检查。
+
+`send_text.context` 只能使用 `final_reply`、`message`、`notice`、
+`approval_required`、`user_input_required`、`mirrored_user_input`、
+`session_switched`、`thread_switched`、`task_failed`、`fatal_error`、
+`inbound_error` 或 `thinking`。未知值会被拒绝。
+
+同一个 adapter slot 的 `forward_input` 按到达顺序串行化；slot 已经占用时，
+请求会返回 busy，不能覆盖之前输入的 conversation。Codex 正在本地回合时，
+请求会进入该 slot 的有限 deferred queue，并在回合完成后按顺序提交。若目标
+visible CLI 没有成功连接，daemon 会返回 `not_activated`，不会提交输入。
+
+WeCom 请求应携带 `conversationId` 和 `recipientId`。daemon 会把这两个字段
+绑定到本次输入和后续输出，因此切换 active adapter 不会把另一个 slot 的
+notice、approval、错误或最终回复发到错误会话。
 
 ## 相关说明
 

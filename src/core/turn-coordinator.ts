@@ -29,6 +29,7 @@ export type TurnCoordinatorOptions = {
    * with the paired default conversation; daemon slots leave it unset.
    */
   initialLastConversation?: ChannelConversationRef | null;
+  restoreLastConversationOnFailure?: boolean;
 };
 
 /**
@@ -39,12 +40,14 @@ export type TurnCoordinatorOptions = {
  */
 export class TurnCoordinator<TTask> {
   private readonly state: TurnOwnershipState<TTask>;
+  private readonly restoreLastConversationOnFailure: boolean;
 
   constructor(options: TurnCoordinatorOptions = {}) {
     this.state = {
       activeTask: null,
       lastConversation: options.initialLastConversation ?? null,
     };
+    this.restoreLastConversationOnFailure = options.restoreLastConversationOnFailure ?? false;
   }
 
   get activeTask(): TTask | null {
@@ -70,8 +73,11 @@ export class TurnCoordinator<TTask> {
     return tryBeginTurn(this.state, task, conversation);
   }
 
-  rollback(lease: TurnLease<TTask>): boolean {
-    return rollbackTurn(this.state, lease);
+  rollback(
+    lease: TurnLease<TTask>,
+    options: { restoreLastConversation?: boolean } = {},
+  ): boolean {
+    return rollbackTurn(this.state, lease, options);
   }
 
   complete(expectedTask?: TTask): boolean {
@@ -120,7 +126,9 @@ export class TurnCoordinator<TTask> {
     try {
       await params.forward();
     } catch (error) {
-      this.rollback(lease);
+      this.rollback(lease, {
+        restoreLastConversation: this.restoreLastConversationOnFailure,
+      });
       throw error;
     }
     return { status: "dispatched", task: params.task };

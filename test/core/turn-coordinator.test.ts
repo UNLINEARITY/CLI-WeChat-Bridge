@@ -44,8 +44,8 @@ describe("TurnCoordinator ownership", () => {
     const rolledBack = turns.rollback(lease);
     expect(rolledBack).toBe(true);
     expect(turns.activeTask).toBeNull();
-    // complete() already cleared the active conversation, so the lease
-    // snapshot restores undefined, not the earlier "first" conversation.
+    // complete() already cleared the active conversation, while the generic
+    // coordinator keeps the failed request as its remembered target.
     expect(turns.activeConversation).toBeUndefined();
     expect(turns.lastConversation).toEqual(conv("second"));
   });
