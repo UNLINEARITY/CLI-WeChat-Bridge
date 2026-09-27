@@ -15,7 +15,12 @@ import {
 } from "../../src/bridge/bridge-adapters.ts";
 import {
   OpenCodeServerAdapter,
+  parseOpenCodeCliVersion,
 } from "../../src/bridge/bridge-adapters.opencode.ts";
+import {
+  normalizeOpenCodeV2Event,
+  normalizeOpenCodeV2Session,
+} from "../../src/bridge/opencode-v2-compat.ts";
 import {
   LocalCompanionProxyAdapter,
 } from "../../src/bridge/bridge-adapters.core.ts";
@@ -178,6 +183,62 @@ describe("OpenCodeServerAdapter initial state", () => {
     }
   });
 
+  test("injects the OpenCode 2 route plugin through CLI config content", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      openCodeMajor: number;
+      tuiRoutePluginPath: string | null;
+      startTuiRouteBridge(): Promise<void>;
+      stopTuiRouteBridge(): Promise<void>;
+      buildNativeClientEnv(): Record<string, string>;
+    };
+    internal.openCodeMajor = 2;
+
+    try {
+      await internal.startTuiRouteBridge();
+      expect(internal.tuiRoutePluginPath).toMatch(/opencode-tui-route-/);
+      expect(fs.existsSync(`${internal.tuiRoutePluginPath}/tui.ts`)).toBe(true);
+      const config = JSON.parse(internal.buildNativeClientEnv().OPENCODE_CLI_CONFIG_CONTENT!) as {
+        plugins?: Array<{ package?: string; options?: { port?: number; token?: string } }>;
+      };
+      expect(config.plugins?.[0]?.package).toBe(internal.tuiRoutePluginPath);
+      expect(config.plugins?.[0]?.options).toEqual(expect.objectContaining({
+        port: expect.any(Number),
+        token: expect.any(String),
+      }));
+    } finally {
+      await internal.stopTuiRouteBridge();
+    }
+  });
+
+  test("uses the OpenCode 2 server flags for the visible CLI", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const internal = adapter as unknown as {
+      openCodeMajor: number;
+      serverPort: number;
+      activeSessionId: string | null;
+      buildNativeAttachArgs(): Promise<string[]>;
+    };
+    internal.openCodeMajor = 2;
+    internal.serverPort = 8123;
+    internal.activeSessionId = null;
+
+    await expect(internal.buildNativeAttachArgs()).resolves.toEqual([
+      "--server",
+      "http://127.0.0.1:8123",
+    ]);
+  });
+
   test("appends extra CLI args only to the visible attach command", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
@@ -283,7 +344,39 @@ describe("OpenCode health compatibility", () => {
     expect(urls).toEqual(["http://127.0.0.1:8123/global/health"]);
   });
 
-  test("rejects OpenCode versions outside >=1.18.0 <2.0.0", () => {
+  test("probes /api/info for OpenCode 2", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const internal = adapter as unknown as {
+      openCodeMajor: number;
+      serverPort: number;
+      checkHealth(): Promise<void>;
+    };
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    internal.openCodeMajor = 2;
+    internal.serverPort = 8123;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      urls.push(String(input));
+      return new Response(JSON.stringify({ version: "2.0.18", pid: 123 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    try {
+      await internal.checkHealth();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(urls).toEqual(["http://127.0.0.1:8123/api/info"]);
+  });
+
+  test("accepts OpenCode >=1.18.0 through the 2.x release line", () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
       command: "opencode",
@@ -296,8 +389,89 @@ describe("OpenCode health compatibility", () => {
     expect(internal.isSupportedOpenCodeVersion("1.18.0")).toBe(true);
     expect(internal.isSupportedOpenCodeVersion("1.99.3")).toBe(true);
     expect(internal.isSupportedOpenCodeVersion("1.17.9")).toBe(false);
-    expect(internal.isSupportedOpenCodeVersion("2.0.0")).toBe(false);
+    expect(internal.isSupportedOpenCodeVersion("2.0.0")).toBe(true);
+    expect(internal.isSupportedOpenCodeVersion("2.0.18")).toBe(true);
+    expect(internal.isSupportedOpenCodeVersion("3.0.0")).toBe(false);
     expect(internal.isSupportedOpenCodeVersion("dev")).toBe(false);
+  });
+
+  test("parses both OpenCode version output formats", () => {
+    expect(parseOpenCodeCliVersion("1.18.32")).toBe("1.18.32");
+    expect(parseOpenCodeCliVersion("opencode v2.0.18")).toBe("2.0.18");
+    expect(parseOpenCodeCliVersion("development build")).toBeNull();
+  });
+});
+
+describe("OpenCode 2 compatibility mapping", () => {
+  test("normalizes sessions and streamed text events", () => {
+    expect(normalizeOpenCodeV2Session({
+      id: "ses_2",
+      projectID: "project_2",
+      model: { providerID: "openai", id: "gpt-6" },
+      location: { directory: process.cwd() },
+      time: { created: 1, updated: 2 },
+    })).toEqual(expect.objectContaining({
+      id: "ses_2",
+      workspaceID: "project_2",
+      directory: process.cwd(),
+      model: { providerID: "openai", id: "gpt-6", variant: "default" },
+    }));
+
+    expect(normalizeOpenCodeV2Event({
+      type: "session.text.delta",
+      location: { directory: process.cwd() },
+      data: {
+        sessionID: "ses_2",
+        assistantMessageID: "msg_2",
+        ordinal: 0,
+        delta: "hello",
+      },
+    })).toEqual([{
+      type: "message.part.delta",
+      directory: process.cwd(),
+      properties: {
+        sessionID: "ses_2",
+        messageID: "msg_2",
+        partID: "msg_2:text:0",
+        field: "text",
+        delta: "hello",
+      },
+    }]);
+  });
+
+  test("maps OpenCode 2 forms to ordered bridge questions", () => {
+    expect(normalizeOpenCodeV2Event({
+      type: "form.created",
+      data: {
+        form: {
+          id: "form_1",
+          sessionID: "ses_2",
+          title: "Choose",
+          fields: [{
+            key: "target",
+            title: "Target",
+            description: "Which target?",
+            type: "string",
+          }],
+        },
+      },
+    })).toEqual([{
+      type: "question.asked",
+      directory: undefined,
+      properties: {
+        sessionID: "ses_2",
+        id: "form_1",
+        requestID: "form_1",
+        questions: [{
+          id: "target",
+          header: "Target",
+          question: "Which target?",
+          options: [],
+          multiple: false,
+          custom: true,
+        }],
+      },
+    }]);
   });
 });
 
@@ -3126,6 +3300,50 @@ describe("OpenCode message.part.updated handling", () => {
     expect(events.filter((event) => event.type === "mirrored_user_input")).toEqual([
       expect.objectContaining({
         text: "hello from local opencode",
+        origin: "local",
+      }),
+    ]);
+  });
+
+  test("mirrors local user input mapped from OpenCode 2 inbox events", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; text?: string; origin?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as unknown as { type: string; text?: string; origin?: string });
+    });
+    const internal = adapter as unknown as {
+      state: { status: string; activeTurnOrigin?: string };
+      activeSessionId: string | null;
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.activeSessionId = "session_local_2";
+
+    const mapped = normalizeOpenCodeV2Event({
+      type: "session.inbox.enqueued",
+      data: {
+        sessionID: "session_local_2",
+        inboxID: "inb_local_2",
+        item: { type: "user", payload: { text: "typed in the visible tui" }, delivery: "queue" },
+      },
+    });
+    expect(mapped[0]).toEqual(expect.objectContaining({
+      type: "message.updated",
+      properties: expect.objectContaining({ sessionID: "session_local_2" }),
+    }));
+    for (const event of mapped) {
+      internal.handleSseEvent(event);
+    }
+
+    expect(internal.state.status).toBe("busy");
+    expect(internal.state.activeTurnOrigin).toBe("local");
+    expect(events.filter((event) => event.type === "mirrored_user_input")).toEqual([
+      expect.objectContaining({
+        text: "typed in the visible tui",
         origin: "local",
       }),
     ]);

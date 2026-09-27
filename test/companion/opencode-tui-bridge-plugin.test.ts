@@ -9,6 +9,7 @@ import net from "node:net";
 import { describe, expect, test } from "bun:test";
 
 import opencodeTuiBridgePlugin from "../../src/companion/opencode-tui-bridge-plugin.ts";
+import opencodeV2TuiBridgePlugin from "../../src/companion/opencode-v2-tui-bridge-plugin.ts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -97,6 +98,74 @@ describe("OpenCode TUI bridge plugin", () => {
           (frame) => frame.type === "route_state" && frame.sessionId === null,
         ),
       );
+    } finally {
+      dispose();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+describe("OpenCode 2 TUI bridge plugin", () => {
+  test("reports route changes and accepts remote session selection", async () => {
+    const frames: Array<Record<string, unknown>> = [];
+    let bridgeSocket: net.Socket | null = null;
+    let buffer = "";
+    const server = net.createServer((socket) => {
+      bridgeSocket = socket;
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        buffer += chunk;
+        while (true) {
+          const newlineIndex = buffer.indexOf("\n");
+          if (newlineIndex < 0) return;
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (line) frames.push(JSON.parse(line) as Record<string, unknown>);
+        }
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("OpenCode 2 plugin test server did not expose a port.");
+    }
+
+    let currentRoute: Record<string, unknown> = {
+      type: "session",
+      sessionID: "ses_initial",
+    };
+    const navigated: Array<Record<string, unknown>> = [];
+    const dispose = opencodeV2TuiBridgePlugin.setup({
+      options: { port: address.port, token: "route-token-v2" },
+      ui: {
+        router: {
+          current: () => currentRoute,
+          navigate: (destination) => {
+            navigated.push(destination);
+            currentRoute = destination;
+          },
+        },
+      },
+    });
+
+    try {
+      await waitFor(() => frames.some((frame) => frame.type === "route_state"));
+      expect(frames).toContainEqual({ type: "hello", token: "route-token-v2" });
+      expect(frames).toContainEqual(expect.objectContaining({
+        type: "route_state",
+        sessionId: "ses_initial",
+      }));
+
+      bridgeSocket!.write(`${JSON.stringify({
+        type: "select_session",
+        sessionId: "ses_remote",
+      })}\n`);
+      await waitFor(() => navigated.length === 1);
+      expect(navigated).toEqual([{ type: "session", sessionID: "ses_remote" }]);
+      await waitFor(() => frames.some((frame) => frame.sessionId === "ses_remote"));
     } finally {
       dispose();
       await new Promise<void>((resolve) => server.close(() => resolve()));

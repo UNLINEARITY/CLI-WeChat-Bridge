@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 UNLINEARITY <unlinearity@gmail.com>
+// Source: https://github.com/UNLINEARITY/CLI-WeChat-Bridge
+// This file is part of CLI-WeChat-Bridge. Modifications and derivative works
+// must be released under AGPL-3.0-or-later with full source code; see
+// LICENSE.txt. Network services built on it must offer source to users.
 
 import fs from "node:fs";
 import net from "node:net";
@@ -50,7 +56,7 @@ async function reservePort() {
   return port;
 }
 
-async function waitForHealth(url, child) {
+async function waitForHealth(url, child, headers = undefined) {
   const deadline = Date.now() + SERVER_TIMEOUT_MS;
   let lastError = "server did not respond";
   while (Date.now() < deadline) {
@@ -58,7 +64,7 @@ async function waitForHealth(url, child) {
       throw new Error(`OpenCode exited before health check (${child.exitCode}).`);
     }
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { headers });
       if (response.ok) {
         return;
       }
@@ -71,14 +77,23 @@ async function waitForHealth(url, child) {
   throw new Error(`Timed out waiting for OpenCode health endpoint: ${lastError}`);
 }
 
-async function smokeOpenCode() {
+async function smokeOpenCode(majorVersion) {
   const port = await reservePort();
+  const serveArgs = ["serve"];
+  if (majorVersion < 2) {
+    serveArgs.push("--pure");
+  }
+  serveArgs.push("--hostname", "127.0.0.1", "--port", String(port));
+  const password = majorVersion >= 2 ? "cli-bridge-compat" : undefined;
   const child = spawn(
     "opencode",
-    ["serve", "--pure", "--hostname", "127.0.0.1", "--port", String(port)],
+    serveArgs,
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
+      env: {
+        ...process.env,
+        ...(password ? { OPENCODE_SERVER_PASSWORD: password } : {}),
+      },
     },
   );
   let output = "";
@@ -90,7 +105,11 @@ async function smokeOpenCode() {
   });
 
   try {
-    await waitForHealth(`http://127.0.0.1:${port}/global/health`, child);
+    const healthPath = majorVersion >= 2 ? "/api/info" : "/global/health";
+    const headers = password
+      ? { Authorization: `Basic ${Buffer.from(`opencode:${password}`, "utf8").toString("base64")}` }
+      : undefined;
+    await waitForHealth(`http://127.0.0.1:${port}${healthPath}`, child, headers);
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\n${output}`);
   } finally {
@@ -124,9 +143,18 @@ async function main() {
     assertIncludes(claudeHelp, "--settings", "Claude Code");
 
     const openCodeVersion = run("opencode", ["--version"]).trim();
+    const openCodeVersionMatch = /\bv?(\d+)\.\d+\.\d+\b/.exec(openCodeVersion);
+    if (!openCodeVersionMatch) {
+      throw new Error(`Could not parse OpenCode version: ${openCodeVersion}`);
+    }
+    const openCodeMajor = Number(openCodeVersionMatch[1]);
     const openCodeHelp = run("opencode", ["serve", "--help"]);
-    assertIncludes(openCodeHelp, "--pure", "OpenCode server");
-    await smokeOpenCode();
+    assertIncludes(
+      openCodeHelp,
+      openCodeMajor >= 2 ? "--stdio" : "--pure",
+      "OpenCode server",
+    );
+    await smokeOpenCode(openCodeMajor);
 
     const piVersion = run("pi", ["--version"]).trim();
     const piHelp = run("pi", ["--help"]);

@@ -44,6 +44,7 @@ import type {
   UserInputRequest,
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
+import { createOpenCodeV2CompatClient } from "./opencode-v2-compat.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
@@ -285,7 +286,12 @@ const TUI_SESSION_SELECT_SUPPRESSION_TTL_MS = 5_000;
 const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
 const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 const OPENCODE_MINIMUM_SUPPORTED_VERSION = "1.18.0";
-const OPENCODE_MAXIMUM_SUPPORTED_MAJOR = 2;
+const OPENCODE_MAXIMUM_SUPPORTED_MAJOR = 3;
+const OPENCODE_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+export function parseOpenCodeCliVersion(output: string): string | null {
+  return /\bv?(\d+\.\d+\.\d+)\b/.exec(output)?.[1] ?? null;
+}
 const OPENCODE_TUI_ROUTE_READY_TIMEOUT_MS = 10_000;
 const OPENCODE_TUI_ROUTE_MAX_BUFFER_SIZE = 1024 * 1024;
 const MODULE_FILE = fileURLToPath(import.meta.url);
@@ -351,6 +357,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private tuiRoutePort = 0;
   private tuiRouteConfigDir: string | null = null;
   private tuiRouteConfigPath: string | null = null;
+  private tuiRoutePluginPath: string | null = null;
+  private openCodeMajor = 1;
   private visibleTuiSessionId: string | null = null;
   private tuiRouteStateReceived = false;
   private expectedVisibleTuiSessionId: string | null = null;
@@ -550,6 +558,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.setStatus("starting", "Starting OpenCode companion...");
 
     try {
+      await this.probeOpenCodeVersion();
       this.serverPort = await reserveLocalPort();
       const serverProcess = await this.startServerProcess();
 
@@ -991,18 +1000,39 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       });
     });
 
-    const workspaceDir = ensureWorkspaceChannelDir(this.options.cwd).workspaceDir;
-    const configDir = fs.mkdtempSync(path.join(workspaceDir, "opencode-tui-route-"));
-    const configPath = path.join(configDir, "tui.json");
+    const pluginName = this.openCodeMajor >= 2
+      ? "opencode-v2-tui-bridge-plugin"
+      : "opencode-tui-bridge-plugin";
     const pluginPath = path.join(
       MODULE_DIR,
       "..",
       "companion",
-      `opencode-tui-bridge-plugin${RUNTIME_ENTRY_EXTENSION}`,
+      `${pluginName}${RUNTIME_ENTRY_EXTENSION}`,
     );
     if (!fs.existsSync(pluginPath)) {
       throw new Error(`OpenCode TUI bridge plugin was not found: ${pluginPath}`);
     }
+    const workspaceDir = ensureWorkspaceChannelDir(this.options.cwd).workspaceDir;
+    const configDir = fs.mkdtempSync(path.join(workspaceDir, "opencode-tui-route-"));
+    this.tuiRouteConfigDir = configDir;
+
+    if (this.openCodeMajor >= 2) {
+      fs.copyFileSync(pluginPath, path.join(configDir, `tui${RUNTIME_ENTRY_EXTENSION}`));
+      fs.writeFileSync(
+        path.join(configDir, "package.json"),
+        `${JSON.stringify({
+          name: "cli-wechat-bridge-opencode-tui-route",
+          private: true,
+          type: "module",
+        }, null, 2)}\n`,
+        "utf8",
+      );
+      this.tuiRoutePluginPath = configDir;
+      return;
+    }
+
+    this.tuiRoutePluginPath = pluginPath;
+    const configPath = path.join(configDir, "tui.json");
     fs.writeFileSync(
       configPath,
       `${JSON.stringify(
@@ -1022,7 +1052,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       )}\n`,
       "utf8",
     );
-    this.tuiRouteConfigDir = configDir;
     this.tuiRouteConfigPath = configPath;
   }
 
@@ -1147,6 +1176,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const configDir = this.tuiRouteConfigDir;
     this.tuiRouteConfigDir = null;
     this.tuiRouteConfigPath = null;
+    this.tuiRoutePluginPath = null;
     this.tuiRoutePort = 0;
     this.tuiRouteToken = "";
     this.tuiRouteStateReceived = false;
@@ -1163,6 +1193,49 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         fs.rmSync(resolvedConfigDir, { recursive: true, force: true });
       }
     }
+  }
+
+  private async probeOpenCodeVersion(): Promise<void> {
+    const env = buildCliEnvironment(this.options.kind);
+    const target = resolveSpawnTarget(this.options.command, this.options.kind, { env });
+    const version = await new Promise<string>((resolve, reject) => {
+      const child = spawnChildProcess(target.file, [...target.args, "--version"], {
+        cwd: this.options.cwd,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      let output = "";
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve(output);
+      };
+      const timer = setTimeout(() => {
+        if (child.pid != null) {
+          killProcessTreeSync(child.pid);
+        }
+        finish(new Error("Timed out checking the OpenCode CLI version."));
+      }, OPENCODE_VERSION_PROBE_TIMEOUT_MS);
+      child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+      child.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString("utf8"); });
+      child.once("error", (error) => finish(error));
+      child.once("exit", (code) => {
+        if (code === 0) finish();
+        else finish(new Error(`OpenCode --version exited with code ${code ?? "unknown"}.`));
+      });
+    });
+
+    const parsed = parseOpenCodeCliVersion(version);
+    if (!parsed || !this.isSupportedOpenCodeVersion(parsed)) {
+      throw new Error(
+        `Unsupported OpenCode version ${parsed ?? (version.trim() || "unknown")}. Install OpenCode >=${OPENCODE_MINIMUM_SUPPORTED_VERSION} <${OPENCODE_MAXIMUM_SUPPORTED_MAJOR}.0.0.`,
+      );
+    }
+    this.openCodeMajor = Number(parsed.split(".")[0]);
   }
 
   private async startServerProcess(): Promise<ChildProcess> {
@@ -1286,8 +1359,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         "OpenCode --pure cannot be used with the WeChat bridge because local session following requires the managed TUI plugin.",
       );
     }
-    const args = ["attach", this.getServerUrl()];
-    args.push("--dir", this.options.cwd);
+    const args = this.openCodeMajor >= 2
+      ? ["--server", this.getServerUrl()]
+      : ["attach", this.getServerUrl(), "--dir", this.options.cwd];
     const sessionId = this.activeSessionId;
     if (sessionId && (await this.hasSession(sessionId))) {
       args.push("--session", sessionId);
@@ -1298,7 +1372,37 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private buildNativeClientEnv(): Record<string, string> {
     const env = buildCliEnvironment(this.options.kind);
-    if (this.tuiRouteConfigDir && this.tuiRouteConfigPath) {
+    if (this.openCodeMajor >= 2 && this.tuiRoutePluginPath) {
+      let existingConfig: Record<string, unknown> = {};
+      if (env.OPENCODE_CLI_CONFIG_CONTENT) {
+        try {
+          const parsed = JSON.parse(env.OPENCODE_CLI_CONFIG_CONTENT) as unknown;
+          if (isRecord(parsed)) existingConfig = parsed;
+        } catch (error) {
+          throw new Error(
+            `OpenCode cannot merge the managed TUI plugin into invalid OPENCODE_CLI_CONFIG_CONTENT: ${describeUnknownError(error)}`,
+            { cause: error },
+          );
+        }
+      }
+      const existingPlugins = Array.isArray(existingConfig.plugins)
+        ? existingConfig.plugins
+        : [];
+      env.OPENCODE_CLI_CONFIG_CONTENT = JSON.stringify({
+        ...existingConfig,
+        plugins: [
+          ...existingPlugins,
+          {
+            package: this.tuiRoutePluginPath,
+            options: {
+              port: this.tuiRoutePort,
+              token: this.tuiRouteToken,
+            },
+          },
+        ],
+      });
+      env.OPENCODE_PASSWORD = this.serverPassword ?? "";
+    } else if (this.tuiRouteConfigDir && this.tuiRouteConfigPath) {
       if (env.OPENCODE_CONFIG_DIR && env.OPENCODE_TUI_CONFIG) {
         throw new Error(
           "OpenCode cannot inject the managed TUI session plugin while both OPENCODE_CONFIG_DIR and OPENCODE_TUI_CONFIG are set.",
@@ -1313,7 +1417,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (this.serverPassword) {
       env.OPENCODE_SERVER_PASSWORD = this.serverPassword;
     }
-    if (this.activeSessionId) {
+    if (this.activeSessionId && this.openCodeMajor < 2) {
       env.OPENCODE_ROUTE = JSON.stringify({
         type: "session",
         sessionID: this.activeSessionId,
@@ -1335,6 +1439,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async createSdkClient(): Promise<void> {
     try {
+      if (this.openCodeMajor >= 2) {
+        this.client = await createOpenCodeV2CompatClient({
+          baseUrl: `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`,
+          directory: this.options.cwd,
+          headers: this.buildServerAuthHeaders(),
+        }) as unknown as OpenCodeSdkClient;
+        return;
+      }
+
       const { createOpencodeClient } = await import("@opencode-ai/sdk/v2");
       this.client = createOpencodeClient({
         baseUrl: `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`,
@@ -1343,8 +1456,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         headers: this.buildServerAuthHeaders(),
       }) as unknown as OpenCodeSdkClient;
     } catch (err) {
+      const packageName = this.openCodeMajor >= 2 ? "@opencode/client" : "@opencode-ai/sdk";
       throw new Error(
-        `Failed to load @opencode-ai/sdk. Make sure it is installed: ${describeUnknownError(err)}`,
+        `Failed to load ${packageName}. Make sure it is installed: ${describeUnknownError(err)}`,
         { cause: err },
       );
     }
@@ -1362,17 +1476,24 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     let lastError: unknown;
     while (Date.now() < deadline) {
       try {
-        const response = await fetch(`${baseUrl}/global/health`, {
+        const healthPath = this.openCodeMajor >= 2 ? "/api/info" : "/global/health";
+        const response = await fetch(`${baseUrl}${healthPath}`, {
           headers: this.buildServerAuthHeaders(),
           signal: AbortSignal.timeout(OPENCODE_HTTP_READY_PROBE_TIMEOUT_MS),
         });
         if (response.ok) {
           const health = await response.json() as unknown;
-          if (!isRecord(health) || health.healthy !== true || typeof health.version !== "string") {
+          const version = isRecord(health) && typeof health.version === "string"
+            ? health.version
+            : undefined;
+          const healthy = this.openCodeMajor >= 2
+            ? Boolean(version)
+            : isRecord(health) && health.healthy === true;
+          if (!healthy || !version) {
             lastError = new Error("OpenCode health check returned an invalid response.");
-          } else if (!this.isSupportedOpenCodeVersion(health.version)) {
+          } else if (!this.isSupportedOpenCodeVersion(version)) {
             throw new Error(
-              `Unsupported OpenCode version ${health.version}. Install OpenCode >=${OPENCODE_MINIMUM_SUPPORTED_VERSION} <${OPENCODE_MAXIMUM_SUPPORTED_MAJOR}.0.0.`,
+              `Unsupported OpenCode version ${version}. Install OpenCode >=${OPENCODE_MINIMUM_SUPPORTED_VERSION} <${OPENCODE_MAXIMUM_SUPPORTED_MAJOR}.0.0.`,
             );
           } else {
             return;
@@ -1536,10 +1657,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.sseAbortController = new AbortController();
-    const sseLoops: Array<Promise<void>> = [
-      this.runSseLoop("event"),
-      this.runSseLoop("global-event"),
-    ];
+    const sseLoops: Array<Promise<void>> = this.openCodeMajor >= 2
+      ? [this.runSseLoop("event")]
+      : [this.runSseLoop("event"), this.runSseLoop("global-event")];
     this.sseLoopPromise = Promise.all(sseLoops).then(() => undefined);
   }
 
@@ -3640,6 +3760,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private async sendVisibleSessionSelection(
     session: { id: string; workspaceID?: string },
   ): Promise<void> {
+    if (this.openCodeMajor >= 2) {
+      if (!this.tuiRouteSocket || this.tuiRouteSocket.destroyed) {
+        throw new Error("The OpenCode 2 TUI route bridge is not connected.");
+      }
+      this.tuiRouteSocket.write(`${JSON.stringify({
+        type: "select_session",
+        sessionId: session.id,
+      })}\n`);
+      return;
+    }
+
     if (!this.client?.tui) {
       return;
     }
