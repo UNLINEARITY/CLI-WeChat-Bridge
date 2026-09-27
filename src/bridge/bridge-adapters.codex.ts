@@ -76,7 +76,7 @@ export function isCodexVersionInCompatibilityRange(version: string): boolean {
   }
   const major = parts[0] ?? -1;
   const minor = parts[1] ?? -1;
-  return major === 0 && minor >= 149 && minor <= 155;
+  return major === 0 && minor >= 149 && minor <= 157;
 }
 
 const {
