@@ -14,9 +14,17 @@ concurrency:
 
 jobs:
   stable-cli-smoke:
-    name: Latest stable CLI smoke
+    name: Latest stable CLI smoke (${{ matrix.opencode_label }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - opencode_label: OpenCode 1.18
+            opencode_package: opencode-ai@1.18.32
+          - opencode_label: OpenCode 2
+            opencode_package: "@opencode/cli@latest"
 
     steps:
       - name: Checkout
@@ -32,7 +40,7 @@ jobs:
           npm install --global \
             @openai/codex@latest \
             @anthropic-ai/claude-code@latest \
-            opencode-ai@latest \
+            "${{ matrix.opencode_package }}" \
             @earendil-works/pi-coding-agent@latest
 
       - name: Run capability smoke tests
