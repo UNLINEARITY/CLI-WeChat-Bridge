@@ -100,12 +100,21 @@ npm run smoke:cli-compat
 
 The project runs TypeScript directly in source mode with Node 24 strip-types support, but published packages must ship compiled `dist/*.js`. Keep `prepack` and `npm run build` working before any npm release.
 
+After every code build, immediately install the fresh build to global so the owner always tests the newest code:
+```bash
+npm install -g .
+```
+When npm blocks the package postinstall script with `allowScripts`, restore the node-pty spawn-helper permission manually:
+```bash
+node "$(npm root -g)/cli-wechat-bridge/scripts/ensure-node-pty-permissions.mjs"
+```
+
 ## Coding Style
 Use TypeScript ESM with strict typing. Match the local style: 2-space indentation, semicolons, double quotes, and explicit `.ts` imports in source and test files. Prefer `camelCase` for values/functions, `PascalCase` for classes/types, and kebab-case filenames such as `bridge-final-reply.ts`.
 
 Keep edits small and behavior-scoped. Do not introduce cross-cutting adapter conditionals unless the surrounding architecture already centralizes that decision. Prefer existing helpers for locks, endpoint files, process cleanup, runtime host creation, transport error formatting, and WeChat prompt formatting.
 
-`bin/*.mjs` wrappers must stay LF-normalized because npm installs them as executable shebang entrypoints. `.gitattributes` pins this; do not ignore or regenerate `bin/`.
+`bin/*.mjs` wrappers must stay LF-normalized because npm installs them as executable shebang entrypoints. `.gitattributes` pins this; do not ignore or regenerate `bin/`. Keep every CLI entrypoint under `bin/` executable (`100755` in Git); never run `chmod 644 bin/*.mjs` or discard executable-bit changes as cleanup. A global `npm install -g .` may link commands back to this worktree, so removing the executable bit causes `zsh: permission denied` for commands such as `wechat-codex`. If permissions are missing, restore them with `chmod +x bin/wechat-*.mjs bin/wecom-*.mjs` and retain the corrected Git file modes.
 
 ## Testing Expectations
 Use `bun:test`. Name files `*.test.ts` and place them under the matching `test/<area>` directory.
