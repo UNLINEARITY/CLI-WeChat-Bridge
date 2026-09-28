@@ -39,13 +39,27 @@ class TypingTicketCache {
     retryDelayMs: number;
   }>();
 
+  private readonly fetchTicket: (recipientId: string) => Promise<string>;
+  private readonly log: (message: string) => void;
+  private readonly ttlMs: number;
+  private readonly initialRetryMs: number;
+  private readonly maxRetryMs: number;
+
   constructor(
-    private readonly fetchTicket: (recipientId: string) => Promise<string>,
-    private readonly log: (message: string) => void,
-    private readonly ttlMs = 24 * 60 * 60 * 1000,
-    private readonly initialRetryMs = 2_000,
-    private readonly maxRetryMs = 60 * 60 * 1000,
-  ) {}
+    fetchTicket: (recipientId: string) => Promise<string>,
+    log: (message: string) => void,
+    ttlMs = 24 * 60 * 60 * 1000,
+    initialRetryMs = 2_000,
+    maxRetryMs = 60 * 60 * 1000,
+  ) {
+    // Plain assignments instead of parameter properties so Node's
+    // strip-types source mode can load this module.
+    this.fetchTicket = fetchTicket;
+    this.log = log;
+    this.ttlMs = ttlMs;
+    this.initialRetryMs = initialRetryMs;
+    this.maxRetryMs = maxRetryMs;
+  }
 
   async getFor(recipientId: string): Promise<string> {
     const now = Date.now();
