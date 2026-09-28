@@ -319,7 +319,7 @@ function requestDaemon(payload, timeoutMs = 10_000) {
 }
 
 async function shutdown() {
-  try { controlWrite(JSON.stringify({ type: "kill" }) + "\n"); } catch { /* already gone */ }
+  try { controlSocket?.write(`${JSON.stringify({ type: "kill" })}\n`); } catch { /* already gone */ }
   try { await requestDaemon({ command: "shutdown" }, 8_000); } catch { /* daemon may already be gone */ }
   daemon.kill("SIGTERM");
   await Promise.race([
@@ -337,6 +337,18 @@ async function shutdown() {
 // --- Scenarios ---------------------------------------------------------------
 
 const markerFor = (id) => `E2E-${options.adapter.toUpperCase()}-OK-${id}`;
+
+let resumeTargetNumber = null;
+
+function parseResumeTargetNumber(listText) {
+  for (const line of listText.split("\n")) {
+    const match = /^(\d+)\..+/.exec(line.trim());
+    if (match && !line.includes("[current]")) {
+      return Number(match[1]);
+    }
+  }
+  return null;
+}
 
 const scenarios = [
   {
@@ -358,25 +370,47 @@ const scenarios = [
   },
   {
     id: "resume",
-    name: "/resume lists recent sessions",
+    name: "/resume lists recent sessions and a real switch target is available",
     async run() {
       inject("/resume");
-      await nextOutbound(
+      const list = await nextOutbound(
         (record) => record.context === "message" && /Recent .*sessions:|No saved .*sessions/.test(record.text),
         options.commandTimeoutMs,
         "resume session list",
       );
+      resumeTargetNumber = parseResumeTargetNumber(list.text);
+      if (!resumeTargetNumber) {
+        // Only the current session exists. Start a fresh one inside the TUI
+        // with Claude's native /clear so the next scenario can perform a
+        // real switch back to this session.
+        typeTerminal("/clear");
+        await nextOutbound(
+          (record) => /switched to \S+ from the local terminal/.test(record.text),
+          options.turnTimeoutMs,
+          "local session switch after /clear",
+        );
+        inject("/resume");
+        const nextList = await nextOutbound(
+          (record) => record.context === "message" && /Recent .*sessions:|No saved .*sessions/.test(record.text),
+          options.commandTimeoutMs,
+          "resume session list after /clear",
+        );
+        resumeTargetNumber = parseResumeTargetNumber(nextList.text);
+      }
+      if (!resumeTargetNumber) {
+        throw new Error("No non-current session is available for a real resume switch.");
+      }
     },
   },
   {
     id: "resume-send",
-    name: "after /resume, a remote prompt still reaches a final reply",
+    name: "/resume really switches back and a remote prompt still reaches a final reply",
     async run() {
-      inject("/resume 1");
+      inject(`/resume ${resumeTargetNumber ?? 1}`);
       await nextOutbound(
-        (record) => /Resumed|already|已恢复|当前会话|switched/i.test(record.text),
+        (record) => /switched to \S+ from WeChat/.test(record.text),
         options.commandTimeoutMs,
-        "resume confirmation",
+        "real resume switch",
       );
       injectMarker(markerFor(4));
       await nextOutbound((record) => record.context === "final_reply" && record.text.includes(markerFor(4)), options.turnTimeoutMs, "final reply after resume");
@@ -426,7 +460,34 @@ async function main() {
   try {
     await waitDaemonReady();
     console.log("[e2e] daemon ready on the local channel");
+    // The bridge reports "interactive session ready" slightly after the TUI
+    // paints its prompt; remote commands sent before that are rejected with
+    // "must be idle". Wait for the bridge-side session follow event first.
+    await nextOutbound(
+      (record) => /switched to \S+ from the local terminal/.test(record.text),
+      120_000,
+      "bridge-side session readiness",
+    );
     await waitForVisibleReady();
+    // Third readiness layer: the companion's native-control screen mirror
+    // lags the freshly painted TUI. The authoritative signal is the adapter
+    // reaching idle status; remote commands sent earlier are rejected with
+    // "must be at an empty native prompt".
+    const idleStartedAt = Date.now();
+    while (Date.now() - idleStartedAt < 60_000) {
+      let slot = null;
+      try {
+        const status = await requestDaemon({ command: "status" });
+        slot = (status?.slots ?? []).find((entry) => entry.adapter === options.adapter) ?? null;
+      } catch {
+        // IPC hiccup; retry.
+      }
+      if (slot?.status === "idle") {
+        await delay(500);
+        break;
+      }
+      await delay(300);
+    }
     console.log(`[e2e] visible ${options.adapter} CLI ready in the PTY host`);
     if (!options.noMirror) {
       openMirrorWindow(path.join(controlDir, `${options.adapter}.sock`));

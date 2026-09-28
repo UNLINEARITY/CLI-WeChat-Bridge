@@ -24,6 +24,29 @@ if (!socketPath) {
 // mirrored TUI renders without wrapping (CSI 8 ; rows ; cols t).
 process.stdout.write("\u001b[8;40;120t");
 
+// The mirrored TUI enables mouse tracking; a real terminal would then turn
+// mouse motion and scrolling into SGR reports on stdin. Swallow stdin in raw
+// mode (this is a view-only mirror) so the reports are never echoed back as
+// visible garbage, and let Ctrl+C close the window.
+if (process.stdin.isTTY) {
+  process.stdin.setRawMode(true);
+}
+process.stdin.resume();
+process.stdin.on("data", (chunk) => {
+  if (chunk.includes("\u0003")) {
+    process.exit(0);
+  }
+});
+
+// Mouse-mode enable/disable sequences must not leak into the hosting window:
+// they would put it into mouse tracking (breaking text selection) while the
+// reports have nowhere to go. Everything else is forwarded verbatim.
+const MOUSE_MODE_PATTERN = /\u001b\[\?(?:1000|1002|1003|1006|1016)(?:[hl])\b/g;
+
+function writeMirror(data) {
+  process.stdout.write(data.replace(MOUSE_MODE_PATTERN, ""));
+}
+
 const socket = net.createConnection(socketPath);
 socket.setNoDelay(true);
 
@@ -44,7 +67,7 @@ socket.on("data", (chunk) => {
     try {
       const message = JSON.parse(line);
       if (message.type === "output" && typeof message.data === "string") {
-        process.stdout.write(message.data);
+        writeMirror(message.data);
       }
     } catch {
       // Ignore malformed frames.
