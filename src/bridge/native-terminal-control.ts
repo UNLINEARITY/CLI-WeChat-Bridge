@@ -241,6 +241,17 @@ export function parseClaudeModelPicker(text: string): ClaudePickerOption[] {
   });
 }
 
+export function parseClaudeModelSwitchConfirmation(text: string): { model: string; yesFocused: boolean } | null {
+  const lines = text.split("\n");
+  const start = lines.findLastIndex((line) => line.trim() === "Switch model?");
+  if (start < 0) return null;
+  const choices = lines.slice(start + 1);
+  const yes = choices.map((line) => /^\s*(❯|>)?\s*1\. Yes, switch to (.+?)\s*$/.exec(line)).find((match) => match);
+  const noIndex = choices.findIndex((line) => /^\s*(?:❯|>)?\s*2\. No, go back\s*$/.test(line));
+  if (!yes || noIndex < 0 || choices.slice(noIndex + 1).some((line) => /^\s*❯/.test(line))) return null;
+  return { model: yes[2]!, yesFocused: Boolean(yes[1]) };
+}
+
 export function readClaudePermissionMode(text: string): string | null {
   const lines = text.split("\n");
   const prompt = lines.findLastIndex((line) => /^\s*❯/.test(line));

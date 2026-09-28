@@ -6,7 +6,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import { describe, expect, test } from "bun:test";
 import { ClaudeNativeControls } from "../../src/bridge/claude-native-controls.ts";
-import { NativeTerminalControl, parseClaudeModelPicker, readClaudePermissionMode } from "../../src/bridge/native-terminal-control.ts";
+import { NativeTerminalControl, parseClaudeModelPicker, parseClaudeModelSwitchConfirmation, readClaudePermissionMode } from "../../src/bridge/native-terminal-control.ts";
 
 // Layout captured from Claude Code 2.1.235; model names are deliberately neutral.
 const claudeMenu = [
@@ -39,6 +39,14 @@ describe("native terminal screen and command ownership", () => {
     await terminal.flush();
     expect(parseClaudeModelPicker(terminal.text)).toEqual([]);
     expect(readClaudePermissionMode(terminal.text)).toBe("plan");
+  });
+
+  test("recognizes only a model switch confirmation with both choices", () => {
+    const dialog = "Switch model?\nYour next response will be slower and use more tokens\n\n❯ 1. Yes, switch to glm-5.3[1M]\n  2. No, go back";
+    expect(parseClaudeModelSwitchConfirmation(dialog)).toEqual({ model: "glm-5.3[1M]", yesFocused: true });
+    expect(parseClaudeModelSwitchConfirmation(dialog.replace("❯ 1.", "  1.").replace("  2.", "❯ 2."))).toEqual({ model: "glm-5.3[1M]", yesFocused: false });
+    expect(parseClaudeModelSwitchConfirmation("Switch model?\n❯ 1. Yes, switch to glm-5.3[1M]")).toBeNull();
+    expect(parseClaudeModelSwitchConfirmation(`${dialog}\n❯\n`)).toBeNull();
   });
 
   test("reads permission mode only at an empty prompt and from its footer", () => {
@@ -190,6 +198,75 @@ describe("Claude native plan controls", () => {
     expect(mode).toBe("default");
   });
 });
+
+test("Claude model selection accepts the matching switch confirmation before verifying the menu", async () => {
+  let screen: "prompt" | "menu" | "confirmation" = "prompt";
+  let focus = 1;
+  let current = 1;
+  let confirmations = 0;
+  let confirmationModel = "glm-5.3[1M]";
+  const terminal = mirror((key) => {
+    if (key === "\r") {
+      if (screen === "confirmation") { confirmations++; current = focus; screen = "prompt"; }
+      else if (screen === "prompt") { screen = "menu"; focus = current; }
+    }
+    if (key === "\u001b[B" && screen === "menu") focus = 2;
+    if (key === "s" && screen === "menu") screen = "confirmation";
+    if (key === "\u001b" && screen === "menu") screen = "prompt";
+    render();
+  });
+  function render() {
+    draw(terminal, screen === "menu"
+      ? `Select model\n${focus === 1 ? "❯" : " "} 1. current-model${current === 1 ? " ✔" : ""}\n${focus === 2 ? "❯" : " "} 2. glm-5.3[1M]${current === 2 ? " ✔" : ""}\ns to use this session only`
+      : screen === "confirmation"
+        ? `Switch model?\nYour next response will be slower and use more tokens\n\n❯ 1. Yes, switch to ${confirmationModel}\n  2. No, go back`
+        : "❯\n");
+  }
+  render();
+  const controls = new ClaudeNativeControls(terminal, () => "session");
+  const models = await controls.listModels();
+  expect(await controls.selectModel(models[1]!.id)).toEqual({ ...models[1], isCurrent: true });
+  expect(confirmations).toBe(1);
+  expect(current).toBe(2);
+  expect(screen).toBe("prompt");
+  confirmationModel = "unexpected-model";
+  await expect(controls.selectModel(models[1]!.id)).rejects.toThrow("unexpected model switch confirmation");
+  // The unexpected dialog must not receive Enter.
+  expect(confirmations).toBe(1);
+  expect(screen).toBe("confirmation");
+}, 15_000);
+
+test("Claude /model 1 confirms the default model despite its different picker label", async () => {
+  let screen: "prompt" | "menu" | "confirmation" = "prompt";
+  let focus = 2;
+  let current = 2;
+  let confirmations = 0;
+  const terminal = mirror((key) => {
+    if (key === "\r") {
+      if (screen === "confirmation") { confirmations++; current = focus; screen = "prompt"; }
+      else if (screen === "prompt") { screen = "menu"; focus = current; }
+    }
+    if (key === "\u001b[A" && screen === "menu") focus = 1;
+    if (key === "\u001b[B" && screen === "menu") focus = 2;
+    if (key === "s" && screen === "menu") screen = "confirmation";
+    if (key === "\u001b" && screen === "menu") screen = "prompt";
+    render();
+  });
+  function render() {
+    draw(terminal, screen === "menu"
+      ? `Select model\n${focus === 1 ? "❯" : " "} 1. Default (recommended)  Use the default model (currently glm-5.3[1m])${current === 1 ? " ✔" : ""}\n${focus === 2 ? "❯" : " "} 2. Custom model${current === 2 ? " ✔" : ""}\ns to use this session only`
+      : screen === "confirmation"
+        ? "Switch model?\nYour next response will be slower and use more tokens\n\nThis conversation is cached for the current model. Switching to glm-5.3[1m] (default) means the full history gets re-read on your next message.\n\n❯ 1. Yes, switch to glm-5.3[1m] (default)\n  2. No, go back"
+        : "❯\n");
+  }
+  render();
+  const controls = new ClaudeNativeControls(terminal, () => "session");
+  const models = await controls.listModels();
+  expect(await controls.selectModel(models[0]!.id)).toEqual({ ...models[0], isCurrent: true });
+  expect(confirmations).toBe(1);
+  expect(current).toBe(1);
+  expect(screen).toBe("prompt");
+}, 10_000);
 
 test("Claude model selection traverses hidden rows, skips disabled entries, and detects stale labels", async () => {
   const labels = ["Disabled", "Model Two", "Model Three", "Model Four", "Model Five", "Model Six", "Model Seven"];

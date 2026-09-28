@@ -5,7 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import type { BridgeModelOption } from "./bridge-types.ts";
-import { NativeTerminalControl, parseClaudeModelPicker, readClaudePermissionMode } from "./native-terminal-control.ts";
+import { NativeTerminalControl, parseClaudeModelPicker, parseClaudeModelSwitchConfirmation, readClaudePermissionMode } from "./native-terminal-control.ts";
 
 export class ClaudeNativeControls {
   private previousMode: { session: string; mode: string } | null = null;
@@ -86,7 +86,19 @@ export class ClaudeNativeControls {
         throw new Error("This Claude version does not expose session-only model selection. Update Claude Code and try again.");
       }
       await this.terminal.submitMenu(undefined, "s");
-      await this.terminal.waitFor(() => readClaudePermissionMode(this.terminal.text) !== null);
+      await this.terminal.waitFor(() => parseClaudeModelSwitchConfirmation(this.terminal.text) !== null || readClaudePermissionMode(this.terminal.text) !== null);
+      const confirmation = parseClaudeModelSwitchConfirmation(this.terminal.text);
+      if (confirmation) {
+        const targetLabel = target.label.toLowerCase();
+        const confirmedModel = confirmation.model.toLowerCase();
+        const matchesTarget = targetLabel.includes(confirmedModel)
+          || (targetLabel.startsWith("default (recommended)") && confirmedModel.endsWith(" (default)"));
+        if (!confirmation.yesFocused || !matchesTarget) {
+          throw new Error("Claude displayed an unexpected model switch confirmation. Check the visible terminal before trying again.");
+        }
+        await this.terminal.key("\r");
+        await this.terminal.waitFor(() => readClaudePermissionMode(this.terminal.text) !== null);
+      }
       await this.terminal.openMenu("/model", "Select model");
       const applied = parseClaudeModelPicker(this.terminal.text).find((row) => row.focused);
       if (!applied || applied.label !== target.label || applied.index !== target.index) throw new Error("Claude did not confirm the selected model.");
