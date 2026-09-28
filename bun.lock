@@ -4,6 +4,7 @@
   "workspaces": {
     "": {
       "name": "cli-wechat-bridge",
+      "version": "1.2.1",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.30.0",
         "@opencode-ai/sdk": "^1.18.0",

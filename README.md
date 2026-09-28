@@ -56,7 +56,7 @@
   - [Codex](https://github.com/openai/codex)（已验证 `0.149.x`–`0.157.x`）
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
-  - [Pi](https://github.com/earendil-works/pi)（已验证 `0.84.2`；需要本机可执行 `pi` 命令）
+  - [Pi](https://github.com/earendil-works/pi)（已验证 `0.85.1`；需要本机可执行 `pi` 命令）
 - Bridge 仅调用安装在 `PATH` 中、可直接执行的独立 CLI；不会发现或调用 ChatGPT.app 等桌面应用内部捆绑的私有可执行文件。
 - 已准备一个远程通道：个人微信使用 `wechat-setup`，企业微信使用 `wecom-setup`
 
