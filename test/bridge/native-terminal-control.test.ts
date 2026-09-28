@@ -55,6 +55,15 @@ describe("native terminal screen and command ownership", () => {
     expect(readClaudePermissionMode("❯\n⏵⏵ bypass permissions on (shift+tab to cycle)")).toBe("bypassPermissions");
   });
 
+  test("treats Claude idle placeholder and context chip as an empty prompt", () => {
+    expect(readClaudePermissionMode('❯ Try "how does <filepath> work?"\nplan mode on')).toBe("plan");
+    expect(readClaudePermissionMode('❯ [⧉ In wechat-outbound-queue.ts] Try "fix lint errors"\n⏵⏵ bypass permissions on (shift+tab to cycle)')).toBe("bypassPermissions");
+    expect(readClaudePermissionMode('❯ [⧉ In file.ts]\nplan mode on')).toBe("plan");
+    // Real typed text next to the decorations is still a draft.
+    expect(readClaudePermissionMode('❯ [⧉ In file.ts] real draft text\nplan mode on')).toBeNull();
+    expect(readClaudePermissionMode('❯ Try "something" plus typing\nplan mode on')).toBeNull();
+  });
+
   test("native input state takes precedence over screen layout and stale key tracking", async () => {
     let draft = false;
     const terminal = new NativeTerminalControl({ write: () => {}, identity: () => "session", assertReady: () => {}, prepare: async () => {

@@ -255,10 +255,26 @@ export function parseClaudeModelSwitchConfirmation(text: string): { model: strin
 export function readClaudePermissionMode(text: string): string | null {
   const lines = text.split("\n");
   const prompt = lines.findLastIndex((line) => /^\s*❯/.test(line));
-  if (prompt < 0 || !/^\s*❯\s*$/.test(lines[prompt]!)) return null;
+  if (prompt < 0 || !isClaudePromptVisuallyEmpty(lines[prompt]!)) return null;
   const footer = lines.slice(prompt + 1).join("\n");
   for (const [label, mode] of [["plan mode", "plan"], ["accept edits", "acceptEdits"], ["bypass permissions", "bypassPermissions"], ["auto", "auto"], ["don't ask", "dontAsk"]]) {
     if (footer.includes(`${label} on`)) return mode!;
   }
   return "default";
+}
+
+/**
+ * Claude renders idle decorations inside the input box: an automatic context
+ * chip like `[⧉ In file.ts]` and a suggestion placeholder like
+ * Try "how does <filepath> work?". Both appear on a freshly started session
+ * before any user input; neither is a draft. Real typed input still fails
+ * this check (and the local-input mirror blocks controls independently).
+ */
+function isClaudePromptVisuallyEmpty(line: string): boolean {
+  const body = line
+    .replace(/^\s*❯\s*/, "")
+    .replace(/^\[⧉ [^\]]*\]\s*/, "")
+    .replace(/^Try "[^"]*"\s*$/, "")
+    .replace(/\s+$/, "");
+  return body.length === 0;
 }
