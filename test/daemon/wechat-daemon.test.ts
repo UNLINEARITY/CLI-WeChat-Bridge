@@ -5,6 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, test } from "bun:test";
@@ -24,6 +25,7 @@ import {
   shouldRestartDeadCodexVisibleRuntime,
   waitForCodexVisibleThread,
   waitForVisibleClientConnection,
+  WechatDaemon,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
 import type {
@@ -115,6 +117,31 @@ describe("wechat-daemon helpers", () => {
   test("parseDaemonCliArgs selects WeCom while preserving the legacy WeChat default", () => {
     expect(parseDaemonCliArgs([]).channelId).toBeUndefined();
     expect(parseDaemonCliArgs(["--channel", "wecom"]).channelId).toBe("wecom");
+    expect(parseDaemonCliArgs(["--channel", "local"]).channelId).toBe("local");
+    let failure = "";
+    try {
+      parseDaemonCliArgs(["--channel", "telegram"]);
+    } catch (error) {
+      failure = String(error);
+    }
+    expect(failure).toContain("Invalid channel");
+  });
+
+  test("a local daemon runs without any channel transport", () => {
+    const daemon = new WechatDaemon({
+      cwd: path.join(os.tmpdir(), "local-daemon-workspace"),
+      authorizedUserId: "local-operator",
+      transport: null,
+      channelId: "local",
+      wecomTransport: null,
+      localFiles: {
+        inboxFile: path.join(os.tmpdir(), "local-daemon-workspace", "local-inbox.jsonl"),
+        transcriptFile: path.join(os.tmpdir(), "local-daemon-workspace", "local-transcript.jsonl"),
+      },
+    });
+    const status = daemon.getStatus();
+    expect(status.channelId).toBe("local");
+    expect(status.slots).toEqual([]);
   });
 
   test("buildVisibleClientLaunchArgs routes codex through the remote client", () => {

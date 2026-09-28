@@ -128,8 +128,13 @@ import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
 import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
 import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
-import { WecomChannelDriver } from "../channels/wecom/wecom-driver.ts";
-import { WechatChannelDriver } from "../channels/wechat/wechat-driver.ts";
+import { createChannelDriver } from "../channels/channel-driver-factory.ts";
+import { LocalChannelPort } from "../channels/local/local-channel-port.ts";
+import {
+  getLocalChannelFiles,
+  LOCAL_CHANNEL_OPERATOR_ID,
+  type LocalChannelFiles,
+} from "../channels/local/local-driver.ts";
 import type {
   ChannelDriver,
   ChannelSendResult,
@@ -230,7 +235,10 @@ const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode", "pi
 
 function getCliChannelId(argv: string[] = process.argv.slice(2)): BridgeChannelId {
   const index = argv.indexOf("--channel");
-  return index >= 0 && argv[index + 1] === "wecom" ? "wecom" : "wechat";
+  const value = index >= 0 ? argv[index + 1] : undefined;
+  if (value === "wecom") return "wecom";
+  if (value === "local") return "local";
+  return "wechat";
 }
 
 function log(message: string): void {
@@ -319,12 +327,14 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     const next = argv[i + 1];
 
     if (arg === "--help" || arg === "-h") {
+      const channelDisplayName =
+        channelId === "wecom" ? "WeCom" : channelId === "local" ? "Local" : "WeChat";
       process.stdout.write(
         [
           `Usage: ${channelId}-daemon [--cwd <path>] [--adapter <codex|claude|opencode|pi>] [--profile <name-or-path>] [--no-open]`,
           "",
-          `Keeps one ${channelId === "wecom" ? "WeCom" : "WeChat"} connection alive and switches between Codex, Claude Code, OpenCode, and Pi.`,
-          `Send /codex, /claude, /opencode, or /pi in ${channelId === "wecom" ? "WeCom" : "WeChat"} to switch the active terminal.`,
+          `Keeps one ${channelDisplayName} connection alive and switches between Codex, Claude Code, OpenCode, and Pi.`,
+          `Send /codex, /claude, /opencode, or /pi in ${channelDisplayName} to switch the active terminal.`,
           "",
         ].join("\n"),
       );
@@ -341,7 +351,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     }
 
     if (arg === "--channel") {
-      if (!next || (next !== "wechat" && next !== "wecom")) {
+      if (!next || (next !== "wechat" && next !== "wecom" && next !== "local")) {
         throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
       }
       channelId = next;
@@ -380,7 +390,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     profile,
     initialAdapter,
     openVisible,
-    ...(channelId === "wecom" ? { channelId } : {}),
+    ...(channelId === "wechat" ? {} : { channelId }),
   };
 }
 
@@ -883,10 +893,11 @@ export class WechatDaemon {
   private readonly cwd: string;
   private readonly profile?: string;
   private readonly authorizedUserId: string;
-  private readonly transport: WeChatTransport;
+  private readonly transport: WeChatTransport | null;
   private readonly channelDriver: ChannelDriver;
   private readonly channelId: BridgeChannelId;
   private readonly wecomTransport: WecomTransport | null;
+  private readonly localFiles: LocalChannelFiles | null;
   private readonly inboundConversationContext =
     new InboundConversationContext();
   private readonly fallbackConversation: ChannelConversationRef;
@@ -913,10 +924,11 @@ export class WechatDaemon {
     cwd: string;
     profile?: string;
     authorizedUserId: string;
-    transport: WeChatTransport;
+    transport: WeChatTransport | null;
     channelId?: BridgeChannelId;
     accountId?: string;
     wecomTransport?: WecomTransport | null;
+    localFiles?: LocalChannelFiles | null;
     deps?: WechatDaemonDeps;
   }) {
     this.cwd = params.cwd;
@@ -925,24 +937,24 @@ export class WechatDaemon {
     this.transport = params.transport;
     this.channelId = params.channelId ?? "wechat";
     this.wecomTransport = params.wecomTransport ?? null;
+    this.localFiles = params.localFiles ?? null;
     this.deps = params.deps ?? {};
-    this.channelDriver = this.wecomTransport
-      ? new WecomChannelDriver({
-          transport: this.wecomTransport,
-          accountId: params.accountId,
-          operatorId: params.authorizedUserId,
-          logError,
-        })
-      : new WechatChannelDriver({
-          transport: this.transport,
-          logError,
-          buildInboundPrompt: (text, attachments) =>
-            buildWechatInboundPrompt(
-              text,
-              attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
-                attachment.kind === "image" || attachment.kind === "file"),
-            ),
-        });
+    this.channelDriver = createChannelDriver({
+      channelId: this.channelId,
+      authorizedUserId: params.authorizedUserId,
+      accountId: params.accountId,
+      wechatTransport: this.transport,
+      wecomTransport: this.wecomTransport,
+      localFiles: this.localFiles,
+      buildWechatInboundPrompt: (text, attachments) =>
+        buildWechatInboundPrompt(
+          text,
+          attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
+            attachment.kind === "image" || attachment.kind === "file"),
+        ),
+      log: (message) => this.daemonLog(message),
+      logError,
+    });
     this.fallbackConversation = this.channelDriver.defaultConversation()
       ?? this.channelDriver.directConversation(params.authorizedUserId);
     this.pendingWechatMessages = this.deps.pendingWechatMessages ??
@@ -1118,6 +1130,7 @@ export class WechatDaemon {
 
     const activeSlot = this.getActiveSlot();
     const welcomeText = t("daemon.welcome", {
+      channel: this.channelDriver.displayName,
       cwd: this.cwd,
       adapter: activeSlot?.adapter ?? "none",
       bindings: formatBindingsListMessage(listBindings()),
@@ -1133,6 +1146,9 @@ export class WechatDaemon {
     }
 
     while (!this.shutdownPromise) {
+      if (!this.transport) {
+        throw new Error("The wechat poll loop requires a WeChat transport.");
+      }
       let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
       try {
         pollResult = await this.transport.pollMessages({
@@ -1248,7 +1264,7 @@ export class WechatDaemon {
     // the process alive until the 35-second poll timeout and retain the daemon
     // endpoint for the next startup to clean up.
     try {
-      this.transport.stop();
+      this.transport?.stop();
     } catch {
       // Best effort shutdown.
     }
@@ -1945,17 +1961,39 @@ export class WechatDaemon {
         },
       });
     }
+    if (this.channelId === "local") {
+      return new LocalChannelPort({
+        sendText: (recipientId, text, context) =>
+          this.queueWechatMessage(recipientId, text, context as WechatSendContext),
+        prefixText: (currentAdapter, text) =>
+          prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
+        onEmptyVisibleReply: (currentAdapter, rawText) => {
+          appendDaemonLog(
+            `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
+          );
+        },
+        onTextSent: (currentAdapter, text) => {
+          appendDaemonLog(
+            `final_reply_sent: adapter=${currentAdapter ?? adapter} chars=${Array.from(text).length}`,
+          );
+        },
+      });
+    }
+    if (!this.transport) {
+      throw new Error("The wechat channel port requires a WeChat transport.");
+    }
+    const transport = this.transport;
     return new WechatChannelPort({
       sendText: (recipientId, text, context) =>
         this.queueWechatMessage(recipientId, text, context as WechatSendContext),
       sendImage: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => this.transport.sendImage(filePath, { recipientId })),
+        this.queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
       sendFile: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => this.transport.sendFile(filePath, { recipientId })),
+        this.queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
       sendVoice: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => this.transport.sendVoice(filePath, recipientId)),
+        this.queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
       sendVideo: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => this.transport.sendVideo(filePath, { recipientId })),
+        this.queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
       prefixText: (currentAdapter, text) =>
         prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
       onEmptyVisibleReply: (currentAdapter, rawText) => {
@@ -3344,11 +3382,13 @@ export async function runDaemon(
       : null;
   const credentials = wecomAccount
     ? { userId: wecomAccount.operatorUserId }
-    : await ensureWechatCredentials({
-        requireUserId: true,
-        validateExisting: true,
-        log,
-      });
+    : options.channelId === "local"
+      ? { userId: LOCAL_CHANNEL_OPERATOR_ID }
+      : await ensureWechatCredentials({
+          requireUserId: true,
+          validateExisting: true,
+          log,
+        });
   if (!credentials.userId) {
     throw new Error(
       options.channelId === "wecom"
@@ -3361,7 +3401,10 @@ export async function runDaemon(
     cwd: options.cwd,
     profile: options.profile,
     authorizedUserId: credentials.userId,
-    transport: new WeChatTransport({ log, logError }),
+    transport:
+      (options.channelId ?? "wechat") === "wechat"
+        ? new WeChatTransport({ log, logError })
+        : null,
     channelId: options.channelId,
     accountId: wecomAccount?.botId,
     wecomTransport: wecomAccount
@@ -3373,6 +3416,10 @@ export async function runDaemon(
           },
         })
       : null,
+    localFiles:
+      options.channelId === "local"
+        ? getLocalChannelFiles(options.cwd)
+        : null,
   });
   if (cleanupResult.action === "stopped" && isDaemonAdapterKind(cleanupResult.lock.adapter)) {
     daemon.takenOverAdapter = cleanupResult.lock.adapter;
