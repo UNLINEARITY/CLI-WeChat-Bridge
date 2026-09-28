@@ -94,7 +94,8 @@
     "@wecom/aibot-node-sdk": "1.0.7",
     "@xterm/headless": "^6.0.0",
     "node-pty": "^1.1.0",
-    "qrcode-terminal": "^0.12.0"
+    "qrcode-terminal": "^0.12.0",
+    "ws": "^8.22.0"
   },
   "overrides": {
     "@hono/node-server": "2.1.1",
@@ -111,6 +112,7 @@
     "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
     "@types/node": "^24.12.4",
+    "@types/ws": "^8.18.1",
     "eslint": "^10.3.0",
     "typescript": "^6.0.2",
     "typescript-eslint": "^8.59.3"

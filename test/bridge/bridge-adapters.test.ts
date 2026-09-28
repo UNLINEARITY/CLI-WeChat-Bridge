@@ -3250,6 +3250,98 @@ describe("Codex panel completion recovery", () => {
     ]);
   });
 
+  test("does not follow invisible Codex threads while the visible client is connected", () => {
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "headless",
+    }) as any;
+    const events: Array<{ type: string; threadId?: string }> = [];
+    adapter.setEventSink((event: { type: string; threadId?: string }) => events.push(event));
+    adapter.visibleThreadProxy = { connected: true, url: "ws://127.0.0.1:32123" };
+    adapter.appServerPort = 32124;
+    adapter.appServerAuthToken = "test-token";
+    expect(adapter.getLocalClientEndpoint().serverUrl).toBe("ws://127.0.0.1:32123");
+    adapter.updateSharedThread("thread_visible");
+
+    adapter.handleRpcNotification("thread/status/changed", {
+      threadId: "thread_invisible",
+      status: { type: "idle" },
+    });
+    adapter.handleRpcNotification("thread/started", {
+      thread: { id: "thread_invisible", cwd: process.cwd() },
+    });
+    adapter.handleRpcNotification("turn/started", {
+      threadId: "thread_invisible",
+      turnId: "turn_invisible",
+    });
+    expect(adapter.state.sharedThreadId).toBe("thread_visible");
+    expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
+
+    adapter.trackLocalSharedThread("thread_restored", {
+      reason: "local_follow",
+      signal: "visible_request",
+    });
+    expect(adapter.state.sharedThreadId).toBe("thread_restored");
+    expect(events.filter((event) => event.type === "thread_switched")).toEqual([
+      expect.objectContaining({ threadId: "thread_restored" }),
+    ]);
+  });
+
+  test("pauses WeChat input when the visible Codex terminal resumes outside the bridge workspace", async () => {
+    const cwd = process.cwd();
+    const adapter = new CodexPtyAdapter({ kind: "codex", command: "codex", cwd, renderMode: "headless" }) as any;
+    const events: Array<{ type: string; text?: string; threadId?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string; threadId?: string }) => events.push(event));
+    adapter.visibleThreadProxy = { connected: true };
+    adapter.updateSharedThread("thread_old");
+
+    adapter.handleVisibleCodexThreadOpened("thread_other", path.dirname(cwd));
+    adapter.handleVisibleCodexThreadOpened("thread_other", path.dirname(cwd));
+    expect(adapter.state.sharedThreadId).toBe("thread_old");
+    expect(events.filter((event) => event.type === "notice")).toHaveLength(1);
+    expect(events.find((event) => event.type === "notice")?.text).toContain("WeChat input is paused");
+    await expect(adapter.sendInput("must not reach the old thread")).rejects.toThrow("outside the bridge workspace");
+    await expect(adapter.setPlanMode(true)).rejects.toThrow("outside the bridge workspace");
+    await expect(adapter.selectModel("model")).rejects.toThrow("outside the bridge workspace");
+
+    adapter.handleVisibleCodexThreadOpened("thread_old", cwd);
+    expect(adapter.visibleOutOfWorkspaceThreadId).toBeNull();
+    expect(events.filter((event) => event.type === "notice")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "notice")[1]?.text).toContain("WeChat input has resumed");
+  });
+
+  test("follows a visible terminal turn in a resumed thread of the same workspace", () => {
+    const homeDirectory = makeTempDirectory();
+    process.env.HOME = homeDirectory;
+    process.env.USERPROFILE = homeDirectory;
+    const cwd = path.join(homeDirectory, "workspace");
+    const sessionsDir = path.join(homeDirectory, ".codex", "sessions", "2026", "09", "28");
+    for (const [threadId, threadCwd] of [
+      ["thread_visible_restored", cwd],
+      ["thread_other_workspace", homeDirectory],
+    ]) {
+      writeTextFile(path.join(sessionsDir, `${threadId}.jsonl`), JSON.stringify({
+        type: "session_meta",
+        payload: { id: threadId, cwd: threadCwd, source: "cli" },
+      }));
+    }
+    const adapter = new CodexPtyAdapter({ kind: "codex", command: "codex", cwd, renderMode: "headless" }) as any;
+    const events: Array<{ type: string; threadId?: string }> = [];
+    adapter.setEventSink((event: { type: string; threadId?: string }) => events.push(event));
+    adapter.visibleThreadProxy = { connected: true };
+    adapter.updateSharedThread("thread_old");
+
+    adapter.handleVisibleCodexTurn("thread_other_workspace");
+    expect(adapter.state.sharedThreadId).toBe("thread_old");
+    adapter.handleVisibleCodexTurn("thread_visible_restored");
+    expect(adapter.state.sharedThreadId).toBe("thread_visible_restored");
+    expect(events.filter((event) => event.type === "thread_switched")).toEqual([
+      expect.objectContaining({ threadId: "thread_visible_restored" }),
+    ]);
+  });
+
   test("announces the startup thread after the local follow candidate settles", async () => {
     const adapter = createBridgeAdapter({
       kind: "codex",

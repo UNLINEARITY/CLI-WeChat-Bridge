@@ -26,13 +26,14 @@ import {
 } from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
+import { CodexVisibleThreadProxy } from "./codex-visible-thread-proxy.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 import {
   requestCodexVisibleClientShutdown,
   requestCodexVisibleThreadSwitch,
 } from "../companion/codex-visible-client-link.ts";
 import { readLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
-import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
+import { appendBoundedLog as appendBridgeLog, BRIDGE_LOG_FILE, ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   CODEX_REMOTE_AUTH_TOKEN_ENV,
   LOCAL_CLIENT_PROTOCOL_VERSION,
@@ -52,7 +53,8 @@ type CodexThreadAnnouncementSignal =
   | "thread_started"
   | "session_fallback"
   | "turn_started"
-  | "user_message";
+  | "user_message"
+  | "visible_request";
 type CodexPendingThreadAnnouncement = {
   threadId: string;
   source: BridgeThreadSwitchSource;
@@ -186,6 +188,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private appServer: ChildProcessWithoutNullStreams | null = null;
   private nativeProcess: ChildProcess | null = null;
   private appServerPort: number | null = null;
+  private visibleThreadProxy: CodexVisibleThreadProxy | null = null;
+  private visibleOutOfWorkspaceThreadId: string | null = null;
   private appServerShuttingDown = false;
   private appServerLog = "";
   private appServerAuthToken: string | null = null;
@@ -285,9 +289,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     await this.startAppServer();
     await this.connectRpcClient();
-    await this.restoreInitialSharedThreadIfNeeded();
-
     try {
+      if (this.isHeadlessRuntimeMode() && this.appServerPort && this.appServerAuthToken) {
+        const trace = (message: string) => appendBridgeLog(
+          BRIDGE_LOG_FILE,
+          `[${nowIso()}] codex_visible_proxy: ${message}\n`,
+        );
+        this.visibleThreadProxy = await CodexVisibleThreadProxy.start({
+          upstreamUrl: `ws://${CODEX_APP_SERVER_HOST}:${this.appServerPort}`,
+          token: this.appServerAuthToken,
+          onTrace: trace,
+          onThreadOpened: (threadId, cwd) => this.handleVisibleCodexThreadOpened(threadId, cwd, trace),
+          onVisibleTurn: (threadId) => this.handleVisibleCodexTurn(threadId, trace),
+        });
+      }
+      await this.restoreInitialSharedThreadIfNeeded();
+
       if (this.isNativePanelMode()) {
         await this.startNativeClient();
       } else if (this.isHeadlessRuntimeMode()) {
@@ -416,6 +433,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async selectModel(modelId: string): Promise<BridgeModelOption> {
+    this.assertVisibleCodexWorkspace();
     const models = await this.listModels();
     const selected = models.find((model) => model.id === modelId);
     if (!selected) throw new Error(`Codex model ${modelId} is not available.`);
@@ -424,6 +442,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async setPlanMode(enabled: boolean): Promise<boolean> {
+    this.assertVisibleCodexWorkspace();
     if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
       throw new Error("Codex plan mode requires an active app-server thread.");
     }
@@ -610,7 +629,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       renderMode: "headless",
       bridgeOwnerPid: process.pid,
       serverPort: this.appServerPort,
-      serverUrl: `ws://${CODEX_APP_SERVER_HOST}:${this.appServerPort}`,
+      serverUrl: this.visibleThreadProxy?.url ?? `ws://${CODEX_APP_SERVER_HOST}:${this.appServerPort}`,
       remoteAuthTokenEnv: CODEX_REMOTE_AUTH_TOKEN_ENV,
       cwd: this.options.cwd,
       command: this.options.command,
@@ -1266,6 +1285,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async sendPanelTurn(text: string): Promise<void> {
+    this.assertVisibleCodexWorkspace();
     if (this.isNativePanelMode() && !this.nativeProcess) {
       throw new Error("codex panel is not running.");
     }
@@ -1437,6 +1457,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       });
       this.appServer = null;
       this.appServerPort = null;
+      void this.visibleThreadProxy?.close();
+      this.visibleThreadProxy = null;
       this.appServerShuttingDown = false;
       this.deleteAppServerAuthTokenFile();
       this.appServerAuthToken = null;
@@ -1459,6 +1481,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       });
       this.appServer = null;
       this.appServerPort = null;
+      void this.visibleThreadProxy?.close();
+      this.visibleThreadProxy = null;
       this.appServerShuttingDown = false;
       this.deleteAppServerAuthTokenFile();
       this.appServerAuthToken = null;
@@ -2037,6 +2061,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         reason: "wechat_resume",
         notify: true,
       });
+      this.clearVisibleCodexWorkspaceBlock();
       this.bridgeResumeReplayThreadId = targetThreadId;
       this.bridgeResumeReplayUntilMs = Date.now() + CODEX_RESUME_REPLAY_SETTLE_MS;
       this.setStatus("starting", `Codex resume committed thread ${targetThreadId.slice(0, 12)}.`);
@@ -2297,6 +2322,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!options.preserveThread) {
       this.clearPendingThreadAnnouncement();
       this.announcedThreadId = null;
+      this.visibleOutOfWorkspaceThreadId = null;
     }
     if (!options.preserveThread) {
       this.updateSharedThread(null);
@@ -2441,6 +2467,68 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     pending.timer.unref?.();
   }
 
+  private handleVisibleCodexThreadOpened(
+    threadId: string,
+    cwd: string | undefined,
+    trace?: (message: string) => void,
+  ): void {
+    if (this.pendingVisibleResume || this.shuttingDown) {
+      trace?.(`ignored thread=${threadId.slice(0, 12)} reason=bridge_switch`);
+      return;
+    }
+    if (cwd && normalizeComparablePath(cwd) !== normalizeComparablePath(this.options.cwd)) {
+      trace?.(`paused thread=${threadId.slice(0, 12)} reason=workspace`);
+      this.interruptWechatTurnForLocalThreadSwitch(threadId);
+      this.clearPendingThreadAnnouncement();
+      this.pendingThreadFollowId = null;
+      if (this.visibleOutOfWorkspaceThreadId !== threadId) {
+        this.visibleOutOfWorkspaceThreadId = threadId;
+        this.emit({
+          type: "notice",
+          level: "warning",
+          text: `The visible Codex terminal switched to ${cwd}, outside the bridge workspace ${this.options.cwd}. WeChat input is paused instead of being sent to the previous session. Resume a session from the bridge workspace, or restart the bridge in ${cwd}.`,
+          timestamp: nowIso(),
+        });
+      }
+      return;
+    }
+    this.clearVisibleCodexWorkspaceBlock();
+    trace?.(`follow thread=${threadId.slice(0, 12)} source=visible_open`);
+    this.trackLocalSharedThread(threadId, { reason: "local_follow", signal: "visible_request" });
+  }
+
+  private handleVisibleCodexTurn(threadId: string, trace?: (message: string) => void): void {
+    if (this.pendingVisibleResume || this.shuttingDown) return;
+    if (threadId === this.sharedThreadId) {
+      this.clearVisibleCodexWorkspaceBlock();
+      return;
+    }
+    if (!findCodexSessionFile(this.options.cwd, Date.now(), { threadId })) {
+      trace?.(`ignored thread=${threadId.slice(0, 12)} reason=workspace_or_unpersisted`);
+      return;
+    }
+    this.clearVisibleCodexWorkspaceBlock();
+    trace?.(`follow thread=${threadId.slice(0, 12)} source=visible_turn`);
+    this.trackLocalSharedThread(threadId, { reason: "local_follow", signal: "visible_request" });
+  }
+
+  private clearVisibleCodexWorkspaceBlock(): void {
+    if (!this.visibleOutOfWorkspaceThreadId) return;
+    this.visibleOutOfWorkspaceThreadId = null;
+    this.emit({
+      type: "notice",
+      level: "info",
+      text: `The visible Codex terminal is back in the bridge workspace ${this.options.cwd}. WeChat input has resumed.`,
+      timestamp: nowIso(),
+    });
+  }
+
+  private assertVisibleCodexWorkspace(): void {
+    if (this.visibleOutOfWorkspaceThreadId) {
+      throw new Error(`The visible Codex terminal is outside the bridge workspace ${this.options.cwd}. WeChat input is paused; resume a session from this workspace or restart the bridge in the terminal's workspace.`);
+    }
+  }
+
   private trackLocalSharedThread(
     threadId: string,
     options: {
@@ -2455,7 +2543,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (weakSignal && Date.now() < this.localThreadFollowBlockedUntilMs) {
       return;
     }
-    if (options.signal === "user_message" || options.signal === "turn_started") {
+    if (options.signal === "user_message" || options.signal === "turn_started" || options.signal === "visible_request") {
       this.localThreadFollowBlockedUntilMs = 0;
     }
 
@@ -2858,7 +2946,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       };
     }
 
-    if (method === "turn/started" && !this.activeTurn) {
+    if (method === "turn/started" && !this.activeTurn && !this.visibleThreadProxy) {
       return {
         threadId,
         turnId,
@@ -3203,7 +3291,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!threadId) {
       return;
     }
-    if (this.pendingVisibleResume) {
+    if (this.pendingVisibleResume || this.visibleThreadProxy) {
       return;
     }
     if (this.isBridgeResumeReplay(threadId)) {
@@ -3301,7 +3389,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!threadId) {
       return;
     }
-    if (this.isBridgeResumeReplay(threadId)) {
+    if (this.visibleThreadProxy || this.isBridgeResumeReplay(threadId)) {
       return;
     }
 
@@ -3642,6 +3730,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async stopAppServer(): Promise<void> {
+    const visibleThreadProxy = this.visibleThreadProxy;
+    this.visibleThreadProxy = null;
+    await visibleThreadProxy?.close();
     if (!this.appServer) {
       this.appServerPort = null;
       this.appServerShuttingDown = false;
