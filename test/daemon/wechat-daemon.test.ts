@@ -25,6 +25,7 @@ import {
   shouldRestartDeadCodexVisibleRuntime,
   waitForCodexVisibleThread,
   waitForVisibleClientConnection,
+  openVisibleClient,
   WechatDaemon,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
@@ -143,6 +144,35 @@ describe("wechat-daemon helpers", () => {
     expect(status.channelId).toBe("local");
     expect(status.slots).toEqual([]);
   });
+
+  test("openVisibleClient honors the e2e launcher override", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-launcher-"));
+    const launcherPath = path.join(dir, "launcher.mjs");
+    const marker = path.join(dir, "marker.json");
+    fs.writeFileSync(launcherPath, [
+      "import fs from 'node:fs';",
+      `fs.writeFileSync(${JSON.stringify(marker)}, JSON.stringify(process.argv.slice(2)));`,
+    ].join("\n"));
+    const previous = process.env.CLI_BRIDGE_VISIBLE_LAUNCHER;
+    process.env.CLI_BRIDGE_VISIBLE_LAUNCHER = launcherPath;
+    try {
+      const launch = openVisibleClient({ adapter: "claude", cwd: process.cwd() });
+      expect(launch.command).toBe(process.execPath);
+      for (let i = 0; i < 50 && !fs.existsSync(marker); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      const argv = JSON.parse(fs.readFileSync(marker, "utf8")) as string[];
+      expect(argv).toContain("--adapter");
+      expect(argv).toContain("claude");
+      expect(argv.some((arg) => arg.includes("local-companion"))).toBe(true);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.CLI_BRIDGE_VISIBLE_LAUNCHER;
+      } else {
+        process.env.CLI_BRIDGE_VISIBLE_LAUNCHER = previous;
+      }
+    }
+  }, 15_000);
 
   test("buildVisibleClientLaunchArgs routes codex through the remote client", () => {
     const args = buildVisibleClientLaunchArgs({

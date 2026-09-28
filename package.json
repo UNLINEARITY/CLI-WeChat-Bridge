@@ -61,6 +61,7 @@
     "quality": "npm run lint && npm run typecheck:src && bun test test && npm run build",
     "smoke:global": "node scripts/smoke-global-install.mjs",
     "smoke:cli-compat": "node scripts/smoke-cli-compatibility.mjs",
+    "e2e": "node scripts/e2e/run-e2e.mjs",
     "publish:dual": "node scripts/publish-dual.mjs",
     "setup": "node --no-warnings --experimental-strip-types src/wechat/setup.ts",
     "start": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts",

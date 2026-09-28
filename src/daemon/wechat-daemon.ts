@@ -588,7 +588,7 @@ function formatLaunchPreview(launch: VisibleClientLaunch): string {
   return [launch.command, ...launch.args].join(" ");
 }
 
-function openVisibleClient(params: {
+export function openVisibleClient(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
   sessionStartMode?: BridgeSessionStartMode;
@@ -597,6 +597,27 @@ function openVisibleClient(params: {
   channelId?: BridgeChannelId;
 }): VisibleClientLaunch {
   const args = buildVisibleClientLaunchArgs(params);
+  // E2E harness override: host the visible client in a PTY owned by an
+  // external launcher script instead of a terminal window, so automated
+  // runs can type and read the TUI while every other step stays identical.
+  const launcherOverride = process.env.CLI_BRIDGE_VISIBLE_LAUNCHER;
+  if (launcherOverride) {
+    const child = spawn(process.execPath, [launcherOverride, ...args], {
+      cwd: params.cwd,
+      env: process.env,
+      detached: true,
+      stdio: "ignore",
+    });
+    child.once("error", (error) => {
+      params.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
+    child.unref();
+    return {
+      command: process.execPath,
+      args: [launcherOverride, ...args],
+      pid: child.pid,
+    };
+  }
   if (process.platform === "win32") {
     const command = process.env.ComSpec || "cmd.exe";
     const launchArgs = [
