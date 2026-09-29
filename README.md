@@ -13,6 +13,7 @@
   <img alt="License" src="https://img.shields.io/badge/License-AGPL--3.0-7c3aed?style=for-the-badge&labelColor=1c1917">
 </a>
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/UNLINEARITY/CLI-WeChat-Bridge/ci.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white&labelColor=1c1917"></a>
+  <a href="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="AtomGit stars" src="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge/star/new_badge.svg" height="28"></a>
 </p>
 
 **命令行工具的微信与企业微信桥接**：本项目将微信或企业微信消息桥接到本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、[`OpenCode`](https://github.com/anomalyco/opencode) 和 [`Pi`](https://github.com/earendil-works/pi)，同时把本地输出、审批请求与运行状态同步回对应通道。
