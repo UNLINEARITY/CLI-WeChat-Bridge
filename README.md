@@ -5,16 +5,22 @@
 <p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.herokuapp.com?font=JetBrains+Mono&amp;weight=600&amp;duration=4000&amp;pause=500&amp;color=06C763&amp;center=true&amp;vCenter=true&amp;width=660&amp;lines=CLI+WeChat+Bridge+%E5%BE%AE%E4%BF%A1%E6%A1%A5%E6%8E%A5;%E7%9C%9F%E6%AD%A3%E7%9A%84%E2%80%9C%E7%BB%88%E7%AB%AF-%E5%BE%AE%E4%BF%A1%E2%80%9D%E5%8E%9F%E7%94%9F%E5%8F%8C%E5%90%91%E4%BA%A4%E4%BA%92"></p>
 
 <p align="center">
-  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/CLI-WeChat-Bridge?label=Stars&amp;style=for-the-badge&amp;logo=github&amp;color=0891b2&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/cli-wechat-bridge?label=npm&amp;style=for-the-badge&amp;logo=npm&amp;color=cb3837&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dt/cli-wechat-bridge?label=Downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=16a34a&amp;labelColor=1c1917"></a>
-  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="scoped npm downloads" src="https://img.shields.io/npm/dt/@unlinearity/cli-wechat-bridge?label=Scoped%20downloads&amp;style=for-the-badge&amp;logo=npm&amp;color=15803d&amp;labelColor=1c1917"></a>
+  <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/CLI-WeChat-Bridge?label=Stars&style=for-the-badge&logo=github&color=0891b2&labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/cli-wechat-bridge?label=npm&style=for-the-badge&logo=npm&color=cb3837&labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dt/cli-wechat-bridge?label=Downloads&style=for-the-badge&logo=npm&color=16a34a&labelColor=1c1917"></a>
+  <a href="https://www.npmjs.com/package/@unlinearity/cli-wechat-bridge"><img alt="scoped npm downloads" src="https://img.shields.io/npm/dt/@unlinearity/cli-wechat-bridge?label=Scoped%20downloads&style=for-the-badge&logo=npm&color=15803d&labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/cli-wechat-bridge">
   <img alt="License" src="https://img.shields.io/badge/License-AGPL--3.0-7c3aed?style=for-the-badge&labelColor=1c1917">
 </a>
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/UNLINEARITY/CLI-WeChat-Bridge/ci.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white&labelColor=1c1917"></a>
-  <a href="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="AtomGit stars" src="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge/star/new_badge.svg" height="28"></a>
 </p>
+
+<table align="center">
+  <tr>
+    <td align="center"><a href="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="AtomGit G-Star" src="https://atomgit.com/UNLINEARITY/CLI-WeChat-Bridge/star/new_badge.svg"></a></td>
+    <td>此项目也在 AtomGit 托管</td>
+  </tr>
+</table>
 
 **命令行工具的微信与企业微信桥接**：本项目将微信或企业微信消息桥接到本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、[`OpenCode`](https://github.com/anomalyco/opencode) 和 [`Pi`](https://github.com/earendil-works/pi)，同时把本地输出、审批请求与运行状态同步回对应通道。
 
