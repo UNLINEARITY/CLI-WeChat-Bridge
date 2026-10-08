@@ -65,16 +65,16 @@ export class LegacyAdapterRuntime implements RuntimeHost {
     await this.adapter.reset();
   }
 
-  async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
-    return await this.adapter.resolveApproval(action);
+  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    return await this.adapter.resolveApproval(action, requestId);
   }
 
   async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
     return await this.adapter.resolveAllApprovals(action);
   }
 
-  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
-    return await this.adapter.submitUserInput(answers);
+  async submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean> {
+    return await this.adapter.submitUserInput(answers, requestId);
   }
 
   async dispose(): Promise<void> {

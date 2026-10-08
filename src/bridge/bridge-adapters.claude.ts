@@ -18,6 +18,8 @@ import {
   buildClaudeFailureMessage,
   buildClaudeHookScript,
   buildClaudeHookSettings,
+  buildClaudeUserInputRequest,
+  buildClaudeUserInputHookOutput,
   buildClaudePermissionDecisionHookOutput,
   buildClaudePermissionApprovalRequest,
   extractClaudeAssistantMessageText,
@@ -38,6 +40,8 @@ import type {
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
+  BridgeTurnOrigin,
+  UserInputRequest,
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
@@ -482,6 +486,14 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private hookErrorLogPath: string | null = null;
   private hookReceivedCount = 0;
   private hookHealthCheckTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly resolvingHookApprovals = new Set<string>();
+  private readonly pendingHookUserInputs = new Map<string, {
+    socket: net.Socket;
+    payload: ClaudeHookPayload;
+    request: UserInputRequest;
+    origin?: BridgeTurnOrigin;
+  }>();
+  private readonly resolvingHookUserInputs = new Set<string>();
   private readonly pendingHookApprovals = new Map<string, ClaudePendingHookApproval>();
   private recoveringInvalidResume = false;
   private workingNoticeTimer: ReturnType<typeof setTimeout> | null = null;
@@ -490,7 +502,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private lastCompactCompletionAtMs = 0;
   private startupOutputBuffer = "";
   private hasAutoConfirmedWorkspaceTrustPrompt = false;
-  private lastAutoApprovedPayload: ClaudeHookPayload | null = null;
   private transcriptPollTimer: ReturnType<typeof setInterval> | null = null;
   private transcriptTailOffset = 0;
   private polledTranscriptSessionId: string | null = null;
@@ -521,6 +532,11 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
   constructor(options: AdapterOptions) {
     super(options);
+    this.state.supportsApprovalRequestIds = true;
+    this.state.supportsUserInputRequestIds = true;
+    this.state.pendingUserInput = null;
+    this.state.pendingApprovals = [];
+    this.state.pendingApproval = null;
     const shouldRestoreInitialSession = options.sessionStartMode !== "new";
     this.runtimeSessionId = shouldRestoreInitialSession
       ? options.initialSharedSessionId ?? options.initialSharedThreadId ?? null
@@ -600,6 +616,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (this.pendingApproval) {
       throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
     }
+    if (this.state.status === "awaiting_input") throw new Error("Claude is waiting for answers. Reply with /answer or use /stop.");
 
     await this.waitForInteractiveReadiness();
     if (!this.pty) {
@@ -612,6 +629,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
     }
 
+    if (this.getState().status === "awaiting_input") throw new Error("Claude is waiting for answers. Reply with /answer or use /stop.");
     const normalizedText = normalizeOutput(text).trim();
     this.clearRemoteSubmitRetry();
     this.pendingInjectedInputs.push({
@@ -806,67 +824,39 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     await this.start();
   }
 
-  override async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
-    if (!this.pendingApproval) {
-      return false;
-    }
-
-    if (this.pendingApproval.requestId) {
-      const handled = this.respondToClaudeHookApproval(this.pendingApproval.requestId, action);
+  override async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    const id = requestId ?? this.pendingApproval?.requestId;
+    if (id && this.pendingHookApprovals.has(id)) {
+      const handled = await this.respondToClaudeHookApproval(id, action);
       if (handled) {
         this.clearWechatWorkingNotice();
-        this.pendingCliApprovalHints = null;
-        this.pendingApproval = null;
-        this.state.pendingApproval = null;
-        this.state.pendingApprovalOrigin = undefined;
-        this.setStatus("busy");
-        return true;
+        this.syncPendingHookApprovals();
       }
+      return handled;
     }
-
-    const input =
-      action === "confirm" ? this.pendingApproval.confirmInput : this.pendingApproval.denyInput;
+    if (!this.pendingApproval || (requestId !== undefined && requestId !== this.pendingApproval.requestId)) return false;
+    // Hook requests never fall through to keystrokes after their socket expires.
+    if (this.pendingApproval.requestId) return false;
+    const input = action === "confirm" ? this.pendingApproval.confirmInput : this.pendingApproval.denyInput;
     if (!input) {
-      throw new Error(
-        "Remote approval is not safely available for this Claude prompt. Approve it in the local Claude terminal.",
-      );
+      throw new Error("Remote approval is not safely available for this Claude prompt. Approve it in the local Claude terminal.");
     }
-
-    this.clearWechatWorkingNotice();
+    this.writeToPty(input);
     this.pendingCliApprovalHints = null;
     this.pendingApproval = null;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
     this.setStatus("busy");
-    this.writeToPty(input);
     return true;
   }
 
   override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
+    if (!this.pendingHookApprovals.size) return await this.resolveApproval(action) ? 1 : 0;
     let count = 0;
-    for (const requestId of Array.from(this.pendingHookApprovals.keys())) {
-      const pending = this.pendingHookApprovals.get(requestId);
-      if (pending) {
-        this.pendingHookApprovals.delete(requestId);
-        this.respondToClaudeHook(
-          pending.socket,
-          requestId,
-          buildClaudePermissionDecisionHookOutput(action),
-        );
-        count++;
-      }
+    for (const id of Array.from(this.pendingHookApprovals.keys())) {
+      if (await this.resolveApproval(action, id)) count++;
     }
-    if (count > 0) {
-      this.clearWechatWorkingNotice();
-      this.pendingCliApprovalHints = null;
-      this.pendingApproval = null;
-      this.state.pendingApproval = null;
-      this.state.pendingApprovalOrigin = undefined;
-      this.setStatus("busy");
-      return count;
-    }
-    const ok = await this.resolveApproval(action);
-    return ok ? 1 : 0;
+    return count;
   }
 
   override async dispose(): Promise<void> {
@@ -1075,9 +1065,11 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
           }
         });
         const cleanupPendingRequestsForSocket = () => {
+          for (const [requestId, pending] of this.pendingHookUserInputs.entries()) {
+            if (pending.socket === socket) this.handleClosedClaudeHookUserInput(requestId);
+          }
           for (const [requestId, pending] of this.pendingHookApprovals.entries()) {
             if (pending.socket === socket) {
-              this.pendingHookApprovals.delete(requestId);
               this.handleClosedClaudeHookApproval(requestId);
             }
           }
@@ -1594,34 +1586,38 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         this.handleClaudeUserPromptSubmit(payload);
         this.respondToClaudeHook(params.socket, params.requestId);
         return;
+      case "PreToolUse":
+        if (payload.tool_name === "AskUserQuestion") {
+          this.handleClaudeUserInputRequest(params.requestId, payload, params.socket);
+        } else {
+          this.respondToClaudeHook(params.socket, params.requestId);
+        }
+        return;
+      case "PostToolUse":
+        if (payload.tool_name === "AskUserQuestion" && payload.tool_use_id) {
+          let removed = false;
+          for (const [id, pending] of this.pendingHookUserInputs) {
+            if (pending.payload.tool_use_id === payload.tool_use_id) {
+              this.pendingHookUserInputs.delete(id);
+              removed = true;
+              this.respondToClaudeHook(pending.socket, id);
+            }
+          }
+          if (removed) this.syncPendingHookUserInputs();
+        }
+        this.respondToClaudeHook(params.socket, params.requestId);
+        return;
       case "PermissionRequest":
         this.handleClaudePermissionRequest(params.requestId, payload, params.socket);
         return;
       case "Notification":
         if (payload.notification_type === "permission_prompt") {
-          if (this.pendingApproval) {
+          if (this.state.pendingUserInput) {
+            this.setStatus("awaiting_input", "Claude is waiting for your answers.");
+          } else if (this.pendingApproval) {
             this.setStatus("awaiting_approval", "Claude approval is required.");
-          } else if (this.lastAutoApprovedPayload) {
-            // Auto-approval response failed to reach Claude Code (socket closed before delivery).
-            // Fall back to forwarding the approval request to WeChat.
-            const fallbackPayload = this.lastAutoApprovedPayload;
-            this.lastAutoApprovedPayload = null;
-            const request = buildClaudePermissionApprovalRequest(fallbackPayload);
-            this.pendingApproval = {
-              ...request,
-              requestId: undefined,
-              confirmInput: this.pendingCliApprovalHints?.confirmInput,
-              denyInput: this.pendingCliApprovalHints?.denyInput,
-            };
-            this.pendingCliApprovalHints = null;
-            this.state.pendingApproval = this.pendingApproval;
-            this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
-            this.setStatus("awaiting_approval", "Claude auto-approval failed, forwarding to WeChat.");
-            this.emit({
-              type: "approval_required",
-              request: this.pendingApproval,
-              timestamp: nowIso(),
-            });
+          } else {
+            this.emitClaudeNotice("Claude is waiting for a local permission prompt that has no remote approval hook. Resolve it in the local terminal.", "warning");
           }
         }
         this.respondToClaudeHook(params.socket, params.requestId);
@@ -1765,6 +1761,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private handleClaudeSessionEnd(payload: { reason?: string }): void {
+    this.flushPendingClaudeHookApprovals();
     if (payload.reason !== "resume") {
       return;
     }
@@ -1880,15 +1877,12 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     socket: net.Socket,
   ): void {
     this.clearWechatWorkingNotice();
-    this.lastAutoApprovedPayload = null;
+    if (payload.tool_name === "AskUserQuestion") {
+      this.handleClaudeUserInputRequest(requestId, { ...payload, hook_event_name: "PermissionRequest" }, socket);
+      return;
+    }
     const denyMessage = getClaudeWechatOutboundAttachmentDenyMessage(payload);
     if (denyMessage) {
-      this.pendingApproval = null;
-      this.state.pendingApproval = null;
-      this.state.pendingApprovalOrigin = undefined;
-      if (this.state.status === "awaiting_approval") {
-        this.setStatus("busy");
-      }
       this.respondToClaudeHook(
         socket,
         requestId,
@@ -1899,13 +1893,12 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     const autoResponse = getClaudePermissionAutoResponse(payload);
     if (autoResponse) {
-      if (!this.pendingApproval && !this.state.pendingApproval) {
+      if (!this.pendingApproval && !this.state.pendingApproval && !this.state.pendingUserInput) {
         this.setStatus(
           "busy",
           `Claude approval auto-approved: ${truncatePreview(autoResponse.reason, 180)}`,
         );
       }
-      this.lastAutoApprovedPayload = payload;
       this.respondToClaudeHook(
         socket,
         requestId,
@@ -1914,48 +1907,42 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    this.flushPendingClaudeHookApprovals();
+    if (this.pendingHookApprovals.has(requestId)) return;
+    const request = {
+      ...buildClaudePermissionApprovalRequest(payload),
+      requestId,
+      confirmInput: this.pendingCliApprovalHints?.confirmInput,
+      denyInput: this.pendingCliApprovalHints?.denyInput,
+    };
     this.pendingHookApprovals.set(requestId, {
       requestId,
       socket,
+      request,
+      origin: this.state.activeTurnOrigin,
     });
-    const request = buildClaudePermissionApprovalRequest(payload);
-    this.pendingApproval = {
-      ...request,
-      requestId,
-      confirmInput:
-        this.pendingApproval?.confirmInput ?? this.pendingCliApprovalHints?.confirmInput,
-      denyInput: this.pendingApproval?.denyInput ?? this.pendingCliApprovalHints?.denyInput,
-    };
     this.pendingCliApprovalHints = null;
+    this.syncPendingHookApprovals();
+  }
+
+  private syncPendingHookApprovals(): void {
+    const previousId = this.pendingApproval?.requestId;
+    const entries = Array.from(this.pendingHookApprovals.values());
+    const requests = entries.map((pending) => pending.request);
+    this.pendingApproval = requests[0] ?? null;
     this.state.pendingApproval = this.pendingApproval;
-    this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
-    this.setStatus("awaiting_approval", "Claude approval is required.");
-    this.emit({
-      type: "approval_required",
-      request: this.pendingApproval,
-      timestamp: nowIso(),
-    });
+    this.state.pendingApprovals = requests;
+    this.state.pendingApprovalOrigin = entries[0]?.origin;
+    this.setStatus(requests.length ? "awaiting_approval" : this.state.pendingUserInput ? "awaiting_input" : "busy");
+    this.emit({ type: "approval_state_changed", requests, timestamp: nowIso() });
+    if (requests[0] && requests[0].requestId !== previousId) {
+      this.emit({ type: "approval_required", request: requests[0], timestamp: nowIso() });
+    }
   }
 
   private handleClosedClaudeHookApproval(requestId: string): void {
-    if (this.pendingApproval?.requestId !== requestId) {
-      return;
-    }
-
-    if (this.pendingApproval.confirmInput || this.pendingApproval.denyInput) {
-      this.pendingApproval = {
-        ...this.pendingApproval,
-        requestId: undefined,
-      };
-      this.state.pendingApproval = this.pendingApproval;
-      return;
-    }
-
-    this.pendingApproval = null;
-    this.state.pendingApproval = null;
-    this.state.pendingApprovalOrigin = undefined;
-    if (this.state.status === "awaiting_approval") {
+    if (!this.pendingHookApprovals.delete(requestId)) return;
+    this.syncPendingHookApprovals();
+    if (!this.pendingHookApprovals.size) {
       this.setStatus("awaiting_approval", "Claude approval must be resolved in the local terminal.");
     }
     this.emitClaudeNotice(
@@ -2006,7 +1993,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearRemoteSubmitRetry();
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
-    this.lastAutoApprovedPayload = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -2041,7 +2027,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     ) {
       return;
     }
-    this.lastAutoApprovedPayload = null;
     this.stopTranscriptThinkingWatch();
     this.failClaudeTurn(buildClaudeFailureMessage(payload));
   }
@@ -2156,22 +2141,99 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
   }
 
-  private respondToClaudeHookApproval(
+  private async respondToClaudeHookApproval(
     requestId: string,
     action: "confirm" | "deny",
-  ): boolean {
+  ): Promise<boolean> {
     const pending = this.pendingHookApprovals.get(requestId);
     if (!pending) {
       return false;
     }
 
-    this.pendingHookApprovals.delete(requestId);
-    this.respondToClaudeHook(
-      pending.socket,
-      requestId,
-      buildClaudePermissionDecisionHookOutput(action),
-    );
-    return true;
+    if (pending.socket.destroyed || pending.socket.writableEnded || this.resolvingHookApprovals.has(requestId)) return false;
+    this.resolvingHookApprovals.add(requestId);
+    try {
+      await this.writeClaudeHookResponse(pending.socket, requestId, buildClaudePermissionDecisionHookOutput(action));
+      this.pendingHookApprovals.delete(requestId);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.resolvingHookApprovals.delete(requestId);
+    }
+  }
+
+  private async writeClaudeHookResponse(socket: net.Socket, requestId: string, stdout: string): Promise<void> {
+    const response = `${JSON.stringify({ requestId, stdout })}\n`;
+    const candidate: unknown = socket;
+    if (!(candidate instanceof net.Socket)) {
+      socket.end(response);
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const cleanup = () => { socket.off("error", onError); socket.off("close", onClose); };
+      const onError = (error: Error) => { cleanup(); reject(error); };
+      const onClose = () => { cleanup(); reject(new Error("Claude hook closed before its reply was written.")); };
+      socket.once("error", onError);
+      socket.once("close", onClose);
+      socket.end(response, () => { cleanup(); resolve(); });
+    });
+  }
+
+  private handleClaudeUserInputRequest(requestId: string, payload: ClaudeHookPayload, socket: net.Socket): void {
+    const request = buildClaudeUserInputRequest(payload, requestId);
+    const existingAnswers = payload.tool_input?.answers;
+    if (!request || (existingAnswers && typeof existingAnswers === "object"
+      && request.questions.every((question) => {
+        const answer = (existingAnswers as Record<string, unknown>)[question.question];
+        return typeof answer === "string" && answer.trim();
+      }))) {
+      this.respondToClaudeHook(socket, requestId);
+      return;
+    }
+    if (this.pendingHookUserInputs.has(requestId)) return;
+    this.clearWechatWorkingNotice();
+    this.pendingHookUserInputs.set(requestId, { socket, payload, request, origin: this.state.activeTurnOrigin });
+    this.syncPendingHookUserInputs();
+  }
+
+  private syncPendingHookUserInputs(): void {
+    const previousId = this.state.pendingUserInput?.requestId;
+    const head = this.pendingHookUserInputs.values().next().value;
+    this.state.pendingUserInput = head?.request ?? null;
+    this.state.pendingUserInputOrigin = head?.origin;
+    this.setStatus(head ? "awaiting_input" : this.pendingApproval ? "awaiting_approval" : "busy");
+    if (head && head.request.requestId !== previousId) {
+      this.emit({ type: "user_input_required", request: head.request, timestamp: nowIso() });
+    }
+  }
+
+  private handleClosedClaudeHookUserInput(requestId: string): void {
+    if (!this.pendingHookUserInputs.delete(requestId)) return;
+    this.syncPendingHookUserInputs();
+    if (!this.pendingHookUserInputs.size && !this.pendingApproval) this.setStatus("awaiting_input");
+    this.emitClaudeNotice("Claude question hook expired or disconnected. Answer in the local Claude terminal, or use /stop.", "warning");
+  }
+
+  override async submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean> {
+    const id = requestId ?? this.state.pendingUserInput?.requestId;
+    if (!id || id !== this.state.pendingUserInput?.requestId || this.resolvingHookUserInputs.has(id)) return false;
+    const pending = this.pendingHookUserInputs.get(id);
+    if (!pending || pending.socket.destroyed || pending.socket.writableEnded) return false;
+    const stdout = buildClaudeUserInputHookOutput(pending.payload, pending.request, answers);
+    if (!stdout) return false;
+    this.resolvingHookUserInputs.add(id);
+    try {
+      await this.writeClaudeHookResponse(pending.socket, id, stdout);
+      if (this.pendingHookUserInputs.get(id) !== pending) return false;
+      this.pendingHookUserInputs.delete(id);
+      this.syncPendingHookUserInputs();
+      return true;
+    } catch {
+      return false;
+    } finally {
+      this.resolvingHookUserInputs.delete(id);
+    }
   }
 
   private cancelPendingClaudeHookApproval(requestId: string): void {
@@ -2185,9 +2247,22 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private flushPendingClaudeHookApprovals(): void {
+    const userInputs = Array.from(this.pendingHookUserInputs.entries());
+    this.pendingHookUserInputs.clear();
+    this.state.pendingUserInput = null;
+    this.state.pendingUserInputOrigin = undefined;
+    for (const [id, pending] of userInputs) this.respondToClaudeHook(pending.socket, id);
+    const hadPending = this.pendingHookApprovals.size > 0;
+    if (userInputs.length && !hadPending) this.setStatus(this.state.status);
     for (const requestId of Array.from(this.pendingHookApprovals.keys())) {
       this.cancelPendingClaudeHookApproval(requestId);
     }
+    this.state.pendingApprovals = [];
+    if (hadPending) {
+      this.pendingApproval = null;
+      this.state.pendingApproval = null;
+      this.state.pendingApprovalOrigin = undefined;
+      this.emit({ type: "approval_state_changed", requests: [], timestamp: nowIso() });
+    }
   }
 }
-

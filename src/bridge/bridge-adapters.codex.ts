@@ -222,6 +222,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private bridgeResumeReplayThreadId: string | null = null;
   private bridgeResumeReplayUntilMs = 0;
   private pendingApprovalRequests: CodexPendingApprovalRequest[] = [];
+  private readonly settledApprovalIds = new Set<string>();
+  private readonly discoveringApprovalIds = new Set<string>();
+  private approvalGeneration = 0;
+  private readonly resolvingApprovalIds = new Set<string>();
+  private readonly backgroundThreadParents = new Map<string, string>();
   private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
   private pendingUserInputTimer: ReturnType<typeof setTimeout> | null = null;
   private userInputAutoResolutionDelayMs = CODEX_NON_BLOCKING_USER_INPUT_TIMEOUT_MS;
@@ -262,6 +267,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   constructor(options: AdapterOptions) {
     super(options);
+    this.state.supportsApprovalRequestIds = true;
+    this.state.pendingApprovals = [];
     this.resumeThreadId = options.sessionStartMode === "new"
       ? null
       : options.initialSharedSessionId ?? options.initialSharedThreadId ?? null;
@@ -501,40 +508,35 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return true;
   }
 
-  override async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
-    if (!this.pendingApproval && this.pendingApprovalRequests.length === 0) {
-      return false;
+  override async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    const pending = requestId === undefined
+      ? this.pendingApprovalRequests[0]
+      : this.pendingApprovalRequests.find((request) => this.rpcRequestKey(request.requestId) === requestId);
+    if (!pending) {
+      return this.pendingApprovalRequests.length ? false : await super.resolveApproval(action, requestId);
     }
-
-    if (this.pendingApprovalRequests.length > 0 && this.rpcSocket) {
-      for (const request of this.pendingApprovalRequests) {
-        await this.respondToApprovalRequest(request, action);
-      }
-      this.clearPendingApprovalState();
-      this.setStatus("busy");
+    const id = this.rpcRequestKey(pending.requestId);
+    if (this.resolvingApprovalIds.has(id)) return false;
+    this.resolvingApprovalIds.add(id);
+    try {
+      await this.respondToApprovalRequest(pending, action);
+      this.rememberSettledApproval(pending.requestId);
+      this.pendingApprovalRequests = this.pendingApprovalRequests.filter((request) => request !== pending);
+      this.syncPendingApprovals();
       return true;
+    } finally {
+      this.resolvingApprovalIds.delete(id);
     }
-
-    return await super.resolveApproval(action);
   }
 
   override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    if (this.pendingApprovalRequests.length === 0 && !this.pendingApproval) {
-      return 0;
+    if (!this.pendingApprovalRequests.length) return await super.resolveAllApprovals(action);
+    let count = 0;
+    const ids = this.pendingApprovalRequests.map((request) => this.rpcRequestKey(request.requestId));
+    for (const id of ids) {
+      if (await this.resolveApproval(action, id)) count++;
     }
-
-    if (this.pendingApprovalRequests.length > 0 && this.rpcSocket) {
-      const count = this.pendingApprovalRequests.length;
-      for (const request of this.pendingApprovalRequests) {
-        await this.respondToApprovalRequest(request, action);
-      }
-      this.clearPendingApprovalState();
-      this.setStatus("busy");
-      return count;
-    }
-
-    const ok = await super.resolveApproval(action);
-    return ok ? 1 : 0;
+    return count;
   }
 
   override async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
@@ -557,7 +559,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       },
     });
     this.clearPendingUserInputState();
-    this.setStatus("busy", "Codex user input submitted.");
+    this.setStatus(this.pendingApprovalRequests.length ? "awaiting_approval" : "busy", "Codex user input submitted.");
     return true;
   }
 
@@ -653,12 +655,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.state.lastOutputAt = nowIso();
-    const approval = detectCliApproval(text);
+    const detectedApproval = detectCliApproval(text);
+    const approval = detectedApproval ? { ...detectedApproval, requestId: crypto.randomUUID() } : null;
 
     if (this.hasAcceptedInput) {
       if (approval && !this.pendingApproval) {
         this.pendingApproval = approval;
         this.state.pendingApproval = approval;
+        this.state.pendingApprovals = [approval];
         this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
         this.setStatus("awaiting_approval", "Codex approval is required.");
         this.emit({
@@ -1676,6 +1680,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       cleanPanelExitInProgress: this.cleanPanelExitInProgress,
     });
     this.rpcSocket = null;
+    this.clearPendingApprovalState();
     this.lastRpcCloseDetail = `close_code=${code ?? "unknown"}${reason ? ` reason=${truncatePreview(reason, 240)}` : ""}`;
     this.subscribedThreadIds.clear();
     this.rejectPendingRpcRequests("Codex websocket connection closed.");
@@ -2682,10 +2687,32 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private clearPendingApprovalState(): void {
+    this.approvalGeneration++;
+    const hadPending = this.pendingApprovalRequests.length > 0;
+    for (const pending of this.pendingApprovalRequests) this.rememberSettledApproval(pending.requestId);
     this.pendingApprovalRequests = [];
+    this.state.pendingApprovals = [];
     this.pendingApproval = null;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
+    if (hadPending) this.emit({ type: "approval_state_changed", requests: [], timestamp: nowIso() });
+  }
+
+  private syncPendingApprovals(): void {
+    const previousId = this.pendingApproval?.requestId;
+    const requests = this.pendingApprovalRequests.flatMap((pending) => {
+      const request = buildCodexApprovalRequest(pending.method, pending.params);
+      return request ? [{ ...request, requestId: this.rpcRequestKey(pending.requestId) }] : [];
+    });
+    this.pendingApproval = requests[0] ?? null;
+    this.state.pendingApproval = this.pendingApproval;
+    this.state.pendingApprovals = requests;
+    this.state.pendingApprovalOrigin = this.pendingApprovalRequests[0]?.origin;
+    this.setStatus(requests.length ? "awaiting_approval" : this.state.pendingUserInput ? "awaiting_input" : "busy");
+    this.emit({ type: "approval_state_changed", requests, timestamp: nowIso() });
+    if (requests[0] && requests[0].requestId !== previousId) {
+      this.emit({ type: "approval_required", request: requests[0], timestamp: nowIso() });
+    }
   }
 
   private clearPendingUserInputState(): void {
@@ -2854,6 +2881,19 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    if (method === "serverRequest/resolved") {
+      const requestId = getCodexRpcRequestId(params.requestId);
+      if (requestId !== null) this.rememberSettledApproval(requestId);
+      const pending = this.pendingApprovalRequests.find((request) =>
+        request.requestId === requestId
+        && (!getNotificationThreadId(params) || request.threadId === getNotificationThreadId(params))
+        && (!getNotificationTurnId(params) || request.turnId === getNotificationTurnId(params)));
+      if (pending) {
+        this.pendingApprovalRequests = this.pendingApprovalRequests.filter((request) => request !== pending);
+        this.syncPendingApprovals();
+      }
+    }
+
     if (method === "thread/started") {
       this.handleThreadStarted(params);
       return;
@@ -3017,22 +3057,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         const requestId = getCodexRpcRequestId(params.requestId);
         if (
           requestId !== null &&
-          this.pendingApprovalRequests.some(
-            (r) => r.requestId === requestId && r.turnId === trackedTurn.turnId,
-          )
-        ) {
-          this.pendingApprovalRequests = this.pendingApprovalRequests.filter(
-            (r) => r.requestId !== requestId,
-          );
-          if (this.pendingApprovalRequests.length === 0) {
-            this.clearPendingApprovalState();
-          }
-          if (this.state.status === "awaiting_approval") {
-            this.setStatus("busy", "Codex approval resolved.");
-          }
-        }
-        if (
-          requestId !== null &&
           this.pendingUserInputRequest &&
           requestId === this.pendingUserInputRequest.requestId &&
           trackedTurn.turnId === this.pendingUserInputRequest.turnId
@@ -3121,9 +3145,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     const trackedTurn =
+      (method !== "item/tool/requestUserInput" ? this.approvalOwnerForBackgroundThread(params) : null) ??
       this.identifyTrackedTurn("server/request", params) ??
       this.fallbackTrackedTurnForServerRequest(params);
     if (!trackedTurn) {
+      if (method !== "item/tool/requestUserInput" && this.activeTurn && this.rpcSocket) {
+        this.discoverBackgroundApprovalOwner(requestId, method, params);
+        return;
+      }
       this.sendRpcMessage({
         id: requestId,
         error: {
@@ -3160,7 +3189,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       });
       this.state.lastOutputAt = nowIso();
       this.setStatus(
-        "busy",
+        this.pendingApprovalRequests.length ? "awaiting_approval" : "busy",
         `Codex approval auto-denied: ${truncatePreview(denyMessage, 180)}`,
       );
       return;
@@ -3174,7 +3203,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       });
       this.state.lastOutputAt = nowIso();
       this.setStatus(
-        "busy",
+        this.pendingApprovalRequests.length ? "awaiting_approval" : "busy",
         `Codex approval auto-approved: ${truncatePreview(autoResponse.reason, 180)}`,
       );
       return;
@@ -3192,27 +3221,19 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    if (this.pendingApprovalRequests.some((pending) => pending.requestId === requestId)
+      || this.settledApprovalIds.has(this.rpcRequestKey(requestId))) return;
     this.pendingApprovalRequests.push({
+      ownerTurnId: trackedTurn.turnId,
       requestId,
       method,
-      threadId: trackedTurn.threadId,
-      turnId: trackedTurn.turnId,
+      threadId: getNotificationThreadId(params) ?? trackedTurn.threadId,
+      turnId: getNotificationTurnId(params) ?? trackedTurn.turnId,
       origin: trackedTurn.origin,
       params,
     });
-    this.pendingApproval = request;
-    this.state.pendingApproval = request;
-    this.state.pendingApprovalOrigin = trackedTurn.origin;
     this.state.lastOutputAt = nowIso();
-    this.setStatus(
-      "awaiting_approval",
-      `Codex approval is required: ${truncatePreview(request.commandPreview, 180)}`,
-    );
-    this.emit({
-      type: "approval_required",
-      request,
-      timestamp: nowIso(),
-    });
+    this.syncPendingApprovals();
   }
 
   private fallbackTrackedTurnForServerRequest(
@@ -3224,7 +3245,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     const threadId = getNotificationThreadId(params);
     const turnId = getNotificationTurnId(params);
-    if (!threadId || !turnId) {
+    if (!threadId || !turnId || this.backgroundThreadIds.has(threadId)) {
       return null;
     }
 
@@ -3263,7 +3284,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.state.pendingUserInput = request;
     this.state.pendingUserInputOrigin = trackedTurn.origin;
     this.state.lastOutputAt = nowIso();
-    this.setStatus("awaiting_input", "Codex is waiting for user input.");
+    this.setStatus(this.pendingApprovalRequests.length ? "awaiting_approval" : "awaiting_input", "Codex is waiting for user input.");
     this.emit({
       type: "user_input_required",
       request,
@@ -3293,6 +3314,59 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.pendingUserInputTimer.unref?.();
   }
 
+  private rememberSettledApproval(requestId: CodexRpcRequestId): void {
+    this.settledApprovalIds.add(this.rpcRequestKey(requestId));
+    if (this.settledApprovalIds.size > 512) this.settledApprovalIds.delete(this.settledApprovalIds.values().next().value!);
+  }
+
+  private discoverBackgroundApprovalOwner(
+    requestId: CodexRpcRequestId,
+    method: CodexPendingApprovalRequest["method"],
+    params: Record<string, unknown>,
+  ): void {
+    const id = this.rpcRequestKey(requestId);
+    if (this.discoveringApprovalIds.has(id) || this.settledApprovalIds.has(id)) return;
+    this.discoveringApprovalIds.add(id);
+    const owner = this.activeTurn;
+    const generation = this.approvalGeneration;
+    void (async () => {
+      let threadId = getNotificationThreadId(params);
+      const seen = new Set<string>();
+      while (threadId && owner && !seen.has(threadId) && seen.size < 32) {
+        if (this.approvalOwnerForBackgroundThread(params)) break;
+        seen.add(threadId);
+        const response = await this.sendRpcRequest("thread/read", { threadId, includeTurns: false });
+        if (!isRecord(response) || !isRecord(response.thread)) break;
+        const thread = response.thread;
+        if (thread.id !== threadId || typeof thread.cwd !== "string"
+          || normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)
+          || typeof thread.parentThreadId !== "string") break;
+        this.rememberBackgroundThread(thread);
+        threadId = thread.parentThreadId;
+      }
+      if (generation !== this.approvalGeneration || this.activeTurn !== owner || this.settledApprovalIds.has(id)) return;
+      const trackedTurn = this.approvalOwnerForBackgroundThread(params);
+      if (!trackedTurn) throw new Error("Codex approval does not belong to the active parent turn.");
+      this.handleTrackedTurnServerRequest(requestId, method, params, trackedTurn);
+    })().catch((error: unknown) => {
+      if (generation === this.approvalGeneration && !this.settledApprovalIds.has(id) && this.rpcSocket) {
+        this.sendRpcMessage({ id: requestId, error: { code: -32602, message: describeUnknownError(error) } });
+      }
+    }).finally(() => this.discoveringApprovalIds.delete(id));
+  }
+
+  private approvalOwnerForBackgroundThread(params: Record<string, unknown>): CodexActiveTurn | null {
+    if (!this.activeTurn) return null;
+    let threadId = getNotificationThreadId(params);
+    const seen = new Set<string>();
+    while (threadId && !seen.has(threadId)) {
+      seen.add(threadId);
+      threadId = this.backgroundThreadParents.get(threadId) ?? null;
+      if (threadId === this.activeTurn.threadId) return this.activeTurn;
+    }
+    return null;
+  }
+
   private rememberBackgroundThread(thread: unknown): boolean {
     if (
       !isRecord(thread) || typeof thread.id !== "string" ||
@@ -3303,6 +3377,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     // Later notifications may carry only an id. Keep subagent/ephemeral
     // threads out of local follow and turn ownership for the server lifetime.
     this.backgroundThreadIds.add(thread.id);
+    if (typeof thread.parentThreadId === "string"
+      && (typeof thread.cwd !== "string" || normalizeComparablePath(thread.cwd) === normalizeComparablePath(this.options.cwd))) {
+      this.backgroundThreadParents.set(thread.id, thread.parentThreadId);
+    }
     return true;
   }
 
@@ -3547,7 +3625,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     if (
       this.pendingApprovalRequests.length > 0 &&
-      this.pendingApprovalRequests.some((r) => r.turnId === trackedTurn.turnId)
+      this.pendingApprovalRequests.some((r) => (r.ownerTurnId ?? r.turnId) === trackedTurn.turnId)
     ) {
       this.clearPendingApprovalState();
     }
@@ -3759,6 +3837,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.visibleThreadProxy = null;
     await visibleThreadProxy?.close();
     this.backgroundThreadIds.clear();
+    this.backgroundThreadParents.clear();
+    this.settledApprovalIds.clear();
     if (!this.appServer) {
       this.appServerPort = null;
       this.appServerShuttingDown = false;

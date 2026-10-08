@@ -342,7 +342,9 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
             socket,
             message.id,
             true,
-            await adapter.resolveApproval(message.payload.action),
+            message.payload.requestId === undefined
+              ? false
+              : await adapter.resolveApproval(message.payload.action, message.payload.requestId),
           );
           break;
         case "submit_user_input":
@@ -350,7 +352,9 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
             socket,
             message.id,
             true,
-            await adapter.submitUserInput(message.payload.answers),
+            adapter.getState().supportsUserInputRequestIds && !message.payload.requestId
+              ? false
+              : await adapter.submitUserInput(message.payload.answers, message.payload.requestId),
           );
           break;
         case "dispose":
@@ -522,13 +526,13 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
   };
 
   adapter.setEventSink((event) => {
+    publishState();
     if (activeSocket) {
       sendLocalCompanionMessage(activeSocket, {
         type: "event",
         event,
       });
     }
-    publishState();
 
     if (event.type === "fatal_error") {
       void closeCompanion(1, "fatal_error");

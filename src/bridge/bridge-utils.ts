@@ -1312,6 +1312,7 @@ export function formatUserInputRequestMessage(
       lines.push("options:");
       question.options.forEach((option, optionIndex) => {
         lines.push(`  ${optionIndex + 1}. ${option.label} - ${truncatePreview(option.description, 160)}`);
+        if (option.preview) lines.push(`     preview:\n${truncatePreview(option.preview, 1500)}`);
       });
     }
     if (question.multiple) {

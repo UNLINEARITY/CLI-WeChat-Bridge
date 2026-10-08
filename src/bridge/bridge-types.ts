@@ -52,6 +52,7 @@ export type PendingApproval = ApprovalRequest & {
 export type UserInputRequestOption = {
   label: string;
   description: string;
+  preview?: string;
 };
 
 export type UserInputRequestQuestion = {
@@ -66,6 +67,7 @@ export type UserInputRequestQuestion = {
 };
 
 export type UserInputRequest = {
+  requestId?: string;
   summary: string;
   questions: UserInputRequestQuestion[];
 };
@@ -121,6 +123,9 @@ export type BridgeAdapterState = {
   lastInputAt?: string;
   lastOutputAt?: string;
   pendingApproval?: ApprovalRequest | null;
+  pendingApprovals?: ApprovalRequest[];
+  supportsApprovalRequestIds?: boolean;
+  supportsUserInputRequestIds?: boolean;
   sharedSessionId?: string;
   sharedThreadId?: string;
   activeRuntimeSessionId?: string;
@@ -170,6 +175,11 @@ export type BridgeEvent =
   | {
       type: "thinking";
       text: string;
+      timestamp: string;
+    }
+  | {
+      type: "approval_state_changed";
+      requests: ApprovalRequest[];
       timestamp: string;
     }
   | {
@@ -238,9 +248,9 @@ export interface BridgeAdapter {
   setPlanMode?(enabled: boolean): Promise<boolean>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
-  resolveApproval(action: "confirm" | "deny"): Promise<boolean>;
+  resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean>;
   resolveAllApprovals(action: "confirm" | "deny"): Promise<number>;
-  submitUserInput(answers: Record<string, string[]>): Promise<boolean>;
+  submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean>;
   dispose(): Promise<void>;
   getState(): BridgeAdapterState;
 }

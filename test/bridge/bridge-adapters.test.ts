@@ -1166,7 +1166,7 @@ describe("Claude CLI compatibility", () => {
       } as any,
     );
 
-    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_state_changed", "approval_required"]);
     expect(adapter.pendingApproval).toMatchObject({
       summary: "Claude permission is required for Bash.",
       commandPreview: "Bash: rm -rf build",
@@ -1304,7 +1304,7 @@ describe("Claude CLI compatibility", () => {
       } as any,
     );
 
-    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_state_changed", "approval_required"]);
     expect(adapter.pendingApproval).toMatchObject({
       summary: "Claude permission is required for Bash.",
       commandPreview: "Bash: rm -rf build",
@@ -2526,7 +2526,7 @@ describe("Codex panel completion recovery", () => {
       },
     );
 
-    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_state_changed", "approval_required"]);
     expect(adapter.pendingApprovalRequests).toMatchObject([{
       requestId: 12,
       method: "item/commandExecution/requestApproval",
@@ -2722,7 +2722,7 @@ describe("Codex panel completion recovery", () => {
       },
     );
 
-    expect(events.map((event) => event.type)).toEqual(["status", "approval_required"]);
+    expect(events.map((event) => event.type)).toEqual(["status", "approval_state_changed", "approval_required"]);
     expect(adapter.pendingApprovalRequests).toMatchObject([{
       requestId: 9,
       method: "item/permissions/requestApproval",

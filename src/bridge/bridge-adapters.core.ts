@@ -106,6 +106,8 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
   }>();
   private detachMessageListener: (() => void) | null = null;
   private requestCounter = 0;
+  private announcedApprovalRequestId: string | undefined;
+  private announcedUserInputRequestId: string | undefined;
   private endpoint: LocalCompanionEndpoint | null = null;
   private readonly pendingRequests = new Map<
     string,
@@ -271,10 +273,16 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     });
   }
 
-  async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
+  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    if (!this.state.supportsApprovalRequestIds) {
+      throw new Error("Restart the visible CLI to upgrade its companion before approving remotely.");
+    }
+    const expectedId = requestId ?? this.state.pendingApproval?.requestId;
+    if (!expectedId) return false;
     const result = await this.sendRequest({
       command: "resolve_approval",
       action,
+      requestId: expectedId,
     });
     return Boolean(result);
   }
@@ -284,11 +292,14 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     return ok ? 1 : 0;
   }
 
-  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+  async submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean> {
+    const expectedId = requestId ?? this.state.pendingUserInput?.requestId;
+    if (expectedId && !this.state.supportsUserInputRequestIds) return false;
     try {
       const result = await this.sendRequest({
         command: "submit_user_input",
         answers,
+        requestId: expectedId,
       });
       return result === true;
     } catch {
@@ -409,9 +420,17 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.expectedCloseReason = message.reason;
         return;
       case "event":
+        if (message.event.type === "user_input_required" && message.event.request.requestId) {
+          if (this.announcedUserInputRequestId === message.event.request.requestId) return;
+          this.announcedUserInputRequestId = message.event.request.requestId;
+        }
+        if (message.event.type === "approval_required" && message.event.request.requestId) {
+          if (this.announcedApprovalRequestId === message.event.request.requestId) return;
+          this.announcedApprovalRequestId = message.event.request.requestId;
+        }
         this.eventSink(message.event);
         return;
-      case "state":
+      case "state": {
         if (this.endpoint) {
           Object.assign(
             this.endpoint,
@@ -436,6 +455,11 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.state.lastInputAt = undefined;
         this.state.lastOutputAt = undefined;
         this.state.pendingApproval = null;
+        this.state.pendingApprovals = undefined;
+        this.state.supportsApprovalRequestIds = undefined;
+        this.state.supportsUserInputRequestIds = undefined;
+        this.state.pendingUserInput = null;
+        this.state.pendingUserInputOrigin = undefined;
         this.state.sharedSessionId = undefined;
         this.state.sharedThreadId = undefined;
         this.state.activeRuntimeSessionId = undefined;
@@ -459,7 +483,25 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           status: this.state.status,
           timestamp: nowIso(),
         });
+        const question = message.state.pendingUserInput;
+        if (question?.requestId && question.requestId !== this.announcedUserInputRequestId) {
+          this.announcedUserInputRequestId = question.requestId;
+          this.eventSink({ type: "user_input_required", request: question, timestamp: nowIso() });
+        } else if (!question) {
+          this.announcedUserInputRequestId = undefined;
+        }
+        if (this.state.pendingApprovals !== undefined) {
+          this.eventSink({ type: "approval_state_changed", requests: this.state.pendingApprovals, timestamp: nowIso() });
+          const head = message.state.pendingApproval;
+          if (head?.requestId && head.requestId !== this.announcedApprovalRequestId) {
+            this.announcedApprovalRequestId = head.requestId;
+            this.eventSink({ type: "approval_required", request: head, timestamp: nowIso() });
+          } else if (!head) {
+            this.announcedApprovalRequestId = undefined;
+          }
+        }
         return;
+      }
       case "response": {
         const pending = this.pendingRequests.get(message.id);
         if (!pending) {
@@ -500,6 +542,13 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.state.lastOutputAt = undefined;
     this.state.pendingApproval = null;
     this.state.pendingApprovalOrigin = undefined;
+    this.state.pendingApprovals = undefined;
+    this.state.supportsApprovalRequestIds = undefined;
+    this.announcedApprovalRequestId = undefined;
+    this.announcedUserInputRequestId = undefined;
+    this.state.supportsUserInputRequestIds = undefined;
+    this.state.pendingUserInput = null;
+    this.state.pendingUserInputOrigin = undefined;
     this.state.activeTurnId = undefined;
     this.state.activeTurnOrigin = undefined;
   }
@@ -943,7 +992,10 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     await this.start();
   }
 
-  async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
+  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    if (requestId !== undefined && this.pendingApproval?.requestId !== requestId) {
+      return false;
+    }
     if (!this.pendingApproval) {
       return false;
     }
@@ -955,6 +1007,9 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
 
     this.pendingApproval = null;
     this.state.pendingApproval = null;
+    this.state.pendingApprovals = [];
+    this.state.pendingApprovalOrigin = undefined;
+    this.emit({ type: "approval_state_changed", requests: [], timestamp: nowIso() });
     return true;
   }
 
@@ -969,8 +1024,12 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
 
   async dispose(): Promise<void> {
     this.clearCompletionTimer();
+    const hadApproval = Boolean(this.pendingApproval);
     this.pendingApproval = null;
     this.state.pendingApproval = null;
+    this.state.pendingApprovals = [];
+    this.state.pendingApprovalOrigin = undefined;
+    if (hadApproval) this.emit({ type: "approval_state_changed", requests: [], timestamp: nowIso() });
 
     if (!this.pty) {
       this.state.status = "stopped";

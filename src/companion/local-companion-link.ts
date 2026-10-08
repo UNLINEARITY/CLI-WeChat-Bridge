@@ -38,8 +38,8 @@ export type LocalCompanionCommand =
   | { command: "interrupt" }
   | { command: "reset" }
   | { command: "dispose" }
-  | { command: "resolve_approval"; action: "confirm" | "deny" }
-  | { command: "submit_user_input"; answers: Record<string, string[]> };
+  | { command: "resolve_approval"; action: "confirm" | "deny"; requestId?: string }
+  | { command: "submit_user_input"; answers: Record<string, string[]>; requestId?: string };
 
 export type LocalCompanionCloseReason =
   | "bridge_dispose"

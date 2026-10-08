@@ -190,6 +190,7 @@ type DaemonSlot = {
   controller: BridgeController;
   outputBatcher: OutputBatcher;
   pendingConfirmations: PendingApproval[];
+  displayedApprovalRequestId?: string;
   pendingUserInput: PendingUserInputRequest | null;
   resumeCoordinator: ResumeSessionCoordinator;
   turns: TurnCoordinator<ActiveTask>;
@@ -2038,10 +2039,18 @@ export class WechatDaemon {
       ? this.resolveSlotOutputTarget(slot)
       : this.fallbackConversation;
     const eventTask = slot.turns.activeTask;
+    if (adapterState.pendingApprovals !== undefined) {
+      const previous = new Map(slot.pendingConfirmations.map((pending) => [pending.requestId, pending]));
+      slot.pendingConfirmations = adapterState.pendingApprovals.map((request) => {
+        const existing = previous.get(request.requestId);
+        return existing ? { ...existing, ...request } : toPendingApproval({ type: "approval_required", request, timestamp: nowIso() });
+      });
+    }
     if (slot.pendingConfirmations.length > 0 && !adapterState.pendingApproval) {
       slot.pendingConfirmations = [];
     }
-    if (slot.pendingUserInput && !adapterState.pendingUserInput) {
+    if (slot.pendingUserInput && (!adapterState.pendingUserInput
+      || (slot.pendingUserInput.requestId !== undefined && slot.pendingUserInput.requestId !== adapterState.pendingUserInput.requestId))) {
       slot.pendingUserInput = null;
     }
 
@@ -2089,17 +2098,26 @@ export class WechatDaemon {
       },
       approvalRequired: (next) => {
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          const liveState = slot.runtime.getState();
+          if (liveState.pendingApprovals !== undefined && liveState.pendingApproval?.requestId !== next.request.requestId) return;
           const pending = toPendingApproval(next);
-          slot.pendingConfirmations.push(pending);
+          if (liveState.pendingApprovals === undefined) {
+            slot.pendingConfirmations = [pending];
+          }
           appendDaemonLog(`approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`);
-          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatApprovalMessage(pending, adapterState)), "approval_required", eventTarget);
+          await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatApprovalMessage(pending, liveState)), "approval_required", eventTarget);
+          if (slot.runtime.getState().pendingApproval?.requestId === pending.requestId) {
+            slot.displayedApprovalRequestId = pending.requestId;
+          }
         }));
       },
       userInputRequired: (next) => {
+        if (next.request.requestId !== undefined && slot.runtime.getState().pendingUserInput?.requestId !== next.request.requestId) return;
         const pending = toPendingUserInput(next.request);
         slot.pendingUserInput = pending;
         appendDaemonLog(`user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`);
         this.trackWechatForwardTask(slot.outputBatcher.flushNow().then(async () => {
+          if (pending.requestId !== undefined && slot.runtime.getState().pendingUserInput?.requestId !== pending.requestId) return;
           await this.queueWechatMessage(this.authorizedUserId, prefixDaemonAdapterMessage(slot.adapter, formatUserInputRequestMessage(pending, adapterState)), "user_input_required", eventTarget);
         }));
       },
@@ -2546,7 +2564,8 @@ export class WechatDaemon {
       return;
     }
 
-    const count = await slot.runtime.resolveAllApprovals("confirm");
+    const pending = slot.pendingConfirmations[0]!;
+    const count = await slot.runtime.resolveApproval("confirm", slot.runtime.getState().pendingApprovals !== undefined ? slot.displayedApprovalRequestId ?? "" : pending.requestId) ? 1 : 0;
     if (!count) {
       await this.queueWechatMessage(
         message.senderId,
@@ -2557,12 +2576,10 @@ export class WechatDaemon {
       );
       return;
     }
-    const preview = slot.pendingConfirmations[0]?.commandPreview ?? "";
-    slot.pendingConfirmations = [];
-    slot.turns.setActiveTask({
-      startedAt: Date.now(),
-      inputPreview: preview,
-    });
+    const preview = pending.commandPreview;
+    const adapterState = slot.runtime.getState();
+    slot.pendingConfirmations = (adapterState.pendingApprovals ?? (adapterState.pendingApproval ? [adapterState.pendingApproval] : []))
+      .map((request) => toPendingApproval({ type: "approval_required", request, timestamp: nowIso() }));
     appendDaemonLog(
       `approval_confirmed: adapter=${slot.adapter} count=${count} command=${truncatePreview(preview)}`,
     );
@@ -2570,9 +2587,7 @@ export class WechatDaemon {
       message.senderId,
       prefixDaemonAdapterMessage(
         slot.adapter,
-        count > 1
-          ? `${count} approvals confirmed. Continuing...`
-          : "Approval confirmed. Continuing...",
+        "Approval confirmed. Continuing...",
       ),
     );
   }
@@ -2587,7 +2602,8 @@ export class WechatDaemon {
       return;
     }
 
-    const count = await slot.runtime.resolveAllApprovals("deny");
+    const pending = slot.pendingConfirmations[0]!;
+    const count = await slot.runtime.resolveApproval("deny", slot.runtime.getState().pendingApprovals !== undefined ? slot.displayedApprovalRequestId ?? "" : pending.requestId) ? 1 : 0;
     if (!count) {
       await this.queueWechatMessage(
         message.senderId,
@@ -2598,7 +2614,9 @@ export class WechatDaemon {
       );
       return;
     }
-    slot.pendingConfirmations = [];
+    const adapterState = slot.runtime.getState();
+    slot.pendingConfirmations = (adapterState.pendingApprovals ?? (adapterState.pendingApproval ? [adapterState.pendingApproval] : []))
+      .map((request) => toPendingApproval({ type: "approval_required", request, timestamp: nowIso() }));
     appendDaemonLog(
       `approval_denied: adapter=${slot.adapter} count=${count}`,
     );
@@ -2606,7 +2624,7 @@ export class WechatDaemon {
       message.senderId,
       prefixDaemonAdapterMessage(
         slot.adapter,
-        count > 1 ? `${count} approvals denied.` : "Approval denied.",
+        "Approval denied.",
       ),
     );
   }
@@ -2646,7 +2664,7 @@ export class WechatDaemon {
       return;
     }
 
-    const submitted = await slot.runtime.submitUserInput(parsed.answers);
+    const submitted = await slot.runtime.submitUserInput(parsed.answers, pending.requestId);
     if (!submitted) {
       await this.queueWechatMessage(
         message.senderId,
@@ -2658,11 +2676,7 @@ export class WechatDaemon {
       return;
     }
 
-    slot.pendingUserInput = null;
-    slot.turns.setActiveTask({
-      startedAt: Date.now(),
-      inputPreview: parsed.preview,
-    });
+    if (slot.pendingUserInput?.requestId === pending.requestId) slot.pendingUserInput = null;
     appendDaemonLog(
       `user_input_answered: adapter=${slot.adapter} preview=${parsed.preview}`,
     );

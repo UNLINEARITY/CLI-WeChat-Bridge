@@ -1272,7 +1272,7 @@ function syncSharedSessionState(
   }
 }
 
-function wireAdapterEvents(params: {
+export function wireAdapterEvents(params: {
   adapter: BridgeAdapter;
   resumeCoordinator: ResumeSessionCoordinator;
   options: BridgeCliOptions;
@@ -1361,10 +1361,12 @@ function wireAdapterEvents(params: {
     syncLocalClientEndpoint();
     const adapterState = adapter.getState();
     const bridgeState = stateStore.getState();
-    if (bridgeState.pendingConfirmation && !adapterState.pendingApproval) {
+    if (bridgeState.pendingConfirmation && (!adapterState.pendingApproval
+      || (adapterState.pendingApprovals !== undefined && bridgeState.pendingConfirmation.requestId !== adapterState.pendingApproval.requestId))) {
       stateStore.clearPendingConfirmation();
     }
-    if (bridgeState.pendingUserInput && !adapterState.pendingUserInput) {
+    if (bridgeState.pendingUserInput && (!adapterState.pendingUserInput
+      || (bridgeState.pendingUserInput.requestId !== undefined && bridgeState.pendingUserInput.requestId !== adapterState.pendingUserInput.requestId))) {
       stateStore.clearPendingUserInput();
     }
     const authorizedUserId = stateStore.getState().authorizedUserId;
@@ -1433,14 +1435,19 @@ function wireAdapterEvents(params: {
       },
       approvalRequired: (next) => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
+          const liveState = adapter.getState();
+          if (liveState.pendingApprovals !== undefined && liveState.pendingApproval?.requestId !== next.request.requestId) return;
           const pending = toPendingApproval(next.request);
-          stateStore.setPendingConfirmation(pending);
           stateStore.appendLog(`Approval requested (${pending.source}): ${pending.commandPreview}`);
-          await queueWechatMessage(authorizedUserId, formatApprovalMessage(pending, adapterState), "approval_required", eventTarget);
+          await queueWechatMessage(authorizedUserId, formatApprovalMessage(pending, liveState), "approval_required", eventTarget);
+          if (adapter.getState().pendingApproval?.requestId === pending.requestId) {
+            stateStore.setPendingConfirmation(pending);
+          }
         }));
       },
       userInputRequired: (next) => {
         trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
+          if (next.request.requestId !== undefined && adapter.getState().pendingUserInput?.requestId !== next.request.requestId) return;
           const pending = toPendingUserInput(next.request);
           stateStore.setPendingUserInput(pending);
           stateStore.appendLog(`User input requested: questions=${pending.questions.length}`);
@@ -1542,7 +1549,7 @@ function formatInboundMessagePreview(message: InboundWechatMessage): string {
   return "(empty)";
 }
 
-async function handleInboundMessage(params: {
+export async function handleInboundMessage(params: {
   message: InboundWechatMessage;
   channelMessage?: ChannelInboundMessage;
   options: BridgeCliOptions;
@@ -1679,7 +1686,7 @@ async function handleInboundMessage(params: {
         await queueWechatMessage(message.senderId, "No pending approval request.");
         return null;
       }
-      const confirmed = await adapter.resolveApproval("confirm");
+      const confirmed = await adapter.resolveApproval("confirm", pending.requestId);
       if (!confirmed) {
         await queueWechatMessage(
           message.senderId,
@@ -1687,13 +1694,12 @@ async function handleInboundMessage(params: {
         );
         return null;
       }
-      stateStore.clearPendingConfirmation();
+      if (stateStore.getState().pendingConfirmation?.requestId === pending.requestId) {
+        stateStore.clearPendingConfirmation();
+      }
       stateStore.appendLog(`Approval confirmed: ${pending.commandPreview}`);
       await queueWechatMessage(message.senderId, "Approval confirmed. Continuing...");
-      return {
-        startedAt: Date.now(),
-        inputPreview: pending.commandPreview,
-      };
+      return null;
     }
     case "deny": {
       const pending = state.pendingConfirmation;
@@ -1701,7 +1707,7 @@ async function handleInboundMessage(params: {
         await queueWechatMessage(message.senderId, "No pending approval request.");
         return null;
       }
-      const denied = await adapter.resolveApproval("deny");
+      const denied = await adapter.resolveApproval("deny", pending.requestId);
       if (!denied) {
         await queueWechatMessage(
           message.senderId,
@@ -1709,7 +1715,9 @@ async function handleInboundMessage(params: {
         );
         return null;
       }
-      stateStore.clearPendingConfirmation();
+      if (stateStore.getState().pendingConfirmation?.requestId === pending.requestId) {
+        stateStore.clearPendingConfirmation();
+      }
       stateStore.appendLog(`Approval denied: ${pending.commandPreview}`);
       await queueWechatMessage(message.senderId, "Approval denied.");
       return null;
@@ -1727,7 +1735,7 @@ async function handleInboundMessage(params: {
         return null;
       }
 
-      const submitted = await adapter.submitUserInput(parsed.answers);
+      const submitted = await adapter.submitUserInput(parsed.answers, pending.requestId);
       if (!submitted) {
         await queueWechatMessage(
           message.senderId,
@@ -1736,13 +1744,10 @@ async function handleInboundMessage(params: {
         return null;
       }
 
-      stateStore.clearPendingUserInput();
+      if (stateStore.getState().pendingUserInput?.requestId === pending.requestId) stateStore.clearPendingUserInput();
       stateStore.appendLog(`User input answered: ${parsed.preview}`);
       await queueWechatMessage(message.senderId, "Answer submitted. Continuing...");
-      return {
-        startedAt: Date.now(),
-        inputPreview: parsed.preview,
-      };
+      return null;
     }
   }
 

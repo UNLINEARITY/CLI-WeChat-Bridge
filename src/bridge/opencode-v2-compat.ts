@@ -493,7 +493,10 @@ export async function createOpenCodeV2CompatClient(options: {
           sessionID: input.sessionID ?? permissionSessions.get(String(input.requestID)),
           requestID: input.requestID,
           decision: input.reply === "reject" ? "reject" : input.reply,
-        }, requestOptions).finally(() => permissionSessions.delete(String(input.requestID))),
+        }, requestOptions).then((response: unknown) => {
+          permissionSessions.delete(String(input.requestID));
+          return response;
+        }),
       ),
     },
     question: {

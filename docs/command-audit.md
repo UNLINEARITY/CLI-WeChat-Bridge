@@ -215,15 +215,15 @@ standalone 模式按以下顺序处理：
 
 | 命令或文本 | 生效条件 | 当前行为 | 初步评级 |
 | --- | --- | --- | --- |
-| `/confirm` | 有无待审批都被识别 | standalone 处理当前审批；daemon 批量处理找到的 slot 审批 | 核心保留 |
+| `/confirm` | 有无待审批都被识别 | standalone 和 daemon 每次只处理当前显示的一项审批，然后提示下一项；请求 ID 随 companion IPC 传递 | 核心保留 |
 | `/yes` | 同 `/confirm` | 完全别名 | 候选简化，但手机输入便利性高 |
 | bare `confirm` | 仅在有待审批时 | 等价 `/confirm`；无审批时作为普通 prompt | 便利别名 |
 | bare `yes` | 仅在有待审批时 | 等价 `/confirm` | 便利别名 |
-| `/deny` | 有无待审批都被识别 | 拒绝当前或批量待审批 | 核心保留 |
+| `/deny` | 有无待审批都被识别 | 拒绝当前显示的一项审批，然后提示下一项 | 核心保留 |
 | `/no` | 同 `/deny` | 完全别名 | 候选简化，但手机输入便利性高 |
 | bare `deny` | 仅在有待审批时 | 等价 `/deny` | 便利别名 |
 | bare `no` | 仅在有待审批时 | 等价 `/deny` | 便利别名 |
-| `/answer <answer>` | 有待处理的结构化问题时 | 解析单选、多选、自定义回答并提交给 Codex/OpenCode 等 adapter | 核心保留 |
+| `/answer <answer>` | 有待处理的结构化问题时 | 解析单选、多选、自定义回答并提交给 Codex/Claude/OpenCode adapter | 核心保留 |
 
 注意：当前 parser 对 `/confirm` 后面的参数不做一次性 code 校验；`/confirm ABC123` 与 `/confirm` 都会解析为相同的确认命令。一次性 code 目前主要出现在提示文本和旧兼容流程中。如果希望 code 真正承担授权校验，需要单独修复，而不是仅调整文档。
 

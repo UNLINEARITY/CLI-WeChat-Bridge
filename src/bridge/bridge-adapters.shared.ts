@@ -98,6 +98,7 @@ export type CodexQueuedNotification = {
 };
 
 export type CodexPendingApprovalRequest = {
+  ownerTurnId?: string;
   requestId: CodexRpcRequestId;
   method:
     | "item/commandExecution/requestApproval"
@@ -154,6 +155,8 @@ export type CodexRecentSessionFile = {
 export type ClaudePendingHookApproval = {
   requestId: string;
   socket: net.Socket;
+  request: ApprovalRequest;
+  origin?: BridgeTurnOrigin;
 };
 
 export const DEFAULT_COLS = 120;

@@ -4,7 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import type { ApprovalRequest } from "./bridge-types.ts";
+import type { ApprovalRequest, UserInputRequest } from "./bridge-types.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsWechatOutboundAttachmentPath,
@@ -38,6 +38,7 @@ export type ClaudeHookPayload = {
   prompt?: string;
   permission_mode?: string;
   tool_name?: string;
+  tool_use_id?: string;
   tool_input?: Record<string, unknown>;
   permission_suggestions?: unknown[];
   notification_type?: string;
@@ -132,7 +133,10 @@ export function extractClaudeResumeConversationId(
   return conversationId || null;
 }
 
-export function buildClaudeHookSettings(command: string): Record<string, unknown> {
+export function buildClaudeHookSettings(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
   const hook = {
     hooks: [
       {
@@ -143,6 +147,9 @@ export function buildClaudeHookSettings(command: string): Record<string, unknown
   };
 
   return {
+    ...(env.CLI_BRIDGE_STRICT_APPROVAL === "1"
+      ? {}
+      : { permissions: { allow: ["WebFetch(domain:*)"] } }),
     hooks: {
       SessionStart: [hook],
       SessionEnd: [hook],
@@ -350,7 +357,7 @@ export function getClaudePermissionAutoResponse(
   }
 
   const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
-  if (!toolName) {
+  if (!toolName || toolName === "AskUserQuestion") {
     return null;
   }
 
@@ -502,4 +509,53 @@ export function findInjectedClaudePromptIndex(
     }
     return candidate.normalizedText === normalizedPrompt;
   });
+}
+
+export function buildClaudeUserInputRequest(payload: ClaudeHookPayload, requestId: string): UserInputRequest | null {
+  if (payload.tool_name !== "AskUserQuestion" || !Array.isArray(payload.tool_input?.questions)
+    || !payload.tool_input.questions.length) return null;
+  const questions: UserInputRequest["questions"] = [];
+  for (const [index, raw] of payload.tool_input.questions.entries()) {
+    if (!raw || typeof raw !== "object" || typeof raw.question !== "string" || !raw.question.trim()
+      || !Array.isArray(raw.options) || !raw.options.length) return null;
+    const options = [];
+    for (const option of raw.options) {
+      if (!option || typeof option.label !== "string" || !option.label.trim()) return null;
+      options.push({
+        label: option.label,
+        description: typeof option.description === "string" ? option.description : "",
+        ...(typeof option.preview === "string" ? { preview: option.preview }
+          : typeof option.markdown === "string" ? { preview: option.markdown } : {}),
+      });
+    }
+    questions.push({
+      id: `q${index + 1}`,
+      header: typeof raw.header === "string" ? raw.header : `Question ${index + 1}`,
+      question: raw.question,
+      multiple: raw.multiSelect === true,
+      isOther: true,
+      isSecret: false,
+      customAnswerMode: "value",
+      options,
+    });
+  }
+  return { requestId, summary: "Claude is waiting for your answers.", questions };
+}
+
+export function buildClaudeUserInputHookOutput(
+  payload: ClaudeHookPayload,
+  request: UserInputRequest,
+  answers: Record<string, string[]>,
+): string | null {
+  const mapped: Record<string, string> = Object.create(null);
+  for (const question of request.questions) {
+    const values = answers[question.id];
+    if (!Array.isArray(values) || !values.length || (!question.multiple && values.length !== 1)
+      || values.some((value) => typeof value !== "string" || !value.trim())) return null;
+    mapped[question.question] = values.join(", ");
+  }
+  const updatedInput = { ...payload.tool_input, answers: mapped };
+  return JSON.stringify({ hookSpecificOutput: payload.hook_event_name === "PermissionRequest"
+    ? { hookEventName: "PermissionRequest", decision: { behavior: "allow", updatedInput } }
+    : { hookEventName: "PreToolUse", permissionDecision: "allow", updatedInput } });
 }

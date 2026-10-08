@@ -178,6 +178,7 @@ type OpenCodeSdkClient = {
   permission: {
     reply(parameters: {
       requestID: string;
+      sessionID?: string;
       directory?: string;
       workspace?: string;
       reply: "once" | "always" | "reject";
@@ -241,6 +242,7 @@ type NormalizedSdkEvent = {
 };
 
 type OpenCodePendingPermission = {
+  origin?: BridgeTurnOrigin;
   sessionId: string;
   permissionId: string;
   code: string;
@@ -367,6 +369,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private pendingLocalSessionCreateFollowUntilMs = 0;
 
   private pendingPermission: OpenCodePendingPermission | null = null;
+  private readonly pendingPermissions = new Map<string, OpenCodePendingPermission>();
+  private approvalOwnershipGeneration = 0;
+  private readonly settledPermissionIds = new Set<string>();
+  private readonly resolvingPermissions = new Set<string>();
+  private readonly childSessionParents = new Map<string, string>();
   private pendingQuestion: OpenCodePendingQuestion | null = null;
   private readonly previousAgentBySession = new Map<string, string>();
   private readonly childSessionIds = new Set<string>();
@@ -530,6 +537,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.state = {
       kind: options.kind,
       status: "stopped",
+      supportsApprovalRequestIds: true,
+      pendingApprovals: [],
       cwd: options.cwd,
       command: options.command,
       profile: options.profile,
@@ -843,24 +852,30 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     await this.start();
   }
 
-  async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
-    if (!this.pendingPermission || !this.client) {
+  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    const pending = requestId === undefined
+      ? this.pendingPermission
+      : this.pendingPermissions.get(requestId);
+    if (!pending || !this.client || this.resolvingPermissions.has(pending.permissionId)) {
       return false;
     }
-
-    const { permissionId } = this.pendingPermission;
-    const response = action === "confirm" ? "once" : "reject";
-
+    this.resolvingPermissions.add(pending.permissionId);
     try {
       const result = await this.client.permission.reply({
-        requestID: permissionId,
+        requestID: pending.permissionId,
+        sessionID: pending.sessionId,
         directory: this.options.cwd,
         workspace: this.activeWorkspaceId ?? undefined,
-        reply: response,
+        reply: action === "confirm" ? "once" : "reject",
       });
       if (result.error !== undefined) {
         throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
       }
+      this.rememberSettledPermission(pending.permissionId);
+      this.pendingPermissions.delete(pending.permissionId);
+      this.clearWechatWorkingNotice();
+      this.syncPendingPermissions();
+      return true;
     } catch (err) {
       this.emit({
         type: "stderr",
@@ -868,17 +883,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         timestamp: nowIso(),
       });
       return false;
+    } finally {
+      this.resolvingPermissions.delete(pending.permissionId);
     }
-
-    this.clearWechatWorkingNotice();
-    this.clearPendingPermissionState();
-    this.setStatus("busy");
-    return true;
   }
 
   async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    const ok = await this.resolveApproval(action);
-    return ok ? 1 : 0;
+    let count = 0;
+    for (const id of Array.from(this.pendingPermissions.keys())) {
+      if (await this.resolveApproval(action, id)) count++;
+    }
+    return count;
   }
 
   async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
@@ -911,13 +926,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.clearPendingQuestionState();
-    this.setStatus("busy", "OpenCode user input submitted.");
+    this.setStatus(this.pendingPermissions.size ? "awaiting_approval" : "busy", "OpenCode user input submitted.");
     return true;
   }
 
   async dispose(): Promise<void> {
     this.shuttingDown = true;
     this.childSessionIds.clear();
+    this.childSessionParents.clear();
+    this.settledPermissionIds.clear();
     this.clearWechatWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
@@ -1840,6 +1857,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
       // Note: only permission.asked exists in the OpenCode wire protocol;
       // permission.updated was never emitted by the server.
+      case "permission.replied": {
+        this.handlePermissionSettled(payload);
+        return;
+      }
+
       case "permission.asked": {
         this.handlePermissionRequest(payload);
         return;
@@ -1915,7 +1937,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       case "session.diff":
       case "session.diff.delta":
       case "message.removed":
-      case "permission.replied":
       case "tui.toast.show":
         return;
 
@@ -2044,7 +2065,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const sessionId = this.extractSessionId(properties);
-    if (sessionId && !this.syncTrackedSessionFromEvent(sessionId)) {
+    if (!sessionId) return;
+    if (!this.isApprovalSessionOwned(sessionId)) {
+      const ownerSessionId = this.activeSessionId;
+      const generation = this.approvalOwnershipGeneration;
+      void this.discoverApprovalSessionOwnership(sessionId).then((owned) => {
+        if (owned && ownerSessionId === this.activeSessionId && generation === this.approvalOwnershipGeneration) this.handlePermissionRequest(properties);
+      }).catch((error: unknown) => {
+        this.logDebug(`[opencode-adapter:approval-owner] ${describeUnknownError(error)}`);
+      });
       return;
     }
 
@@ -2063,22 +2092,81 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const approval = this.toPendingApproval(pendingPermission);
-    this.pendingPermission = pendingPermission;
-    this.state.pendingApproval = approval;
-    this.state.pendingApprovalOrigin = this.state.activeTurnOrigin;
-    this.setStatus("awaiting_approval", "OpenCode approval is required.");
-    this.emit({
-      type: "approval_required",
-      request: approval,
-      timestamp: nowIso(),
-    });
+    if (this.pendingPermissions.has(pendingPermission.permissionId) || this.settledPermissionIds.has(pendingPermission.permissionId)) return;
+    this.pendingPermissions.set(pendingPermission.permissionId, pendingPermission);
+    this.syncPendingPermissions();
+  }
+
+  private isApprovalSessionOwned(sessionId: string): boolean {
+    const seen = new Set<string>();
+    let current: string | undefined = sessionId;
+    while (current && !seen.has(current)) {
+      if (current === this.activeSessionId) return true;
+      seen.add(current);
+      current = this.childSessionParents.get(current);
+    }
+    return false;
+  }
+
+  private async discoverApprovalSessionOwnership(sessionId: string, seen = new Set<string>()): Promise<boolean> {
+    if (this.isApprovalSessionOwned(sessionId)) return true;
+    if (seen.has(sessionId) || seen.size >= 32 || !this.client?.session?.get) return false;
+    seen.add(sessionId);
+    const result = await this.client.session.get({ sessionID: sessionId, directory: this.options.cwd });
+    const session = result.data;
+    if (!session || !this.isCurrentDirectorySession(session) || !session.parentID) return false;
+    this.childSessionIds.add(sessionId);
+    if (!await this.discoverApprovalSessionOwnership(session.parentID, seen)) return false;
+    this.childSessionParents.set(sessionId, session.parentID);
+    return this.isApprovalSessionOwned(sessionId);
+  }
+
+  private rememberSettledPermission(id: string): void {
+    this.settledPermissionIds.add(id);
+    if (this.settledPermissionIds.size > 512) {
+      this.settledPermissionIds.delete(this.settledPermissionIds.values().next().value!);
+    }
+  }
+
+  private handlePermissionSettled(properties: unknown): void {
+    if (!isRecord(properties)) return;
+    const id = typeof properties.requestID === "string" ? properties.requestID : properties.id;
+    if (typeof id !== "string") return;
+    const pending = this.pendingPermissions.get(id);
+    if (!pending) {
+      this.rememberSettledPermission(id);
+      return;
+    }
+    if (typeof properties.sessionID === "string" && properties.sessionID !== pending.sessionId) return;
+    this.rememberSettledPermission(id);
+    this.pendingPermissions.delete(id);
+    this.syncPendingPermissions();
+  }
+
+  private syncPendingPermissions(): void {
+    const previousId = this.state.pendingApproval?.requestId;
+    this.pendingPermission = this.pendingPermissions.values().next().value ?? null;
+    const requests = Array.from(this.pendingPermissions.values(), (pending) => this.toPendingApproval(pending));
+    this.state.pendingApprovals = requests;
+    this.state.pendingApproval = requests[0] ?? null;
+    this.state.pendingApprovalOrigin = this.pendingPermission?.origin;
+    this.setStatus(requests.length ? "awaiting_approval" : this.state.pendingUserInput ? "awaiting_input" : "busy");
+    this.emit({ type: "approval_state_changed", requests, timestamp: nowIso() });
+    if (requests[0] && requests[0].requestId !== previousId) {
+      this.emit({ type: "approval_required", request: requests[0], timestamp: nowIso() });
+    }
   }
 
   private clearPendingPermissionState(): void {
+    this.approvalOwnershipGeneration++;
+    const hadPending = this.pendingPermissions.size > 0;
+    for (const id of this.pendingPermissions.keys()) this.rememberSettledPermission(id);
+    this.pendingPermissions.clear();
     this.pendingPermission = null;
     this.state.pendingApproval = null;
+    this.state.pendingApprovals = [];
     this.state.pendingApprovalOrigin = undefined;
+    if (hadPending) this.emit({ type: "approval_state_changed", requests: [], timestamp: nowIso() });
   }
 
   private handleQuestionAsked(properties: unknown): void {
@@ -2143,7 +2231,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.state.pendingUserInput = request;
     this.state.pendingUserInputOrigin = this.state.activeTurnOrigin;
     this.clearWechatWorkingNotice();
-    this.setStatus("awaiting_input", "OpenCode is waiting for user input.");
+    this.setStatus(this.pendingPermissions.size ? "awaiting_approval" : "awaiting_input", "OpenCode is waiting for user input.");
     this.emit({
       type: "user_input_required",
       request,
@@ -2247,6 +2335,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       try {
         const result = await client.permission.reply({
           requestID: pendingPermission.permissionId,
+          sessionID: pendingPermission.sessionId,
           directory: this.options.cwd,
           workspace: this.activeWorkspaceId ?? undefined,
           reply: "reject",
@@ -2299,12 +2388,14 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const command = this.extractPermissionCommand(properties, metadata);
 
     return {
+      origin: this.state.activeTurnOrigin,
       sessionId,
       permissionId,
       code: buildOneTimeCode(),
       createdAt: nowIso(),
       request: {
         source: "cli",
+        requestId: permissionId,
         summary: title ?? `OpenCode needs approval${toolName ? ` for tool: ${toolName}` : ""}.`,
         commandPreview: truncatePreview(command ?? title ?? "Permission request", 180),
         toolName,
@@ -2353,6 +2444,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       // Subagent creation is not a visible TUI selection. Remember the child
       // so its later status/output events cannot implicitly follow it either.
       this.childSessionIds.add(session.id);
+      const directory = this.extractSessionDirectory(properties);
+      if ((!directory || this.normalizeDirectory(directory) === this.normalizeDirectory(this.options.cwd))
+        && (!session.workspaceID || !this.activeWorkspaceId || session.workspaceID === this.activeWorkspaceId)) {
+        this.childSessionParents.set(session.id, session.parentID);
+      }
       return;
     }
     if (this.syncTrackedSessionFromEvent(session)) {
@@ -2385,7 +2481,30 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (!sessionId) {
       return;
     }
-    this.childSessionIds.delete(sessionId);
+    const removedSessions = new Set([sessionId]);
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const [child, parent] of this.childSessionParents) {
+        if (removedSessions.has(parent) && !removedSessions.has(child)) {
+          removedSessions.add(child);
+          expanded = true;
+        }
+      }
+    }
+    for (const id of removedSessions) {
+      this.childSessionIds.delete(id);
+      this.childSessionParents.delete(id);
+    }
+    let removedApproval = false;
+    for (const [id, pending] of this.pendingPermissions) {
+      if (removedSessions.has(pending.sessionId)) {
+        this.rememberSettledPermission(id);
+        this.pendingPermissions.delete(id);
+        removedApproval = true;
+      }
+    }
+    if (removedApproval) this.syncPendingPermissions();
     this.previousAgentBySession.delete(sessionId);
     if (sessionId !== this.activeSessionId) {
       return;

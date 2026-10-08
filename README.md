@@ -259,7 +259,7 @@ wechat-daemon --adapter claude --profile work
 | `opencode` | 已接入 | `wechat-opencode` / `wecom-opencode` 自动启动或复用 OpenCode；支持本地 session 跟随及远程通道 `/new` / `/new-session` |
 | `pi` | 已接入 | `wechat-pi` / `wecom-pi` 启动用户原生 Pi TUI，并通过本地 extension 让远程通道接管同一 session，支持最终回复、停止、新建和恢复 session |
 
-Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。Pi `0.85.0` 及更新版本要求 Node.js `>=22.19.0`，低于该版本时 `wechat-pi` / `wecom-pi` 会在启动前明确提示。
+Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目的配置、扩展与其他本地文件；该参数不是逐项工具审批开关；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。Pi `0.85.0` 及更新版本要求 Node.js `>=22.19.0`，低于该版本时 `wechat-pi` / `wecom-pi` 会在启动前明确提示。
 
 ### Codex 示例
 
@@ -362,13 +362,19 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/deny`、`/no` | 直接启动、daemon | 有待审批时拒绝当前权限请求 |
 | `confirm`、`yes` | 有待审批时 | `/confirm` 的文本别名 |
 | `deny`、`no` | 有待审批时 | `/deny` 的文本别名 |
-| `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、OpenCode 等适配器的结构化回答 |
+| `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、Claude、OpenCode 的结构化回答 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信首次配置 | 在 `wecom-setup` 提示后完成操作者配对 |
+
+Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单题可回复 `/answer 1` 或自定义文本；多题可回复 `/answer 1=Yes;2=2;3=1,2;4=1`，多选值以逗号分隔。答案一次提交全部题目。钩子超时或断线后，远程问题会清除，并提示在本地终端作答或使用 `/stop`。升级后需重启 daemon 和可见 Claude 窗口。
 
 Claude Code 的模型、计划模式控制需要可见 CLI 处于空闲原生提示符，且没有待审批、本地草稿或打开的弹窗。操作会短暂打开原生选择器并等待确认；控制期间操作本地键盘会取消远程控制。Claude Code 使用选择器的 `s`（仅当前会话）切换模型，需要 CLI 支持此选项；`/plan off` 会恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
 
 OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥接通过 OpenCode server 的会话 API 查询已连接模型、提交模型与 primary agent，并回读 session 确认结果；微信和企业微信消息直接通过 SDK 提交，同时显式携带已生效的 agent、model 和 variant。OpenCode 的 `/plan` 选择 `plan` primary agent；缺少该 agent 时会提示错误，`/plan off` 没有历史记录时恢复 `build` 或首个非 plan primary agent。
+
+Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理：每次 `/confirm` 或 `/deny` 只处理当前显示的一项，再提示下一项；本地终端已处理的请求会同步移除。子代理的权限请求仍由所属父任务接收，审批不会切换当前会话或改变回复目标。升级后请重启已打开的 CLI 窗口，旧 companion 仍可显示状态，但需要重启才能远程审批。
+
+Claude Code 默认在 bridge 生成的启动设置中添加 `WebFetch(domain:*)` 权限规则，允许常规联网请求直接通过；现有拒绝规则和沙箱限制仍生效。设置 `CLI_BRIDGE_STRICT_APPROVAL=1` 可关闭此自动放行；仅有本地网络弹窗、没有 `PermissionRequest` Hook 的请求需要在终端处理。
 
 Pi 的 `/model` 通过已连接原生 TUI extension 读取当前 scoped model 列表；没有 scoped models 时使用 model registry 中可用的模型，并通过 `pi.setModel()` 切换。Pi 的 `/plan` 仍由可选扩展定义，不作为 bridge 的通用控制命令。
 

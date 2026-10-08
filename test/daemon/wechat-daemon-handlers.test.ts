@@ -194,7 +194,17 @@ class FakeBridgeRuntime implements BridgeAdapter {
     this.setStatus("idle");
   }
 
-  async resolveApproval(): Promise<boolean> {
+  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+    this.approvals.push(action);
+    if (this.state.pendingApprovals !== undefined) {
+      const pending = this.state.pendingApprovals.find((request) => request.requestId === requestId);
+      if (!pending) return false;
+      this.state.pendingApprovals = this.state.pendingApprovals.filter((request) => request !== pending);
+      this.state.pendingApproval = this.state.pendingApprovals[0] ?? null;
+      this.state.status = this.state.pendingApproval ? "awaiting_approval" : "busy";
+      this.emit({ type: "approval_state_changed", requests: this.state.pendingApprovals, timestamp: new Date().toISOString() });
+      if (this.state.pendingApproval) this.emit({ type: "approval_required", request: this.state.pendingApproval, timestamp: new Date().toISOString() });
+    }
     return true;
   }
 
@@ -377,6 +387,115 @@ function stdout(text: string): BridgeEvent {
     timestamp: new Date().toISOString(),
   };
 }
+
+describe("daemon sequential approvals", () => {
+  test("confirms one displayed request, prompts the next, and preserves the parent turn and target", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "parent task", conversationId: "parent-conversation" });
+    await forwardInput(daemon, { adapter: "claude", text: "other task", conversationId: "other-conversation" });
+    const internal = daemon as any;
+    const slot = internal.slots.get("codex");
+    const parentTask = slot.turns.activeTask;
+    const runtime = env.runtime("codex");
+    const first = { ...pendingApproval, requestId: "first", commandPreview: "first command" };
+    const second = { ...pendingApproval, requestId: "second", commandPreview: "second command" };
+    runtime.state.pendingApproval = first;
+    runtime.state.pendingApprovals = [first, second];
+    runtime.state.status = "awaiting_approval";
+    runtime.emit({ type: "approval_required", request: first, timestamp: new Date().toISOString() });
+    await tick(20);
+    const message = { senderId: OPERATOR_ID };
+    await internal.confirmPendingApproval(message, internal.slots.get("claude"));
+    await tick(20);
+    expect(runtime.approvals).toEqual(["confirm"]);
+    expect(runtime.state.pendingApprovals).toEqual([second]);
+    expect(slot.pendingConfirmations).toHaveLength(1);
+    expect(slot.turns.activeTask).toBe(parentTask);
+    expect(daemon.getSlotState("codex")?.activeConversationId).toBe("parent-conversation");
+    const prompts = env.wecom.sent.filter((message) => message.kind === "approval_required");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]?.text).toContain("second command");
+    expect(prompts[1]?.target.conversationId).toBe("parent-conversation");
+    await internal.denyPendingApproval(message, internal.slots.get("claude"));
+    expect(runtime.approvals).toEqual(["confirm", "deny"]);
+    expect(slot.pendingConfirmations).toEqual([]);
+    expect(slot.turns.activeTask).toBe(parentTask);
+  });
+
+  test("a delayed obsolete popup cannot restore a locally settled request", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "opencode", text: "parent", conversationId: "parent-conversation" });
+    const runtime = env.runtime("opencode");
+    const first = { ...pendingApproval, requestId: "first", commandPreview: "obsolete command" };
+    const second = { ...pendingApproval, requestId: "second", commandPreview: "next command" };
+    runtime.state.pendingApprovals = [first, second];
+    runtime.state.pendingApproval = first;
+    runtime.emit({ type: "approval_required", request: first, timestamp: new Date().toISOString() });
+    runtime.state.pendingApprovals = [second];
+    runtime.state.pendingApproval = second;
+    runtime.emit({ type: "approval_state_changed", requests: [second], timestamp: new Date().toISOString() });
+    runtime.emit({ type: "approval_required", request: second, timestamp: new Date().toISOString() });
+    await tick(20);
+    const prompts = env.wecom.sent.filter((message) => message.kind === "approval_required");
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]?.text).toContain("next command");
+    expect(prompts[0]?.text).not.toContain("obsolete command");
+  });
+});
+
+
+describe("daemon Claude questions", () => {
+  test("answers the originating slot, preserves its parent and promotes the next question", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "claude", text: "parent task", conversationId: "parent-conversation" });
+    await forwardInput(daemon, { adapter: "codex", text: "other task", conversationId: "other-conversation" });
+    const internal = daemon as any;
+    const slot = internal.slots.get("claude");
+    const parentTask = slot.turns.activeTask;
+    const runtime = env.runtime("claude");
+    const first = { ...pendingUserInput, requestId: "first" };
+    const second = { ...pendingUserInput, requestId: "second", summary: "Next question" };
+    runtime.state.pendingUserInput = first;
+    runtime.state.status = "awaiting_input";
+    runtime.emit({ type: "user_input_required", request: first, timestamp: new Date().toISOString() });
+    await tick(20);
+    let answeredId: string | undefined;
+    runtime.submitUserInput = async (answers, requestId?: string) => {
+      answeredId = requestId;
+      runtime.userInput.push(answers);
+      runtime.state.pendingUserInput = second;
+      runtime.emit({ type: "user_input_required", request: second, timestamp: new Date().toISOString() });
+      return true;
+    };
+    await internal.answerPendingUserInput({ senderId: OPERATOR_ID }, internal.slots.get("codex"), "dev");
+    await tick(20);
+    expect(answeredId).toBe("first");
+    expect(runtime.userInput).toEqual([{ env: ["dev"] }]);
+    expect(slot.pendingUserInput.requestId).toBe("second");
+    expect(slot.turns.activeTask).toBe(parentTask);
+    expect(daemon.getSlotState("claude")?.activeConversationId).toBe("parent-conversation");
+    expect(env.wecom.sent.filter((message) => message.kind === "user_input_required").map((message) => message.target.conversationId))
+      .toEqual(["parent-conversation", "parent-conversation"]);
+  });
+
+  test("does not send a delayed question after it was answered locally", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "claude", text: "parent", conversationId: "parent-conversation" });
+    const runtime = env.runtime("claude");
+    const request = { ...pendingUserInput, requestId: "old" };
+    runtime.state.pendingUserInput = request;
+    runtime.emit({ type: "user_input_required", request, timestamp: new Date().toISOString() });
+    runtime.state.pendingUserInput = null;
+    runtime.emit({ type: "status", status: "busy", timestamp: new Date().toISOString() });
+    await tick(20);
+    expect(env.wecom.sent.filter((message) => message.kind === "user_input_required")).toHaveLength(0);
+    expect((daemon as any).slots.get("claude").pendingUserInput).toBeNull();
+  });
+});
 
 
 describe("wechat-daemon handlers: /all broadcast", () => {
