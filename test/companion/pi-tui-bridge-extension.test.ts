@@ -136,6 +136,19 @@ describe("Pi TUI bridge extension", () => {
         }),
       );
 
+      // Pi provider errors can contain no text blocks. Preserve their error
+      // metadata so the adapter reports failure when agent_settled arrives.
+      await handlers.get("message_end")?.({
+        message: { role: "assistant", content: [], stopReason: "error", errorMessage: "provider unavailable" },
+      }, context);
+      await waitFor(() => frames.some((frame) => frame.type === "assistant_message"));
+      expect(frames).toContainEqual({
+        type: "assistant_message",
+        text: "",
+        stopReason: "error",
+        errorMessage: "provider unavailable",
+      });
+
       clientSocket?.write(
         `${JSON.stringify({ id: "models-1", type: "list_models" })}\n`,
       );

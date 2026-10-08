@@ -206,6 +206,26 @@ describe("Pi sessions", () => {
 });
 
 describe("Pi TUI lifecycle", () => {
+  test("reports text-free provider errors and releases the settled turn", async () => {
+    const adapter = new PiTuiAdapter({
+      kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion",
+    });
+    const events: BridgeEvent[] = [];
+    adapter.setEventSink((event) => events.push(event));
+    const internal = adapter as any;
+    internal.handleFrame({ type: "agent_start" }, {} as net.Socket);
+    internal.handleFrame({
+      type: "assistant_message", text: "", stopReason: "error", errorMessage: "provider unavailable",
+    }, {} as net.Socket);
+    internal.handleFrame({ type: "agent_settled" }, {} as net.Socket);
+    await waitForCondition(() => adapter.getState().status === "idle");
+    expect(events.filter((event) => event.type !== "status")).toEqual([
+      expect.objectContaining({ type: "task_failed", message: "provider unavailable" }),
+      expect.objectContaining({ type: "task_complete" }),
+    ]);
+    expect(adapter.getState().activeTurnOrigin).toBeUndefined();
+  });
+
   test("emits task_complete whenever a tracked turn settles", async () => {
     const adapter = new PiTuiAdapter({
       kind: "pi",

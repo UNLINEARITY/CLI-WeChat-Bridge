@@ -162,6 +162,18 @@ npm pack --dry-run --json
 
 发布前应确认 tarball 包含 `bin/`、`dist/`、`README.md` 和 `LICENSE.txt`，不包含 `src/`、测试、runtime state、`node_modules/` 或本地 artifact。
 
+## CLI 兼容性验证
+
+```bash
+npm run smoke:cli-compat
+```
+
+该检查使用 PATH 上的 CLI，验证 Codex 的 bridge 协议字段及 `--remote`、Claude Code 的 `--settings`/`--resume`、OpenCode 的 HTTP 健康响应，以及实际加载 Pi bridge extension 后的 session 状态和模型列表 IPC。OpenCode 每次 HTTP 探测最多等待 3 秒，总等待上限为 30 秒，避免服务刚监听 TCP 时的启动竞态拖延到 5 分钟。
+
+定时 CI 同时覆盖 OpenCode 1.18.35 和最新 OpenCode 2。2026-10-08 本地能力验证使用 Codex 0.161.0、Claude Code 2.1.293、OpenCode 1.18.35/2.0.24 和 Pi 1.1.0。Pi 1.x 默认全屏，bridge 继续由 extension 接管原生 TUI，无需解析终端文本。
+
+能力检查不调用模型；真实微信/企业微信消息、审批和最终回复链路应另用 `npm run e2e` 或可见 CLI 验证。
+
 ## 主要源码入口
 
 | 文件 | 作用 |

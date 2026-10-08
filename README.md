@@ -60,7 +60,7 @@
 
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0`（建议直接安装官网 LTS 版本）
 - 已安装以下任意一种本地 CLI，并尽量保持最新版本：
-  - [Codex](https://github.com/openai/codex)（已验证 `0.149.x`–`0.157.x`）
+  - [Codex](https://github.com/openai/codex)（已验证 `0.149.x`–`0.161.x`）
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
   - [Pi](https://github.com/earendil-works/pi)（已验证 `0.85.1`；需要本机可执行 `pi` 命令）

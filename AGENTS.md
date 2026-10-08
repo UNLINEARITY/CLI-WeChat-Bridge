@@ -140,11 +140,11 @@ Visible CLI clients always start fresh sessions by default (`new`) in both daemo
 
 ## CLI Compatibility Maintenance
 The bridge tracks the latest stable CLI releases it depends on:
-- Codex validated range: 0.149.x through 0.155.x (see `isCodexVersionInCompatibilityRange`).
+- Codex validated range: 0.149.x through 0.161.x (see `isCodexVersionInCompatibilityRange`).
 - Claude Code, OpenCode, and Pi are validated against the latest stable releases via capability probes, not version ranges.
 - Pi 0.85 requires Node.js >= 22.19.0; launchers and the daemon enforce this before starting the visible TUI.
 
-`.github/workflows/cli-compatibility.yml` runs every Monday 04:23 UTC (and on demand), installs the latest stable CLIs, and runs `npm run smoke:cli-compat` (`scripts/smoke-cli-compatibility.mjs`) to verify Codex schema generation, Claude `--settings`, OpenCode server health, and Pi extension capabilities. It is deliberately not a required check; triage failures by comparing the smoke output against `src/bridge/bridge-adapters.*.ts` usage.
+`.github/workflows/cli-compatibility.yml` runs every Monday 04:23 UTC (and on demand), installs the latest stable CLIs (plus pinned OpenCode 1.18), and runs `npm run smoke:cli-compat` (`scripts/smoke-cli-compatibility.mjs`) to verify Codex bridge schema fields and `--remote`, Claude `--settings`/`--resume`, OpenCode server health with bounded HTTP retries, and loading the real Pi bridge extension with model-list IPC. It is deliberately not a required check; triage failures by comparing the smoke output against `src/bridge/bridge-adapters.*.ts` usage.
 
 ## WeChat, WeCom, Attachments, And Transport
 Inbound WeChat images and files are downloaded to `~/.cli-bridge/inbound-attachments/<date>/` and forwarded to the selected CLI as local paths in the prompt. This project saves and exposes attachment paths; it does not implement OCR or document parsing inside the bridge.

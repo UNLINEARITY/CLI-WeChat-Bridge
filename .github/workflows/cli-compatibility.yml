@@ -22,7 +22,7 @@ jobs:
       matrix:
         include:
           - opencode_label: OpenCode 1.18
-            opencode_package: opencode-ai@1.18.32
+            opencode_package: opencode-ai@1.18.35
           - opencode_label: OpenCode 2
             opencode_package: "@opencode/cli@latest"
 
@@ -38,6 +38,7 @@ jobs:
       - name: Install latest stable CLIs
         run: |
           npm install --global \
+            --allow-scripts=@anthropic-ai/claude-code,opencode-ai,@opencode/cli,esbuild \
             @openai/codex@latest \
             @anthropic-ai/claude-code@latest \
             "${{ matrix.opencode_package }}" \

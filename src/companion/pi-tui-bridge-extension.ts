@@ -418,11 +418,14 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
   });
   pi.on("message_end", (event, context) => {
     latestContext = context;
-    const text = extractAssistantText(event.message);
-    if (!text) {
+    const message = isRecord(event.message) ? event.message : {};
+    if (message.role !== "assistant") {
       return;
     }
-    const message = isRecord(event.message) ? event.message : {};
+    const text = extractAssistantText(event.message);
+    if (!text && message.stopReason !== "error") {
+      return;
+    }
     writeFrame({
       type: "assistant_message",
       text,
