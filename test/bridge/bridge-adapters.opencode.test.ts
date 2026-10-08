@@ -1841,6 +1841,146 @@ describe("OpenCode question handling", () => {
 /* ------------------------------------------------------------------ */
 
 describe("OpenCode session.created handling", () => {
+  for (const origin of ["wechat", "local"] as const) {
+    const child = { id: "session_child", parentID: "session_parent" };
+    const childEvents = {
+      info: { type: "session.created", properties: { info: child } },
+      session: { type: "session.created", properties: { session: child } },
+      sessionID: { type: "session.created", properties: { sessionID: child.id, info: child } },
+      sessionId: { type: "session.created", properties: { sessionId: child.id, parentID: child.parentID } },
+      v2: normalizeOpenCodeV2Event({
+        type: "session.created",
+        data: { sessionID: child.id, parentID: child.parentID },
+      })[0],
+    };
+
+    for (const [shape, event] of Object.entries(childEvents)) {
+      test(`keeps the ${origin} parent turn when a subagent creates a child (${shape})`, async () => {
+        const adapter = new OpenCodeServerAdapter({
+          kind: "opencode", command: "opencode", cwd: process.cwd(), renderMode: "companion",
+        });
+        const events: Array<{ type: string }> = [];
+        const aborted: string[] = [];
+        adapter.setEventSink((event) => events.push(event));
+        const internal = adapter as any;
+        internal.assignActiveSession(child.parentID);
+        internal.beginTrackedTurn("Dispatch a subagent", origin);
+        const turnState = adapter.getState();
+        internal.client = {
+          session: {
+            get: async () => ({ data: { ...createSdkSessionRecord(child.id), parentID: child.parentID } }),
+            abort: async ({ sessionID }: { sessionID: string }) => {
+              aborted.push(sessionID);
+              return { data: true };
+            },
+          },
+        };
+        try {
+          internal.handleSseEvent(event);
+          await internal.localSessionFollowChain;
+          expect(aborted).toEqual([]);
+          expect(adapter.getState()).toEqual(turnState);
+          expect(adapter.getState()).toMatchObject({
+            status: "busy", activeTurnOrigin: origin,
+            sharedSessionId: child.parentID, sharedThreadId: child.parentID,
+            activeRuntimeSessionId: child.parentID,
+          });
+
+          // Child lifecycle/output must not steal the parent's turn later.
+          internal.handleSseEvent({
+            type: "session.status", properties: { sessionID: child.id, status: { type: "busy" } },
+          });
+          internal.handleSseEvent({
+            type: "message.part.updated",
+            properties: { part: { id: "child_part", messageID: "child_message", sessionID: child.id, type: "text", text: "Child output" } },
+          });
+          internal.handleSseEvent({ type: "session.idle", properties: { sessionID: child.id } });
+          expect(adapter.getState()).toEqual(turnState);
+          expect(internal.activeSessionId).toBe(child.parentID);
+          expect(internal.hasAcceptedInput).toBe(true);
+          expect(events.filter((event) => ["session_switched", "task_failed", "final_reply", "task_complete"].includes(event.type))).toEqual([]);
+
+          if (origin === "wechat" && shape === "info") {
+            internal.handleSseEvent({
+              type: "message.part.updated",
+              properties: { part: { id: "parent_part", messageID: "parent_message", sessionID: child.parentID, type: "text", text: "Parent finished" } },
+            });
+            internal.handleSseEvent({ type: "session.idle", properties: { sessionID: child.parentID } });
+            const deadline = Date.now() + 3_000;
+            while (!events.some((event) => event.type === "task_complete") && Date.now() < deadline) {
+              await wait(10);
+            }
+            expect(events.filter((event) => event.type === "final_reply")).toEqual([
+              expect.objectContaining({ text: "Parent finished" }),
+            ]);
+            expect(events.filter((event) => event.type === "task_complete")).toHaveLength(1);
+            expect(adapter.getState().status).toBe("idle");
+          }
+        } finally {
+          await adapter.dispose();
+        }
+      });
+    }
+  }
+
+  test("a child creation does not consume the pending local new-session follow", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode", command: "opencode", cwd: process.cwd(), renderMode: "companion",
+    });
+    const internal = adapter as any;
+    internal.assignActiveSession("session_parent");
+    internal.handleSseEvent({ type: "command.executed", properties: { name: "session.new", arguments: "" } });
+    const deadline = internal.pendingLocalSessionCreateFollowUntilMs;
+    internal.handleSseEvent({
+      type: "session.created", properties: { info: { id: "session_child", parentID: "session_parent" } },
+    });
+    expect(internal.activeSessionId).toBe("session_parent");
+    expect(internal.pendingLocalSessionCreateFollowUntilMs).toBe(deadline);
+    internal.handleSseEvent({
+      type: "session.created", properties: { info: { id: "session_new_local", parentID: "" } },
+    });
+    expect(internal.activeSessionId).toBe("session_new_local");
+    expect(internal.pendingLocalSessionCreateFollowUntilMs).toBe(0);
+  });
+
+  test("rejects unscoped global child creation as a local follow signal", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode", command: "opencode", cwd: process.cwd(), renderMode: "companion",
+    });
+    const internal = adapter as any;
+    internal.assignActiveSession("session_parent");
+    const event = internal.normalizeSdkEvent({ payload: {
+      type: "session.created",
+      properties: { sessionID: "session_child", info: { id: "session_child", parentID: "session_parent" } },
+    } });
+    expect(internal.shouldHandleSseEvent(event, "global-event")).toBe(false);
+    internal.markPendingLocalSessionCreateFollow();
+    expect(internal.shouldHandleSseEvent(event, "global-event")).toBe(false);
+  });
+
+  test("still follows a child explicitly selected in the visible TUI", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode", command: "opencode", cwd: process.cwd(), renderMode: "companion",
+    });
+    const internal = adapter as any;
+    try {
+      internal.assignActiveSession("session_parent");
+      internal.handleSseEvent({
+        type: "session.created", properties: { info: { id: "session_child", parentID: "session_parent" } },
+      });
+      internal.handleSseEvent({ type: "tui.session.select", properties: { sessionID: "session_child" } });
+      expect(internal.activeSessionId).toBe("session_child");
+      internal.beginTrackedTurn("Inspect the selected child", "local");
+      internal.handleSseEvent({
+        type: "message.part.updated",
+        properties: { part: { id: "child_part", messageID: "child_message", sessionID: "session_child", type: "text", text: "Selected child output" } },
+      });
+      expect(internal.getBufferedVisibleReplyText("session_child")).toBe("Selected child output");
+    } finally {
+      await adapter.dispose();
+    }
+  });
+
   test("follows a new local session created during a local turn", () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",

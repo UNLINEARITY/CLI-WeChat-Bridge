@@ -323,6 +323,32 @@ describe("Pi TUI lifecycle", () => {
     );
   });
 
+  test("keeps the parent WeChat turn when Pi republishes the current TUI session", async () => {
+    const adapter = new PiTuiAdapter({
+      kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion",
+    });
+    const internal = adapter as any;
+    const events: BridgeEvent[] = [];
+    adapter.setEventSink((event) => events.push(event));
+    internal.state.sharedSessionId = "pi_parent";
+    internal.state.activeRuntimeSessionId = "pi_parent";
+    internal.beginTurn("wechat");
+    events.length = 0;
+    const parentTurnId = adapter.getState().activeTurnId;
+    internal.handleFrame({ type: "session_state", sessionId: "pi_parent", reason: "settled" }, {} as net.Socket);
+    expect(adapter.getState()).toMatchObject({
+      sharedSessionId: "pi_parent", activeTurnId: parentTurnId, activeTurnOrigin: "wechat", status: "busy",
+    });
+    expect(events.some((event) => event.type === "session_switched" || event.type === "task_failed")).toBe(false);
+    internal.handleFrame({ type: "assistant_message", text: "Parent finished" }, {} as net.Socket);
+    internal.handleFrame({ type: "agent_settled" }, {} as net.Socket);
+    await waitForCondition(() => adapter.getState().status === "idle");
+    expect(events.filter((event) => event.type === "final_reply")).toEqual([
+      expect.objectContaining({ text: "Parent finished" }),
+    ]);
+    expect(events.filter((event) => event.type === "task_complete")).toHaveLength(1);
+  });
+
   test("keeps a slow native TUI alive while its extension is still loading", async () => {
     const child = new FakePiProcess();
     const killedPids: number[] = [];

@@ -469,6 +469,55 @@ describe("Codex visible thread resume", () => {
     expect(events.filter((event) => event.type === "thread_switched")).toHaveLength(0);
   });
 
+  for (const renderMode of ["headless", "panel"] as const) {
+    for (const origin of ["wechat", "local", "idle"] as const) {
+      test(`keeps the parent through subagent lifecycle events (${renderMode}, ${origin})`, () => {
+        const cwd = path.resolve("tmp/codex-subagent-lifecycle");
+        const adapter = new CodexPtyAdapter({ kind: "codex", command: "codex", cwd, renderMode }) as any;
+        const events: Array<Record<string, unknown>> = [];
+        const requests: string[] = [];
+        adapter.setEventSink((event: Record<string, unknown>) => events.push(event));
+        adapter.sharedThreadId = "thread_parent";
+        adapter.announcedThreadId = "thread_parent";
+        adapter.state.sharedThreadId = "thread_parent";
+        adapter.state.sharedSessionId = "thread_parent";
+        adapter.state.status = origin === "idle" ? "idle" : "busy";
+        if (origin !== "idle") {
+          adapter.setActiveTurn({ threadId: "thread_parent", turnId: "turn_parent", origin });
+        }
+        adapter.sendRpcRequest = async (method: string) => {
+          requests.push(method);
+          return {};
+        };
+        const parentState = adapter.getState();
+        for (const [threadId, metadata] of [
+          ["thread_child", { parentThreadId: "thread_parent" }],
+          ["thread_ephemeral", { ephemeral: true }],
+        ] as const) {
+          adapter.handleRpcNotification("thread/started", { thread: buildThread(threadId, cwd, metadata) });
+          adapter.handleRpcNotification("thread/status/changed", {
+            threadId, status: { type: "active" }, ...(renderMode === "headless" ? { cwd } : {}),
+          });
+          adapter.handleRpcNotification("turn/started", { threadId, turnId: `turn_${threadId}` });
+          adapter.handleRpcNotification("item/completed", {
+            threadId, turnId: `turn_${threadId}`,
+            item: { id: `item_${threadId}`, type: "agentMessage", text: "Child output", phase: "final_answer" },
+          });
+          adapter.handleRpcNotification("turn/completed", {
+            threadId, turn: { id: `turn_${threadId}`, status: "completed" },
+          });
+          adapter.handleRpcNotification("thread/status/changed", { threadId, status: { type: "idle" } });
+        }
+        expect(adapter.getState()).toEqual(parentState);
+        expect(adapter.sharedThreadId).toBe("thread_parent");
+        expect(adapter.pendingThreadFollowId).toBeNull();
+        expect(requests).toEqual([]);
+        expect(events).toEqual([]);
+        adapter.resetTurnTracking({ preserveThread: false });
+      });
+    }
+  }
+
   test("rejects an ephemeral saved thread during startup restore", async () => {
     const cwd = path.resolve("tmp/codex-startup-ephemeral");
     const adapter = buildAdapter(cwd) as any;

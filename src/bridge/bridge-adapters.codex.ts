@@ -202,6 +202,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private rpcRequestCounter = 0;
   private pendingRpcRequests = new Map<string, CodexRpcPendingRequest>();
   private subscribedThreadIds = new Set<string>();
+  private readonly backgroundThreadIds = new Set<string>();
   private pendingThreadSubscriptions = new Map<string, Promise<boolean>>();
   private sharedThreadId: string | null = null;
   private previousCollaborationMode: Record<string, unknown> | null = null;
@@ -2536,6 +2537,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       signal: CodexThreadAnnouncementSignal;
     },
   ): void {
+    if (this.backgroundThreadIds.has(threadId)) {
+      return;
+    }
     const weakSignal =
       options.signal === "status_changed" ||
       options.signal === "thread_started" ||
@@ -2903,6 +2907,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const threadId = getNotificationThreadId(params);
     const turnId = getNotificationTurnId(params);
     if (!threadId || !turnId) {
+      return null;
+    }
+    if (this.backgroundThreadIds.has(threadId)) {
       return null;
     }
     if (this.hasCompletedTurn(turnId)) {
@@ -3286,9 +3293,25 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.pendingUserInputTimer.unref?.();
   }
 
+  private rememberBackgroundThread(thread: unknown): boolean {
+    if (
+      !isRecord(thread) || typeof thread.id !== "string" ||
+      (typeof thread.parentThreadId !== "string" && thread.ephemeral !== true)
+    ) {
+      return false;
+    }
+    // Later notifications may carry only an id. Keep subagent/ephemeral
+    // threads out of local follow and turn ownership for the server lifetime.
+    this.backgroundThreadIds.add(thread.id);
+    return true;
+  }
+
   private handleThreadStatusChanged(params: Record<string, unknown>): void {
     const threadId = extractCodexThreadFollowIdFromStatusChanged(params);
     if (!threadId) {
+      return;
+    }
+    if (this.rememberBackgroundThread(params.thread) || this.backgroundThreadIds.has(threadId)) {
       return;
     }
     if (this.pendingVisibleResume || this.visibleThreadProxy) {
@@ -3349,6 +3372,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           return;
         }
         const thread = response.thread;
+        if (this.rememberBackgroundThread(thread) || this.backgroundThreadIds.has(threadId)) {
+          return;
+        }
         if (
           thread.id === threadId &&
           typeof thread.cwd === "string" &&
@@ -3389,6 +3415,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!threadId) {
       return;
     }
+    if (this.rememberBackgroundThread(params.thread) || this.backgroundThreadIds.has(threadId)) {
+      return;
+    }
     if (this.visibleThreadProxy || this.isBridgeResumeReplay(threadId)) {
       return;
     }
@@ -3398,15 +3427,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     const thread = isRecord(params.thread) ? params.thread : null;
-    if (thread) {
-      if (
-        (typeof thread.cwd === "string" &&
-          normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)) ||
-        typeof thread.parentThreadId === "string" ||
-        thread.ephemeral === true
-      ) {
-        return;
-      }
+    if (
+      typeof thread?.cwd === "string" &&
+      normalizeComparablePath(thread.cwd) !== normalizeComparablePath(this.options.cwd)
+    ) {
+      return;
     }
 
     if (
@@ -3733,6 +3758,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const visibleThreadProxy = this.visibleThreadProxy;
     this.visibleThreadProxy = null;
     await visibleThreadProxy?.close();
+    this.backgroundThreadIds.clear();
     if (!this.appServer) {
       this.appServerPort = null;
       this.appServerShuttingDown = false;

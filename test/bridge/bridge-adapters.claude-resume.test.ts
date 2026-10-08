@@ -193,6 +193,39 @@ describe("Claude resume session discovery", () => {
 });
 
 describe("Claude resume session switching", () => {
+  test("subagent lifecycle hooks preserve the active parent WeChat turn", () => {
+    const adapter = new ClaudeCompanionAdapter({
+      kind: "claude", command: "claude", cwd: process.cwd(), renderMode: "companion",
+    });
+    const internal = adapter as any;
+    const events: BridgeEvent[] = [];
+    let acknowledged = 0;
+    adapter.setEventSink((event) => events.push(event));
+    internal.respondToClaudeHook = () => acknowledged++;
+    internal.runtimeSessionId = "session_parent";
+    internal.state.sharedSessionId = "session_parent";
+    internal.state.activeRuntimeSessionId = "session_parent";
+    internal.state.status = "busy";
+    internal.state.activeTurnOrigin = "wechat";
+    internal.hasAcceptedInput = true;
+    const parentState = adapter.getState();
+    for (const hookEvent of ["SubagentStart", "SubagentStop"]) {
+      internal.handleClaudeHookEnvelope({
+        requestId: hookEvent, socket: {},
+        rawPayload: JSON.stringify({
+          hook_event_name: hookEvent, session_id: "session_parent", agent_id: "agent_child",
+          transcript_path: "/tmp/parent.jsonl", agent_transcript_path: "/tmp/subagents/child.jsonl",
+          last_assistant_message: "Child finished",
+        }),
+      });
+      expect(adapter.getState()).toEqual(parentState);
+      expect(internal.runtimeSessionId).toBe("session_parent");
+      expect(internal.hasAcceptedInput).toBe(true);
+    }
+    expect(acknowledged).toBe(2);
+    expect(events).toEqual([]);
+  });
+
   test("injects an exact /resume command and waits for matching hooks", async () => {
     const configDir = makeTempDirectory();
     const cwd = path.join(configDir, "workspace");

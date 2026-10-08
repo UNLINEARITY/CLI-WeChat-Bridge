@@ -369,6 +369,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private pendingPermission: OpenCodePendingPermission | null = null;
   private pendingQuestion: OpenCodePendingQuestion | null = null;
   private readonly previousAgentBySession = new Map<string, string>();
+  private readonly childSessionIds = new Set<string>();
 
   async listModels(): Promise<BridgeModelOption[]> {
     this.assertRemoteControlReady();
@@ -916,6 +917,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async dispose(): Promise<void> {
     this.shuttingDown = true;
+    this.childSessionIds.clear();
     this.clearWechatWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
@@ -2347,6 +2349,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const session = this.extractSessionReference(properties);
+    if (session?.parentID) {
+      // Subagent creation is not a visible TUI selection. Remember the child
+      // so its later status/output events cannot implicitly follow it either.
+      this.childSessionIds.add(session.id);
+      return;
+    }
     if (this.syncTrackedSessionFromEvent(session)) {
       return;
     }
@@ -2377,6 +2385,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (!sessionId) {
       return;
     }
+    this.childSessionIds.delete(sessionId);
     this.previousAgentBySession.delete(sessionId);
     if (sessionId !== this.activeSessionId) {
       return;
@@ -3398,6 +3407,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return true;
     }
 
+    if (this.childSessionIds.has(sessionId)) {
+      return false;
+    }
+
     if (options.allowLocalTurnFollow !== false && this.shouldFollowLocalTurnSession(sessionId)) {
       this.switchSharedSession(session ?? sessionId, {
         source: "local",
@@ -3413,7 +3426,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private extractSessionReference(
     properties: Record<string, unknown>,
-  ): { id: string; workspaceID?: string } | null {
+  ): { id: string; workspaceID?: string; parentID?: string } | null {
+    const session = isRecord(properties.session) ? properties.session : undefined;
+    const info = isRecord(properties.info) ? properties.info : undefined;
+    const parentID = [properties.parentID, session?.parentID, info?.parentID].find(
+      (value): value is string => typeof value === "string" && value.length > 0,
+    );
     if (typeof properties.sessionID === "string" || typeof properties.sessionId === "string") {
       const id =
         typeof properties.sessionID === "string"
@@ -3422,22 +3440,23 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return {
         id,
         workspaceID: this.extractWorkspaceId(properties) ?? undefined,
+        parentID,
       };
     }
 
-    const session = isRecord(properties.session) ? properties.session : undefined;
     if (typeof session?.id === "string") {
       return {
         id: session.id,
         workspaceID: this.extractWorkspaceId(session) ?? this.extractWorkspaceId(properties) ?? undefined,
+        parentID,
       };
     }
 
-    const info = isRecord(properties.info) ? properties.info : undefined;
     if (typeof info?.id === "string") {
       return {
         id: info.id,
         workspaceID: this.extractWorkspaceId(info) ?? this.extractWorkspaceId(properties) ?? undefined,
+        parentID,
       };
     }
 
@@ -3497,7 +3516,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const session = this.extractSessionReference(payload);
-    if (!session?.id || session.id === this.activeSessionId) {
+    if (!session?.id || session.parentID || session.id === this.activeSessionId) {
       return false;
     }
 
