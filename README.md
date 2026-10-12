@@ -61,7 +61,7 @@
   - [Codex](https://github.com/openai/codex)（已验证 `0.149.x`–`0.161.x`）
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
-  - [Pi](https://github.com/earendil-works/pi)（已验证 `0.85.1`；需要本机可执行 `pi` 命令）
+  - [Pi](https://github.com/earendil-works/pi)（通过原生 TUI extension 接入；需要本机可执行 `pi` 命令）
 - Bridge 仅调用安装在 `PATH` 中、可直接执行的独立 CLI；不会发现或调用 ChatGPT.app 等桌面应用内部捆绑的私有可执行文件。
 - 已准备一个远程通道：个人微信使用 `wechat-setup`，企业微信使用 `wecom-setup`
 
@@ -369,7 +369,7 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 
 语言切换及启动环境变量的优先级见 [界面语言](docs/configuration.md#界面语言)。
 
-Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单题可回复 `/answer 1` 或自定义文本；多题可回复 `/answer 1=Yes;2=2;3=1,2;4=1`，多选值以逗号分隔。答案一次提交全部题目。钩子超时或断线后，远程问题会清除，并提示在本地终端作答或使用 `/stop`。升级后需重启 daemon 和可见 Claude 窗口。
+Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单题可回复 `/answer 1` 或自定义文本；多题可回复 `/answer 1=Yes;2=2;3=1,2;4=1`，多选值以逗号分隔。答案一次提交全部题目。hook 超时或断开连接后，远程问题会清除，并提示在本地终端作答或使用 `/stop`。升级后需重启 daemon 和可见 Claude 窗口。
 
 Claude Code 的模型、计划模式控制需要可见 CLI 处于空闲原生提示符，且没有待审批、本地草稿或打开的弹窗。操作会短暂打开原生选择器并等待确认；控制期间操作本地键盘会取消远程控制。Claude Code 使用选择器的 `s`（仅当前会话）切换模型，需要 CLI 支持此选项；`/plan off` 会恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
 

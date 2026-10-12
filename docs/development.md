@@ -172,7 +172,21 @@ npm run smoke:cli-compat
 
 定时 CI 同时覆盖 OpenCode 1.18.35 和最新 OpenCode 2。2026-10-08 本地能力验证使用 Codex 0.161.0、Claude Code 2.1.293、OpenCode 1.18.35/2.0.24 和 Pi 1.1.0。Pi 1.x 默认全屏，bridge 继续由 extension 接管原生 TUI，无需解析终端文本。
 
-能力检查不调用模型；真实微信/企业微信消息、审批和最终回复链路应另用 `npm run e2e` 或可见 CLI 验证。
+能力检查不调用模型，不代替完整对话测试。`npm run e2e` 使用本地测试通道与真实 CLI，不连接微信或企业微信；线上消息投递需分别验收。
+
+## 本地 E2E 测试
+
+仓库提供 `local` 通道，以 JSONL inbox 和 transcript 记录消息收发，沿用 daemon 的命令解析、调度和回复流程，无需远程通道凭据。E2E runner 通过 PTY host 运行真实 CLI，并提供只读 TUI 镜像；这些脚本仅用于源码仓库中的开发验证。
+
+请先停止日常使用的 bridge / daemon，再在测试环境中运行：
+
+```bash
+npm run e2e -- --adapter claude --no-mirror
+```
+
+默认流程包含远程输入、本地终端输入、session 列表、实际 `/resume` 切换、恢复后的双向输入、`/model` 和 `/plan`。当前完整场景以 Claude Code 为主；runner 会调用真实模型，需要已有的 CLI 安装和模型访问配置。
+
+可使用 `--only send,terminal-send` 选择场景、`--keep` 保留诊断输出；省略 `--no-mirror` 时会尝试打开只读终端镜像。运行部分场景时需考虑依赖，例如 `resume-send` 使用前面的 `resume` 场景选出的目标。
 
 ## 主要源码入口
 
