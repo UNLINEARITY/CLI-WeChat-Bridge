@@ -678,7 +678,7 @@ export class PiTuiAdapter implements BridgeAdapter {
         }
         break;
       case "agent_settled":
-        void this.finalizeTurn();
+        void this.finalizeTurn(frame.aborted === true);
         break;
     }
   }
@@ -715,7 +715,7 @@ export class PiTuiAdapter implements BridgeAdapter {
     this.setStatus("busy", origin === "wechat" ? "Pi TUI is handling a WeChat request." : "Pi TUI is working.");
   }
 
-  private async finalizeTurn(): Promise<void> {
+  private async finalizeTurn(aborted = false): Promise<void> {
     if (this.finalizingTurn || !this.state.activeTurnOrigin) {
       return;
     }
@@ -729,10 +729,14 @@ export class PiTuiAdapter implements BridgeAdapter {
       // Mirror the other adapters: a settled turn always reports completion so
       // bridge/daemon ownership state is released even when the turn produced
       // no visible reply.
-      this.emit({ type: "task_complete", timestamp: nowIso() });
+      this.emit({
+        type: "task_complete",
+        ...(aborted ? { summary: "Interrupted" } : {}),
+        timestamp: nowIso(),
+      });
       this.state.lastOutputAt = nowIso();
       this.clearActiveTurn();
-      this.setStatus("idle");
+      this.setStatus("idle", aborted ? "Pi task interrupted." : undefined);
     } finally {
       this.finalizingTurn = false;
     }

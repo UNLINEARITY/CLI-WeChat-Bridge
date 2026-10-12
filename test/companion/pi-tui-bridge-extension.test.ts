@@ -149,6 +149,16 @@ describe("Pi TUI bridge extension", () => {
         errorMessage: "provider unavailable",
       });
 
+      await handlers.get("agent_settled")?.({ aborted: true }, context);
+      await waitFor(() => frames.some((frame) => frame.type === "agent_settled"));
+      expect(frames).toContainEqual({ type: "agent_settled", aborted: true });
+      await handlers.get("agent_settled")?.({ aborted: false }, context);
+      await waitFor(() => frames.filter((frame) => frame.type === "agent_settled").length === 2);
+      expect(frames).toContainEqual({ type: "agent_settled", aborted: false });
+      await handlers.get("agent_settled")?.({}, context);
+      await waitFor(() => frames.filter((frame) => frame.type === "agent_settled").length === 3);
+      expect(frames).toContainEqual({ type: "agent_settled" });
+
       clientSocket?.write(
         `${JSON.stringify({ id: "models-1", type: "list_models" })}\n`,
       );

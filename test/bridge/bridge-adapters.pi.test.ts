@@ -206,6 +206,39 @@ describe("Pi sessions", () => {
 });
 
 describe("Pi TUI lifecycle", () => {
+  test("preserves partial replies but marks aborted turns as interrupted and settles once", () => {
+    const adapter = new PiTuiAdapter({
+      kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion",
+    });
+    const events: BridgeEvent[] = [];
+    adapter.setEventSink((event) => events.push(event));
+    const internal = adapter as any;
+    internal.beginTurn("wechat");
+    internal.handleFrame({ type: "assistant_message", text: "Partial reply" }, {} as net.Socket);
+    internal.handleFrame({ type: "agent_settled", aborted: true }, {} as net.Socket);
+    internal.handleFrame({ type: "agent_settled", aborted: true }, {} as net.Socket);
+
+    expect(events.filter((event) => event.type === "task_complete")).toEqual([
+      expect.objectContaining({ summary: "Interrupted" }),
+    ]);
+    expect(events.filter((event) => event.type === "final_reply")).toEqual([
+      expect.objectContaining({ text: "Partial reply" }),
+    ]);
+    expect(events.some((event) => event.type === "task_failed")).toBe(false);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "status", status: "idle", message: "Pi task interrupted.",
+    }));
+    expect(adapter.getState().activeTurnOrigin).toBeUndefined();
+
+    internal.beginTurn("wechat");
+    internal.handleFrame({ type: "agent_settled" }, {} as net.Socket);
+    expect(events.filter((event) => event.type === "task_complete")).toEqual([
+      expect.objectContaining({ summary: "Interrupted" }),
+      expect.not.objectContaining({ summary: "Interrupted" }),
+    ]);
+    expect(adapter.getState().status).toBe("idle");
+  });
+
   test("reports text-free provider errors and releases the settled turn", async () => {
     const adapter = new PiTuiAdapter({
       kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion",

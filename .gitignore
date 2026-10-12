@@ -19,5 +19,6 @@ git-log.md
 docs/channel-agnostic-orchestration-plan.md
 docs/turn-routing-hardening-plan.md
 docs/cli-compatibility-and-routing-audit.md
+docs/cli-compatibility.md
 .worktrees/
 .omc/

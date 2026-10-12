@@ -437,9 +437,12 @@ export default function piTuiBridgeExtension(pi: PiExtensionApi): void {
     latestContext = context;
     writeFrame({ type: "agent_start" });
   });
-  pi.on("agent_settled", (_event, context) => {
+  pi.on("agent_settled", (event, context) => {
     latestContext = context;
     writeSessionState(context, "settled");
-    writeFrame({ type: "agent_settled" });
+    writeFrame({
+      type: "agent_settled",
+      ...(typeof event.aborted === "boolean" ? { aborted: event.aborted } : {}),
+    });
   });
 }

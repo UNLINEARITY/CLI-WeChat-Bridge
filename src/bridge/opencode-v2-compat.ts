@@ -154,8 +154,13 @@ function normalizeFormQuestions(form: RecordValue): Array<RecordValue> {
 }
 
 function normalizeFormAnswer(field: RecordValue, values: unknown[]): unknown {
-  if (field.type === "multiselect") return values;
-  const value = values[0] ?? "";
+  const options = Array.isArray(field.options) ? field.options.filter(isRecord) : [];
+  const normalizedValues = values.map((value) => {
+    const option = options.find((option) => option.label === value);
+    return typeof option?.value === "string" ? option.value : value;
+  });
+  if (field.type === "multiselect") return normalizedValues;
+  const value = normalizedValues[0] ?? "";
   if (field.type === "boolean") {
     return /^(1|true|yes|y)$/i.test(String(value));
   }
