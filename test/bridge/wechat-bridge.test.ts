@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
 
 import {
   canDrainDeferredCodexInboundQueue,
@@ -14,6 +15,8 @@ import {
   shouldDeferCodexInboundMessage,
   shouldWatchParentProcess,
 } from "../../src/bridge/wechat-bridge.ts";
+
+beforeEach(() => setLocale("en"));
 
 describe("wechat-bridge cli helpers", () => {
   test("parseCliArgs keeps persistent lifecycle by default", () => {

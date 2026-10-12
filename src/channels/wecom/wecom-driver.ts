@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../../i18n/index.ts";
 import type {
   ChannelAttachment,
   ChannelConversationRef,
@@ -52,7 +53,7 @@ export type WecomChannelDriverOptions = {
 export class WecomChannelDriver implements ChannelDriver {
   readonly id = "wecom";
   readonly displayName = "WeCom";
-  readonly operatorDescription = "the paired WeCom operator";
+  get operatorDescription(): string { return t("operator.wecom"); }
   readonly capabilities = {
     streamingReplies: true,
     outboundAttachments: true,

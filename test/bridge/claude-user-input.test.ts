@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
@@ -12,6 +13,8 @@ import { buildClaudeUserInputRequest, getClaudePermissionAutoResponse } from "..
 import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
 import { handleInboundMessage, wireAdapterEvents } from "../../src/bridge/wechat-bridge.ts";
 import type { ClaudeHookPayload } from "../../src/bridge/claude-hooks.ts";
+
+beforeEach(() => setLocale("en"));
 
 const payload = {
   hook_event_name: "PreToolUse",
@@ -43,6 +46,7 @@ function claude() {
     adapter.handleClaudeHookEnvelope({ requestId: id, rawPayload: JSON.stringify(input), socket });
   return { adapter, events, replies, ask };
 }
+
 
 describe("Claude AskUserQuestion", () => {
   test("forwards all four question types and round-trips answers while preserving tool input", async () => {
@@ -156,7 +160,7 @@ describe("Claude AskUserQuestion", () => {
     const { adapter } = claude();
     adapter.writeClaudeRuntimeFiles = () => undefined;
     await adapter.startHookServer();
-    const child = spawn("node", ["src/bridge/claude-hook.ts"], { env: { ...process.env, CLAUDE_WECHAT_HOOK_PORT: String(adapter.hookPort), CLAUDE_WECHAT_HOOK_TOKEN: adapter.hookToken }, stdio: "pipe" });
+    const child = spawn("node", ["--experimental-strip-types", "src/bridge/claude-hook.ts"], { env: { ...process.env, CLAUDE_WECHAT_HOOK_PORT: String(adapter.hookPort), CLAUDE_WECHAT_HOOK_TOKEN: adapter.hookToken }, stdio: "pipe" });
     const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
     let output = "";
     child.stdout.on("data", (chunk) => { output += chunk; });
@@ -178,7 +182,7 @@ describe("Claude AskUserQuestion", () => {
     const { adapter, events } = claude();
     adapter.writeClaudeRuntimeFiles = () => undefined;
     await adapter.startHookServer();
-    const child = spawn("node", ["src/bridge/claude-hook.ts"], { env: { ...process.env, CLAUDE_WECHAT_HOOK_PORT: String(adapter.hookPort), CLAUDE_WECHAT_HOOK_TOKEN: adapter.hookToken }, stdio: "pipe" });
+    const child = spawn("node", ["--experimental-strip-types", "src/bridge/claude-hook.ts"], { env: { ...process.env, CLAUDE_WECHAT_HOOK_PORT: String(adapter.hookPort), CLAUDE_WECHAT_HOOK_TOKEN: adapter.hookToken }, stdio: "pipe" });
     const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
     try {
       child.stdin.end(JSON.stringify(payload));

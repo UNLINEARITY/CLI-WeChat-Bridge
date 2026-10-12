@@ -26,6 +26,7 @@ import {
 } from "../runtime/runtime-types.ts";
 
 export type LocalCompanionCommand =
+  | { command: "set_locale"; locale: "zh" | "en" }
   | { command: "send_input"; text: string }
   | { command: "list_resume_sessions"; limit?: number }
   | { command: "list_resume_threads"; limit?: number }
@@ -64,9 +65,11 @@ export type LocalCompanionMessage =
       token: string;
       companionPid?: number;
       panelPid?: number;
+      supportsLocaleUpdates?: boolean;
     }
   | {
       type: "hello_ack";
+      locale?: "zh" | "en";
     }
   | {
       type: "closing";

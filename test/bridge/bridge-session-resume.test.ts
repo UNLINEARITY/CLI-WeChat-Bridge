@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
   RESUME_SESSION_SNAPSHOT_TTL_MS,
@@ -16,6 +17,8 @@ import type {
   BridgeAdapterState,
   BridgeResumeSessionCandidate,
 } from "../../src/bridge/bridge-types.ts";
+
+beforeEach(() => setLocale("en"));
 
 function buildCandidate(sessionId: string, title = sessionId): BridgeResumeSessionCandidate {
   return {
@@ -55,6 +58,7 @@ function buildRuntime(options: {
     },
   };
 }
+
 
 describe("ResumeSessionCoordinator", () => {
   test("enables WeChat resume for every managed adapter", () => {

@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import type { BridgeAdapter, BridgeModelOption } from "./bridge-types.ts";
 
 type ControlCommand = { type: "model"; target?: string } | { type: "plan"; enabled: boolean };
@@ -37,37 +38,37 @@ export async function handleAdapterControl(
   const name = kind === "claude" ? "Claude Code" : kind === "opencode" ? "OpenCode" : kind === "codex" ? "Codex" : "Pi";
   try {
     if (command.type === "plan") {
-      if (!adapter.setPlanMode) throw new Error(`Plan mode is not available for ${name}.`);
+      if (!adapter.setPlanMode) throw new Error(t("control.plan.unavailable", { name }));
       const enabled = await adapter.setPlanMode(command.enabled);
       return enabled
-        ? `${name} plan mode enabled. Send /plan off to restore the previous mode.`
-        : `${name} plan mode disabled.`;
+        ? t("control.plan.enabled", { name })
+        : t("control.plan.disabled", { name });
     }
-    if (!adapter.listModels || !adapter.selectModel) throw new Error(`Model selection is not available for ${name}.`);
+    if (!adapter.listModels || !adapter.selectModel) throw new Error(t("control.model.unavailable", { name }));
     const owner = snapshotOwner(adapter, senderId);
     if (!command.target) {
       snapshots.delete(adapter);
       const models = await adapter.listModels();
-      if (snapshotOwner(adapter, senderId) !== owner) throw new Error("The active session changed. Send /model again.");
-      if (!models.length) return `${name} did not return any available models.`;
+      if (snapshotOwner(adapter, senderId) !== owner) throw new Error(t("control.model.sessionChanged"));
+      if (!models.length) return t("control.model.empty", { name });
       snapshots.set(adapter, { owner, createdAtMs: Date.now(), models });
       return [
-        `Available ${name} models:`, "",
-        ...models.map((model, index) => `${index + 1}. ${model.displayName}${model.isCurrent ? "  (current)" : ""}`),
-        "", "Reply with /model <number> to switch. The list is valid for 5 minutes.",
+        t("control.model.header", { name }), "",
+        ...models.map((model, index) => `${index + 1}. ${model.displayName}${model.isCurrent ? t("control.model.current") : ""}`),
+        "", t("control.model.instructions"),
       ].join("\n");
     }
     const snapshot = snapshots.get(adapter);
     if (!snapshot || snapshot.owner !== owner || Date.now() - snapshot.createdAtMs > MODEL_SNAPSHOT_TTL_MS) {
-      throw new Error("The model list has expired or belongs to another session. Send /model again.");
+      throw new Error(t("control.model.expired"));
     }
     const index = Number(command.target);
     if (!/^\d+$/.test(command.target) || !Number.isSafeInteger(index) || index < 1 || index > snapshot.models.length) {
-      throw new Error("Model selection is outside the displayed range. Send /model again to refresh the list.");
+      throw new Error(t("control.model.range"));
     }
     const model = await adapter.selectModel(snapshot.models[index - 1]!.id);
     snapshots.delete(adapter);
-    return `${name} model switched to ${model.displayName}.`;
+    return t("control.model.changed", { name, model: model.displayName });
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

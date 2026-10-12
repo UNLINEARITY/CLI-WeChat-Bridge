@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 
@@ -43,6 +44,9 @@ import {
   shouldDropStartupBacklogMessage,
   WECHAT_TEXT_CHUNK_MAX_CHARS,
 } from "../../src/bridge/bridge-utils.ts";
+
+beforeEach(() => setLocale("en"));
+
 
 describe("user input request helpers", () => {
   const pending: PendingUserInputRequest = {

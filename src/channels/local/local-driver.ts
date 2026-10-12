@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../../i18n/index.ts";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -61,7 +62,7 @@ export type LocalChannelDriverOptions = {
 export class LocalChannelDriver implements ChannelDriver {
   readonly id = "local";
   readonly displayName = "Local";
-  readonly operatorDescription = "the local operator";
+  get operatorDescription(): string { return t("operator.local"); }
   readonly capabilities = {
     streamingReplies: false,
     outboundAttachments: false,

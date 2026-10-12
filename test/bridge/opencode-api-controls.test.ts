@@ -4,9 +4,12 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
 
 import { OpenCodeServerAdapter } from "../../src/bridge/bridge-adapters.opencode.ts";
+
+beforeEach(() => setLocale("en"));
 
 function result<T>(data: T) {
   return { data, error: undefined, request: {}, response: {} };

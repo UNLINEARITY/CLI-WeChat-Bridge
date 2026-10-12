@@ -4,9 +4,10 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { setLocale } from "../../src/i18n/index.ts";
 import fs from "node:fs";
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
   createBridgeAdapter,
@@ -30,6 +31,8 @@ import {
   formatResumeSessionList,
   formatTaskFailedMessage,
 } from "../../src/bridge/bridge-utils.ts";
+
+beforeEach(() => setLocale("en"));
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -60,6 +63,7 @@ function createSdkSessionRecord(
 /* ------------------------------------------------------------------ */
 /*  Factory                                                            */
 /* ------------------------------------------------------------------ */
+
 
 describe("OpenCode adapter factory", () => {
   test("creates a LocalCompanionProxyAdapter for the bridge-side opencode entry", () => {

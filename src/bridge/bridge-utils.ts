@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -600,33 +601,33 @@ export function formatStatusReport(
   const formatEpochMs = (value?: number) =>
     typeof value === "number" && Number.isFinite(value)
       ? new Date(value).toISOString()
-      : "(none)";
+      : t("status.none");
 
   return [
-    `instance_id: ${bridgeState.instanceId}`,
-    `adapter: ${bridgeState.adapter}`,
-    `command: ${bridgeState.command}`,
-    `cwd: ${bridgeState.cwd}`,
-    `profile: ${bridgeState.profile ?? "(none)"}`,
-    `bridge_started_at: ${formatEpochMs(bridgeState.bridgeStartedAtMs)}`,
-    `authorized_user: ${bridgeState.authorizedUserId}`,
-    `ignored_backlog_count: ${bridgeState.ignoredBacklogCount}`,
-    `persisted_shared_session_id: ${persistedSharedSessionId ?? "(none)"}`,
-    `worker_status: ${adapterState.status}`,
-    `worker_pid: ${adapterState.pid ?? "(unknown)"}`,
-    `shared_session_id: ${sharedSessionId ?? "(none)"}`,
-    `last_session_switch_at: ${lastSessionSwitchAt ?? "(none)"}`,
-    `last_session_switch_source: ${lastSessionSwitchSource ?? "(none)"}`,
-    `last_session_switch_reason: ${lastSessionSwitchReason ?? "(none)"}`,
-    `active_turn_id: ${adapterState.activeTurnId ?? "(none)"}`,
-    `active_turn_origin: ${adapterState.activeTurnOrigin ?? "(none)"}`,
-    `pending_approval_origin: ${adapterState.pendingApprovalOrigin ?? "(none)"}`,
-    `pending_user_input_origin: ${adapterState.pendingUserInputOrigin ?? "(none)"}`,
-    `last_activity_at: ${bridgeState.lastActivityAt ?? "(none)"}`,
-    `last_input_at: ${adapterState.lastInputAt ?? "(none)"}`,
-    `last_output_at: ${adapterState.lastOutputAt ?? "(none)"}`,
-    `pending_confirmation: ${pending ? `${pending.source}:${pending.code}` : "(none)"}`,
-    `pending_user_input: ${pendingUserInput ? `${pendingUserInput.questions.length} question(s)` : "(none)"}`,
+    `${t("status.label.instance_id")}: ${bridgeState.instanceId}`,
+    `${t("status.label.adapter")}: ${bridgeState.adapter}`,
+    `${t("status.label.command")}: ${bridgeState.command}`,
+    `${t("status.label.cwd")}: ${bridgeState.cwd}`,
+    `${t("status.label.profile")}: ${bridgeState.profile ?? t("status.none")}`,
+    `${t("status.label.bridge_started_at")}: ${formatEpochMs(bridgeState.bridgeStartedAtMs)}`,
+    `${t("status.label.authorized_user")}: ${bridgeState.authorizedUserId}`,
+    `${t("status.label.ignored_backlog_count")}: ${bridgeState.ignoredBacklogCount}`,
+    `${t("status.label.persisted_shared_session_id")}: ${persistedSharedSessionId ?? t("status.none")}`,
+    `${t("status.label.worker_status")}: ${adapterState.status}`,
+    `${t("status.label.worker_pid")}: ${adapterState.pid ?? t("status.unknown")}`,
+    `${t("status.label.shared_session_id")}: ${sharedSessionId ?? t("status.none")}`,
+    `${t("status.label.last_session_switch_at")}: ${lastSessionSwitchAt ?? t("status.none")}`,
+    `${t("status.label.last_session_switch_source")}: ${lastSessionSwitchSource ?? t("status.none")}`,
+    `${t("status.label.last_session_switch_reason")}: ${lastSessionSwitchReason ?? t("status.none")}`,
+    `${t("status.label.active_turn_id")}: ${adapterState.activeTurnId ?? t("status.none")}`,
+    `${t("status.label.active_turn_origin")}: ${adapterState.activeTurnOrigin ?? t("status.none")}`,
+    `${t("status.label.pending_approval_origin")}: ${adapterState.pendingApprovalOrigin ?? t("status.none")}`,
+    `${t("status.label.pending_user_input_origin")}: ${adapterState.pendingUserInputOrigin ?? t("status.none")}`,
+    `${t("status.label.last_activity_at")}: ${bridgeState.lastActivityAt ?? t("status.none")}`,
+    `${t("status.label.last_input_at")}: ${adapterState.lastInputAt ?? t("status.none")}`,
+    `${t("status.label.last_output_at")}: ${adapterState.lastOutputAt ?? t("status.none")}`,
+    `${t("status.label.pending_confirmation")}: ${pending ? `${pending.source}:${pending.code}` : t("status.none")}`,
+    `${t("status.label.pending_user_input")}: ${pendingUserInput ? t("status.questions", { count: pendingUserInput.questions.length }) : t("status.none")}`,
   ].join("\n");
 }
 
@@ -638,63 +639,13 @@ export function formatSessionSwitchMessage(params: {
 }): string {
   const shortSessionId = params.sessionId.slice(0, 12);
 
-  if (params.adapter === "claude") {
-    switch (params.reason) {
-      case "local_follow":
-      case "local_session_fallback":
-      case "local_turn":
-        return `Claude session switched to ${shortSessionId} from the local terminal.`;
-      case "wechat_resume":
-        return `Claude session switched to ${shortSessionId} from WeChat.`;
-      case "startup_restore":
-        return `Claude restored shared session ${shortSessionId} on startup.`;
-      default:
-        return `Claude session switched to ${shortSessionId}.`;
-    }
-  }
-
-  if (params.adapter === "opencode") {
-    switch (params.reason) {
-      case "local_follow":
-      case "local_session_fallback":
-      case "local_turn":
-        return `OpenCode session switched to ${shortSessionId} from the local terminal.`;
-      case "wechat_resume":
-        return `OpenCode session switched to ${shortSessionId} from WeChat.`;
-      case "startup_restore":
-        return `OpenCode restored shared session ${shortSessionId} on startup.`;
-      default:
-        return `OpenCode session switched to ${shortSessionId}.`;
-    }
-  }
-
-  if (params.adapter === "pi") {
-    switch (params.reason) {
-      case "local_follow":
-      case "local_session_fallback":
-      case "local_turn":
-        return `Pi session switched to ${shortSessionId} from the local terminal.`;
-      case "wechat_resume":
-        return `Pi session switched to ${shortSessionId} from WeChat.`;
-      case "startup_restore":
-        return `Pi restored shared session ${shortSessionId} on startup.`;
-      default:
-        return `Pi session switched to ${shortSessionId}.`;
-    }
-  }
-
-  switch (params.reason) {
-    case "local_follow":
-    case "local_session_fallback":
-    case "local_turn":
-      return `Codex thread switched to ${shortSessionId} from the local terminal.`;
-    case "wechat_resume":
-      return `Codex thread switched to ${shortSessionId} from WeChat.`;
-    case "startup_restore":
-      return `Codex restored shared thread ${shortSessionId} on startup.`;
-    default:
-      return `Codex thread switched to ${shortSessionId}.`;
-  }
+  const adapter = params.adapter === "claude" ? "Claude" : params.adapter === "opencode" ? "OpenCode" : params.adapter === "pi" ? "Pi" : "Codex";
+  const noun = t(params.adapter === "codex" ? "session.thread" : "session.noun");
+  const key = ["local_follow", "local_session_fallback", "local_turn"].includes(params.reason)
+    ? "session.switch.local"
+    : params.reason === "wechat_resume" ? "session.switch.remote"
+    : params.reason === "startup_restore" ? "session.switch.restore" : "session.switch.generic";
+  return t(key, { adapter, noun, id: shortSessionId });
 }
 
 export function formatThreadSwitchMessage(params: {
@@ -716,32 +667,18 @@ export function formatResumeSessionList(params: {
   currentSessionId?: string;
 }): string {
   const { adapter, candidates, currentSessionId } = params;
-  if (candidates.length === 0) {
-    return adapter === "codex"
-      ? "No saved Codex threads were found for this working directory."
-      : adapter === "opencode"
-        ? "No saved OpenCode sessions were found for this working directory."
-        : adapter === "pi"
-          ? "No saved Pi sessions were found for this working directory."
-          : "No saved Claude sessions were found for this working directory.";
-  }
-
-  const title =
-    adapter === "codex"
-      ? "Recent Codex threads:"
-      : adapter === "opencode"
-        ? "Recent OpenCode sessions:"
-        : adapter === "pi"
-          ? "Recent Pi sessions:"
-          : "Recent Claude sessions:";
+  const name = adapter === "codex" ? "Codex" : adapter === "opencode" ? "OpenCode" : adapter === "pi" ? "Pi" : "Claude";
+  const noun = t(adapter === "codex" ? "session.threads" : "session.sessions");
+  if (candidates.length === 0) return t("session.list.empty", { adapter: name, noun });
+  const title = t("session.list.header", { adapter: name, noun });
   return [
     title,
     ...candidates.map((candidate, index) => {
       const marker =
-        currentSessionId && candidate.sessionId === currentSessionId ? " [current]" : "";
+        currentSessionId && candidate.sessionId === currentSessionId ? t("session.list.current") : "";
       return `${index + 1}. ${candidate.title} (${candidate.lastUpdatedAt}, ${candidate.sessionId.slice(0, 12)})${marker}`;
     }),
-    "Reply with /resume <number> or /resume <unique-id-prefix>.",
+    t("session.list.instructions"),
   ].join("\n");
 }
 
@@ -766,13 +703,13 @@ export function formatMirroredUserInputMessage(
 ): string {
   const label =
     adapter === "codex"
-      ? "Local Codex input"
+      ? t("session.localInput", { adapter: "Codex" })
       : adapter === "claude"
-        ? "Local Claude input"
+        ? t("session.localInput", { adapter: "Claude" })
         : adapter === "opencode"
-          ? "Local OpenCode input"
+          ? t("session.localInput", { adapter: "OpenCode" })
           : adapter === "pi"
-            ? "Local Pi input"
+            ? t("session.localInput", { adapter: "Pi" })
           : "Local input";
   return `${label}:\n${truncatePreview(text, 500)}`;
 }
@@ -1054,7 +991,7 @@ export function formatTaskFailedMessage(
           : adapter === "pi"
             ? "Pi"
             : adapter;
-  return `${label} task failed:\n${text}`;
+  return t("session.taskFailed", { adapter: label, text });
 }
 
 export function formatApprovalMessage(
@@ -1063,25 +1000,30 @@ export function formatApprovalMessage(
 ): string {
   const isClaude = adapterState.kind === "claude";
   if (isClaude) {
+    const detailLabel = !pending.detailLabel || pending.detailLabel === "details"
+      ? t("approval.details")
+      : ["plan", "command", "path", "pattern", "url"].includes(pending.detailLabel)
+        ? t(`approval.label.${pending.detailLabel}`)
+        : pending.detailLabel;
     return [
-      "Claude permission request.",
-      ...(pending.toolName ? [`tool: ${pending.toolName}`] : []),
+      t("approval.claude.header"),
+      ...(pending.toolName ? [`${t("approval.tool")}: ${pending.toolName}`] : []),
       ...(pending.detailPreview
-        ? [`${pending.detailLabel ?? "details"}: ${pending.detailPreview}`]
+        ? [`${detailLabel}: ${pending.detailPreview}`]
         : pending.commandPreview
-          ? [`details: ${pending.commandPreview}`]
+          ? [`${t("approval.details")}: ${pending.commandPreview}`]
           : []),
-      "Reply with /confirm, confirm, or yes to continue.",
-      "Reply with /deny, deny, or no to reject.",
+      t("approval.confirmInstructions"),
+      t("approval.denyInstructions"),
     ].join("\n");
   }
 
   return [
-    "CLI approval is required.",
-    `adapter: ${adapterState.kind}`,
-    `summary: ${pending.summary}`,
-    `target: ${pending.commandPreview}`,
-    "Reply with /confirm or /yes to continue, /deny or /no to reject.",
+    t("approval.cli.header"),
+    `${t("approval.adapter")}: ${adapterState.kind}`,
+    `${t("approval.summary")}: ${pending.summary}`,
+    `${t("approval.target")}: ${pending.commandPreview}`,
+    t("approval.instructions"),
   ].join("\n");
 }
 
@@ -1093,10 +1035,10 @@ export function formatPendingApprovalReminder(
     const target = pending.toolName
       ? `${pending.toolName}${pending.detailPreview ? ` (${pending.detailPreview})` : ""}`
       : pending.commandPreview;
-    return `Approval is pending for ${truncatePreview(target, 140)}. Reply with /confirm, confirm, or yes to continue, or /deny, deny, or no to reject.`;
+    return t("approval.pending.claude", { target: truncatePreview(target, 140) });
   }
 
-  return `Approval is pending for ${pending.commandPreview}. Reply with /confirm or /deny.`;
+  return t("approval.pending", { target: pending.commandPreview });
 }
 
 function formatUserInputQuestionLabel(
@@ -1151,7 +1093,7 @@ function parseSingleUserInputAnswer(
   const trimmed = normalizeOutput(rawValue).trim();
   if (!trimmed) {
     return {
-      error: `Question "${question.header}" requires an answer.`,
+      error: t("input.answer.required", { question: question.header }),
     };
   }
 
@@ -1185,7 +1127,7 @@ function parseSingleUserInputAnswer(
         note = note ? `${value}; ${note}` : value;
       } else {
         return {
-          error: `Question "${question.header}" expects an option number or label.`,
+          error: t("input.answer.optionRequired", { question: question.header }),
         };
       }
     }
@@ -1197,7 +1139,7 @@ function parseSingleUserInputAnswer(
 
   if (answers.length === 0) {
     return {
-      error: `Question "${question.header}" requires an answer.`,
+      error: t("input.answer.required", { question: question.header }),
     };
   }
 
@@ -1213,7 +1155,7 @@ export function parsePendingUserInputAnswerCommand(
   const input = normalizeOutput(raw).trim();
   if (!input) {
     return {
-      error: "Reply with /answer followed by your response.",
+      error: t("input.answer.empty"),
     };
   }
 
@@ -1223,7 +1165,7 @@ export function parsePendingUserInputAnswerCommand(
     const question = pending.questions[0];
     if (!question) {
       return {
-        error: "No pending user input question was found.",
+        error: t("input.answer.missingQuestion"),
       };
     }
     const parsed = parseSingleUserInputAnswer(question, input);
@@ -1238,7 +1180,7 @@ export function parsePendingUserInputAnswerCommand(
       .filter(Boolean);
     if (segments.length === 0) {
       return {
-        error: "Reply with /answer questionId=value; questionId2=value.",
+        error: t("input.answer.ordered"),
       };
     }
 
@@ -1255,12 +1197,12 @@ export function parsePendingUserInputAnswerCommand(
       const question = resolveUserInputQuestion(pending, reference);
       if (!question) {
         return {
-          error: `Unknown question reference: ${reference}`,
+          error: t("input.answer.unknownQuestion", { reference }),
         };
       }
       if (answers[question.id]) {
         return {
-          error: `Question "${question.id}" was answered more than once.`,
+          error: t("input.answer.duplicate", { question: question.id }),
         };
       }
 
@@ -1274,7 +1216,7 @@ export function parsePendingUserInputAnswerCommand(
     const missing = pending.questions.filter((question) => !answers[question.id]);
     if (missing.length > 0) {
       return {
-        error: `Missing answers for: ${missing.map((question) => question.id).join(", ")}.`,
+        error: t("input.answer.missing", { questions: missing.map((question) => question.id).join(", ") }),
       };
     }
   }
@@ -1296,12 +1238,12 @@ export function formatUserInputRequestMessage(
 ): string {
   const lines = [
     pending.summary,
-    `adapter: ${adapterState.kind}`,
+    `${t("approval.adapter")}: ${adapterState.kind}`,
   ];
 
   const hasSecretQuestion = pending.questions.some((question) => question.isSecret);
   if (hasSecretQuestion) {
-    lines.push("Warning: this prompt includes secret input upstream, but WeChat replies are not hidden.");
+    lines.push(t("input.secretWarning"));
   }
 
   pending.questions.forEach((question, index) => {
@@ -1309,20 +1251,20 @@ export function formatUserInputRequestMessage(
     lines.push(formatUserInputQuestionLabel(question, index));
     lines.push(question.question);
     if (question.options?.length) {
-      lines.push("options:");
+      lines.push(t("input.options"));
       question.options.forEach((option, optionIndex) => {
         lines.push(`  ${optionIndex + 1}. ${option.label} - ${truncatePreview(option.description, 160)}`);
-        if (option.preview) lines.push(`     preview:\n${truncatePreview(option.preview, 1500)}`);
+        if (option.preview) lines.push(`     ${t("input.preview")}\n${truncatePreview(option.preview, 1500)}`);
       });
     }
     if (question.multiple) {
-      lines.push("multiple selections: allowed (separate values with commas)");
+      lines.push(t("input.multiple"));
     }
     if (question.isOther) {
       lines.push(
         question.customAnswerMode === "value"
-          ? "custom answer: allowed"
-          : "custom note: allowed",
+          ? t("input.customAnswer")
+          : t("input.customNote"),
       );
     }
   });
@@ -1336,27 +1278,27 @@ export function formatUserInputRequestMessage(
     if (question.options?.length) {
       lines.push(
         question.multiple
-          ? "Reply with /answer <option numbers or exact labels separated by commas>."
-          : "Reply with /answer <option number or exact label>.",
+          ? t("input.answer.multiple")
+          : t("input.answer.single"),
       );
       if (question.isOther && question.customAnswerMode === "value") {
-        lines.push("You may enter a custom answer instead of an option.");
+        lines.push(t("input.answer.custom"));
       } else if (question.isOther) {
-        lines.push('Add "| your note" to include extra context.');
+        lines.push(t("input.answer.note"));
       }
     } else {
-      lines.push("Reply with /answer <your answer>.");
+      lines.push(t("input.answer.text"));
     }
   } else {
-    lines.push("Reply with /answer questionId=value; questionId2=value.");
-    lines.push("You can use question numbers instead of ids.");
-    lines.push("For option questions, value can be the option number or exact label.");
-    lines.push("For multi-select questions, separate option values with commas.");
+    lines.push(t("input.answer.ordered"));
+    lines.push(t("input.answer.numbers"));
+    lines.push(t("input.answer.optionValue"));
+    lines.push(t("input.answer.multipleValue"));
     if (pending.questions.some((question) => question.customAnswerMode !== "value")) {
-      lines.push('Add "| your note" after an option answer to include extra context.');
+      lines.push(t("input.answer.optionNote"));
     }
   }
-  lines.push("Use /stop to interrupt the active turn instead.");
+  lines.push(t("input.answer.stop"));
 
   return lines.join("\n");
 }
@@ -1367,12 +1309,12 @@ export function formatPendingUserInputReminder(
   if (pending.questions.length === 1) {
     const question = pending.questions[0];
     if (!question) {
-      return "The active CLI is waiting for user input. Reply with /answer and your response, or use /stop to interrupt.";
+      return t("input.pending.generic");
     }
-    return `The active CLI is waiting for user input for ${question.header}. Reply with /answer and your response, or use /stop to interrupt.`;
+    return t("input.pending.single", { question: question.header });
   }
 
-  return `The active CLI is waiting for answers to ${pending.questions.length} questions. Reply with /answer questionId=value; questionId2=value, or use /stop to interrupt.`;
+  return t("input.pending.multiple", { count: pending.questions.length });
 }
 
 export class OutputBatcher {

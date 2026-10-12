@@ -5,6 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 export type BridgeControlCommand =
+  | { type: "language"; target?: string }
   | { type: "status" }
   | { type: "resume"; target?: string }
   | { type: "new_session" }
@@ -30,6 +31,9 @@ export function parseBridgeControlCommand(
   const argument = rest.join(" ").trim();
 
   switch (command) {
+    case "/lang":
+    case "/language":
+      return { type: "language", target: argument || undefined };
     case "/status":
       return { type: "status" };
     case "/resume":

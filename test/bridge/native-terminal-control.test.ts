@@ -4,9 +4,12 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { ClaudeNativeControls } from "../../src/bridge/claude-native-controls.ts";
 import { NativeTerminalControl, parseClaudeModelPicker, parseClaudeModelSwitchConfirmation, readClaudePermissionMode } from "../../src/bridge/native-terminal-control.ts";
+
+beforeEach(() => setLocale("en"));
 
 // Layout captured from Claude Code 2.1.235; model names are deliberately neutral.
 const claudeMenu = [
@@ -24,6 +27,7 @@ function mirror(write: (text: string) => void = () => {}, identity: () => string
 function draw(terminal: NativeTerminalControl, text: string) {
   terminal.feed(`\u001b[2J\u001b[H${text.replace(/\n/g, "\r\n")}`);
 }
+
 
 describe("native terminal screen and command ownership", () => {
   test("assembles split ANSI updates and distinguishes same-name Claude aliases", async () => {

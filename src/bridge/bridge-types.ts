@@ -126,6 +126,7 @@ export type BridgeAdapterState = {
   pendingApprovals?: ApprovalRequest[];
   supportsApprovalRequestIds?: boolean;
   supportsUserInputRequestIds?: boolean;
+  supportsLocaleUpdates?: boolean;
   sharedSessionId?: string;
   sharedThreadId?: string;
   activeRuntimeSessionId?: string;
@@ -246,6 +247,7 @@ export interface BridgeAdapter {
   listModels?(): Promise<BridgeModelOption[]>;
   selectModel?(modelId: string): Promise<BridgeModelOption>;
   setPlanMode?(enabled: boolean): Promise<boolean>;
+  updateLocale?(locale: "zh" | "en"): Promise<boolean>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean>;

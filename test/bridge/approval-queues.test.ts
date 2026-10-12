@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import net from "node:net";
 import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { OpenCodeServerAdapter } from "../../src/bridge/bridge-adapters.opencode.ts";
@@ -13,6 +14,8 @@ import { buildClaudeHookSettings } from "../../src/bridge/claude-hooks.ts";
 import { normalizeOpenCodeV2Event } from "../../src/bridge/opencode-v2-compat.ts";
 import type { BridgeEvent } from "../../src/bridge/bridge-types.ts";
 import { handleInboundMessage, wireAdapterEvents } from "../../src/bridge/wechat-bridge.ts";
+
+beforeEach(() => setLocale("en"));
 
 function codex() {
   const adapter = createBridgeAdapter({ kind: "codex", command: "codex", cwd: process.cwd(), renderMode: "panel" }) as any;
@@ -54,6 +57,7 @@ function claude() {
     adapter.handleClaudePermissionRequest(id, { tool_name: "Bash", tool_input: { command: "rm -rf /tmp/approval-test" } }, socket);
   return { adapter, events, replies, ask };
 }
+
 
 describe("approval queues", () => {
   for (const [name, make] of [["Codex", codex], ["OpenCode", opencode], ["Claude", claude]] as const) {

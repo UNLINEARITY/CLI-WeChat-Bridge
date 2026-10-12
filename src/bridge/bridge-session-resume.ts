@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import type {
   BridgeAdapter,
   BridgeAdapterKind,
@@ -60,7 +61,7 @@ function adapterDisplayName(adapter: BridgeAdapterKind): string {
 }
 
 function adapterSessionNoun(adapter: BridgeAdapterKind): string {
-  return adapter === "codex" ? "thread" : "session";
+  return t(adapter === "codex" ? "session.thread" : "session.noun");
 }
 
 export function isWechatResumeEnabled(adapter: BridgeAdapterKind): boolean {
@@ -122,7 +123,7 @@ export class ResumeSessionCoordinator {
       return {
         kind: "already_active",
         sessionId: candidate.sessionId,
-        message: `${adapterDisplayName(this.adapter)} ${adapterSessionNoun(this.adapter)} ${candidate.sessionId.slice(0, 12)} is already active.`,
+        message: t("session.alreadyActive", { adapter: adapterDisplayName(this.adapter), noun: adapterSessionNoun(this.adapter), id: candidate.sessionId.slice(0, 12) }),
       };
     }
 
@@ -143,13 +144,13 @@ export class ResumeSessionCoordinator {
     if (/^\d+$/.test(target)) {
       const snapshot = this.getCurrentSnapshot();
       if (!snapshot) {
-        throw new Error("The recent session list has expired. Send /resume again before choosing a number.");
+        throw new Error(t("session.list.expired"));
       }
       const index = Number(target) - 1;
       const candidate = snapshot.candidates[index];
       if (!candidate) {
         throw new Error(
-          `Resume selection ${target} is outside the displayed range. Send /resume again to refresh the list.`,
+          t("session.list.range", { target }),
         );
       }
       return candidate;
@@ -194,7 +195,7 @@ export class ResumeSessionCoordinator {
     );
     if (prefixMatches.length > 1) {
       throw new Error(
-        `Session ID prefix ${target} is ambiguous. Send /resume again and use a longer ID prefix.`,
+        t("session.list.ambiguous", { target }),
       );
     }
     return prefixMatches[0] ?? null;
@@ -220,7 +221,7 @@ export class ResumeSessionCoordinator {
         throw error;
       }
       throw new Error(
-        `Failed to list ${adapterDisplayName(this.adapter)} ${adapterSessionNoun(this.adapter)}s: ${message}`,
+        t("session.list.failed", { adapter: adapterDisplayName(this.adapter), noun: t(this.adapter === "codex" ? "session.threads" : "session.sessions"), message }),
         { cause: error },
       );
     }

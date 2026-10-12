@@ -4,10 +4,13 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import { WecomChannelDriver } from "../../src/channels/wecom/wecom-driver.ts";
 import type { WecomTransport } from "../../src/channels/wecom/wecom-transport.ts";
+
+beforeEach(() => setLocale("en"));
 
 function makeDriver(transportOverrides: Partial<Record<"sendText", unknown>> = {}) {
   const logs: string[] = [];
@@ -32,6 +35,7 @@ function makeDriver(transportOverrides: Partial<Record<"sendText", unknown>> = {
   });
   return { driver, logs, sendTextCalls };
 }
+
 
 describe("WecomChannelDriver basics", () => {
   test("identity, capabilities, and conversation refs", () => {

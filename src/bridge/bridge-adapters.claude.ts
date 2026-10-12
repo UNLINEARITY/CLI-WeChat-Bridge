@@ -520,7 +520,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     isPromptEmpty: () => readClaudePermissionMode(this.terminalControl.text) !== null,
     assertReady: () => {
       if (!this.pty || this.state.status !== "idle" || this.pendingApproval || this.pendingResume) {
-        throw new Error("Claude must be idle with no pending approval before using remote controls.");
+        throw new Error(t("adapter.claude.controlsIdle"));
       }
     },
   });
@@ -606,30 +606,30 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async sendInput(text: string): Promise<void> {
-    if (this.terminalControl.active) throw new Error("A Claude control operation is in progress.");
+    if (this.terminalControl.active) throw new Error(t("adapter.claude.controlActive"));
     if (!this.pty) {
-      throw new Error("claude adapter is not running.");
+      throw new Error(t("adapter.claude.notRunning"));
     }
     if (this.state.status === "busy") {
-      throw new Error("claude is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.claude.busy"));
     }
     if (this.pendingApproval) {
-      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.claude.approvalPending"));
     }
-    if (this.state.status === "awaiting_input") throw new Error("Claude is waiting for answers. Reply with /answer or use /stop.");
+    if (this.state.status === "awaiting_input") throw new Error(t("adapter.claude.inputPending"));
 
     await this.waitForInteractiveReadiness();
     if (!this.pty) {
-      throw new Error("claude adapter is not running.");
+      throw new Error(t("adapter.claude.notRunning"));
     }
     if (this.getState().status === "busy") {
-      throw new Error("claude is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.claude.busy"));
     }
     if (this.pendingApproval) {
-      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.claude.approvalPending"));
     }
 
-    if (this.getState().status === "awaiting_input") throw new Error("Claude is waiting for answers. Reply with /answer or use /stop.");
+    if (this.getState().status === "awaiting_input") throw new Error(t("adapter.claude.inputPending"));
     const normalizedText = normalizeOutput(text).trim();
     this.clearRemoteSubmitRetry();
     this.pendingInjectedInputs.push({
@@ -657,18 +657,18 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async resumeSession(sessionId: string): Promise<void> {
-    if (this.terminalControl.active) throw new Error("A CLI control operation is in progress. Wait for it to finish before switching sessions.");
+    if (this.terminalControl.active) throw new Error(t("adapter.claude.sessionControlActive"));
     if (!this.pty) {
-      throw new Error("Claude is not running yet.");
+      throw new Error(t("adapter.claude.notReady"));
     }
     if (this.pendingResume) {
-      throw new Error("Claude is already switching sessions.");
+      throw new Error(t("adapter.claude.switching"));
     }
     if (this.pendingApproval) {
-      throw new Error("A Claude approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.claude.approvalPending"));
     }
     if (this.state.status === "busy" || this.state.status === "awaiting_approval") {
-      throw new Error("Claude is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.claude.switchBusy"));
     }
     if (this.state.status !== "idle") {
       throw new Error(`Claude cannot switch sessions while its status is ${this.state.status}.`);
@@ -805,7 +805,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   override async reset(): Promise<void> {
-    if (this.terminalControl.active) throw new Error("A CLI control operation is in progress. Wait for it to finish before switching sessions.");
+    if (this.terminalControl.active) throw new Error(t("adapter.claude.sessionControlActive"));
     this.rejectPendingResume(new Error("Claude was reset during session switching."));
     this.clearWechatWorkingNotice(true);
     this.pendingCliApprovalHints = null;
@@ -839,7 +839,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (this.pendingApproval.requestId) return false;
     const input = action === "confirm" ? this.pendingApproval.confirmInput : this.pendingApproval.denyInput;
     if (!input) {
-      throw new Error("Remote approval is not safely available for this Claude prompt. Approve it in the local Claude terminal.");
+      throw new Error(t("adapter.claude.approvalLocal"));
     }
     this.writeToPty(input);
     this.pendingCliApprovalHints = null;

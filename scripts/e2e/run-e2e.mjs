@@ -81,6 +81,7 @@ const controlDir = fs.mkdtempSync(path.join(os.tmpdir(), `e2e-control-${options.
 const daemonEnv = {
   ...process.env,
   CLI_BRIDGE_DATA_DIR: dataDir,
+  CLI_BRIDGE_LANG: "en",
   CLI_BRIDGE_VISIBLE_LAUNCHER: path.join(REPO, "scripts", "e2e", "visible-host.mjs"),
   CLI_BRIDGE_E2E_CONTROL_DIR: controlDir,
   CLI_BRIDGE_E2E_WORKSPACE: workspace,

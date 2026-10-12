@@ -4,11 +4,12 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { setLocale } from "../../src/i18n/index.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { beforeEach, afterEach, describe, expect, test } from "bun:test";
 
 import {
   buildCliEnvironment,
@@ -42,6 +43,8 @@ import {
   normalizeClaudeProjectConfigKey,
 } from "../../src/bridge/bridge-adapters.claude.ts";
 import { buildWechatInboundPrompt } from "../../src/bridge/bridge-utils.ts";
+
+beforeEach(() => setLocale("en"));
 
 const tempDirectories: string[] = [];
 const originalHome = process.env.HOME;
@@ -81,6 +84,7 @@ afterEach(() => {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
 
 describe("resolveSpawnTarget", () => {
   test("keeps an explicit executable path unchanged", () => {

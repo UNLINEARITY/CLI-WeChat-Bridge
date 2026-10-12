@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import type {
   BridgeAdapter,
@@ -32,6 +33,8 @@ import type { WecomTransport } from "../../src/channels/wecom/wecom-transport.ts
 import type { WeChatTransport } from "../../src/wechat/wechat-transport.ts";
 import type { PendingWechatMessageStore } from "../../src/channels/wechat/wechat-outbound-queue.ts";
 import type { WechatSendContext } from "../../src/channels/wechat/wechat-forwarding.ts";
+
+beforeEach(() => setLocale("en"));
 
 const TEST_CWD = "C:\\Users\\test\\daemon-handlers";
 const OPERATOR_ID = "operator-001";
@@ -387,6 +390,7 @@ function stdout(text: string): BridgeEvent {
     timestamp: new Date().toISOString(),
   };
 }
+
 
 describe("daemon sequential approvals", () => {
   test("confirms one displayed request, prompts the next, and preserves the parent turn and target", async () => {

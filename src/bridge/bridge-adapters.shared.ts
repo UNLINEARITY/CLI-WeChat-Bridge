@@ -336,13 +336,13 @@ export function buildCodexApprovalRequest(
     const preview =
       command && cwd
         ? `${command} (${cwd})`
-        : command || reason || "Command execution approval requested.";
+        : command || reason || t("approval.codex.commandPreview");
 
     return {
       source: "cli",
       summary: reason
-        ? `Codex needs approval before running a command: ${truncatePreview(reason, 160)}`
-        : "Codex needs approval before running a command.",
+        ? t("approval.codex.commandReason", { reason: truncatePreview(reason, 160) })
+        : t("approval.codex.command"),
       commandPreview: truncatePreview(preview, 180),
     };
   }
@@ -350,13 +350,13 @@ export function buildCodexApprovalRequest(
   if (method === "item/fileChange/requestApproval") {
     const grantRoot = typeof params.grantRoot === "string" ? params.grantRoot : "";
     const reason = typeof params.reason === "string" ? params.reason : "";
-    const preview = grantRoot || reason || "File change approval requested.";
+    const preview = grantRoot || reason || t("approval.codex.filePreview");
 
     return {
       source: "cli",
       summary: reason
-        ? `Codex needs approval before applying a file change: ${truncatePreview(reason, 160)}`
-        : "Codex needs approval before applying a file change.",
+        ? t("approval.codex.fileReason", { reason: truncatePreview(reason, 160) })
+        : t("approval.codex.file"),
       commandPreview: truncatePreview(preview, 180),
     };
   }
@@ -368,8 +368,8 @@ export function buildCodexApprovalRequest(
     return {
       source: "cli",
       summary: reason
-        ? `Codex needs approval before granting extra permissions: ${truncatePreview(reason, 160)}`
-        : "Codex needs approval before granting extra permissions.",
+        ? t("approval.codex.permissionsReason", { reason: truncatePreview(reason, 160) })
+        : t("approval.codex.permissions"),
       commandPreview: truncatePreview(preview, 180),
     };
   }
@@ -690,7 +690,7 @@ export function buildCodexUserInputRequest(params: unknown): UserInputRequest | 
   }
 
   return {
-    summary: "Codex needs more information before the tool can continue.",
+    summary: t("input.request.codex"),
     questions,
   };
 }

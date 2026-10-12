@@ -4,10 +4,13 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { handleAdapterControl, invalidateModelSnapshot } from "../../src/bridge/adapter-control.ts";
 import type { BridgeAdapter, BridgeAdapterState } from "../../src/bridge/bridge-types.ts";
 import { LegacyAdapterRuntime } from "../../src/runtime/legacy-adapter-runtime.ts";
+
+beforeEach(() => setLocale("en"));
 
 function fixture(kind: BridgeAdapterState["kind"] = "opencode") {
   const state: BridgeAdapterState = { kind, cwd: "workspace", command: kind, status: "idle", pid: 123, sharedSessionId: "session-1" };
@@ -21,6 +24,7 @@ function fixture(kind: BridgeAdapterState["kind"] = "opencode") {
   } as unknown as BridgeAdapter;
   return { adapter, state, selected, plans };
 }
+
 
 describe("shared adapter model and plan commands", () => {
   for (const kind of ["codex", "claude", "opencode"] as const) {

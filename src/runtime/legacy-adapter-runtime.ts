@@ -57,6 +57,10 @@ export class LegacyAdapterRuntime implements RuntimeHost {
     return this.adapter.setPlanMode(enabled);
   }
 
+  async updateLocale(locale: "zh" | "en"): Promise<boolean> {
+    return this.adapter.updateLocale?.(locale) ?? true;
+  }
+
   async interrupt(): Promise<boolean> {
     return await this.adapter.interrupt();
   }

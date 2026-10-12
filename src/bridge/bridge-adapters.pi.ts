@@ -6,6 +6,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { t } from "../i18n/index.ts";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -390,7 +391,7 @@ export class PiTuiAdapter implements BridgeAdapter {
       return;
     }
     if (this.state.status === "busy") {
-      throw new Error("Pi is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.pi.busy"));
     }
     this.beginTurn("wechat");
     try {
@@ -409,7 +410,7 @@ export class PiTuiAdapter implements BridgeAdapter {
   async resumeSession(sessionId: string): Promise<void> {
     this.assertConnected();
     if (this.state.status === "busy") {
-      throw new Error("Pi is still working. Stop the current turn before switching sessions.");
+      throw new Error(t("adapter.pi.switchBusy"));
     }
     const sessionPath = findPiSessionFile(this.options.cwd, sessionId);
     if (!sessionPath) {
@@ -430,7 +431,7 @@ export class PiTuiAdapter implements BridgeAdapter {
       });
       this.applySessionState(response.data, "wechat", "wechat_resume", true);
       if (isRecord(response.data) && response.data.cancelled === true) {
-        throw new Error("Pi session switch was cancelled by an extension.");
+        throw new Error(t("adapter.pi.switchCancelled"));
       }
     } finally {
       this.pendingSessionSwitch = null;
@@ -440,14 +441,14 @@ export class PiTuiAdapter implements BridgeAdapter {
   async createSession(): Promise<void> {
     this.assertConnected();
     if (this.state.status === "busy") {
-      throw new Error("Pi is still working. Stop the current turn before creating a session.");
+      throw new Error(t("adapter.pi.createBusy"));
     }
     this.pendingSessionSwitch = { source: "wechat", reason: "wechat_resume" };
     try {
       const response = await this.sendCommand("new_session");
       this.applySessionState(response.data, "wechat", "wechat_resume", true);
       if (isRecord(response.data) && response.data.cancelled === true) {
-        throw new Error("Pi session creation was cancelled by an extension.");
+        throw new Error(t("adapter.pi.createCancelled"));
       }
     } finally {
       this.pendingSessionSwitch = null;
@@ -456,11 +457,11 @@ export class PiTuiAdapter implements BridgeAdapter {
 
   async listModels(): Promise<BridgeModelOption[]> {
     if (this.state.status === "busy") {
-      throw new Error("Pi is still working. Wait for the current turn before listing models.");
+      throw new Error(t("adapter.pi.listModelsBusy"));
     }
     const response = await this.sendCommand("list_models");
     if (!isRecord(response.data) || !Array.isArray(response.data.models)) {
-      throw new Error("Pi TUI returned an invalid model list.");
+      throw new Error(t("adapter.pi.invalidModels"));
     }
     return response.data.models
       .filter((model): model is Record<string, unknown> => isRecord(model))
@@ -476,15 +477,15 @@ export class PiTuiAdapter implements BridgeAdapter {
 
   async selectModel(modelId: string): Promise<BridgeModelOption> {
     if (this.state.status === "busy") {
-      throw new Error("Pi is still working. Wait for the current turn before switching models.");
+      throw new Error(t("adapter.pi.selectModelBusy"));
     }
     const response = await this.sendCommand("select_model", { modelId });
     if (!isRecord(response.data) || !isRecord(response.data.model)) {
-      throw new Error("Pi TUI returned an invalid selected model.");
+      throw new Error(t("adapter.pi.invalidModel"));
     }
     const model = response.data.model;
     if (typeof model.id !== "string" || typeof model.displayName !== "string") {
-      throw new Error("Pi TUI returned an invalid selected model.");
+      throw new Error(t("adapter.pi.invalidModel"));
     }
     return {
       id: model.id,
@@ -696,7 +697,7 @@ export class PiTuiAdapter implements BridgeAdapter {
     if (this.state.activeTurnOrigin === "wechat") {
       this.emit({
         type: "task_failed",
-        message: "The active WeChat task was interrupted because the local Pi terminal switched sessions.",
+        message: t("adapter.pi.localSwitchInterrupted"),
         timestamp: nowIso(),
       });
     }
@@ -731,7 +732,7 @@ export class PiTuiAdapter implements BridgeAdapter {
       // no visible reply.
       this.emit({
         type: "task_complete",
-        ...(aborted ? { summary: "Interrupted" } : {}),
+        ...(aborted ? { summary: t("task.interrupted") } : {}),
         timestamp: nowIso(),
       });
       this.state.lastOutputAt = nowIso();
@@ -771,7 +772,7 @@ export class PiTuiAdapter implements BridgeAdapter {
     this.assertConnected();
     const socket = this.socket;
     if (!socket || socket.destroyed) {
-      return Promise.reject(new Error("Native Pi TUI is not connected to the WeChat bridge."));
+      return Promise.reject(new Error(t("adapter.pi.disconnected")));
     }
     const id = `pi-tui-${++this.requestCounter}`;
     return new Promise<PiTuiFrame>((resolve, reject) => {
@@ -819,7 +820,7 @@ export class PiTuiAdapter implements BridgeAdapter {
 
   private assertConnected(): void {
     if (!this.child || !this.socket || this.socket.destroyed) {
-      throw new Error("Native Pi TUI is not connected to the WeChat bridge.");
+      throw new Error(t("adapter.pi.disconnected"));
     }
   }
 
@@ -855,7 +856,7 @@ export class PiTuiAdapter implements BridgeAdapter {
         );
         this.emit({
           type: "fatal_error",
-          message: "The native Pi TUI bridge extension disconnected and did not reconnect.",
+          message: t("adapter.pi.extensionDisconnected"),
           timestamp: nowIso(),
         });
       }

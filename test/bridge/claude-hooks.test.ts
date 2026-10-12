@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
 
 import {
   buildClaudeFailureMessage,
@@ -22,6 +23,8 @@ import {
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
 } from "../../src/bridge/claude-hooks.ts";
+
+beforeEach(() => setLocale("en"));
 
 describe("parseClaudeHookPayload", () => {
   test("parses JSON hook payloads", () => {

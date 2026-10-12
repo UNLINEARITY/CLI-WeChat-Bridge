@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import fs from "node:fs";
 import { messages as zhMessages } from "./messages-zh.ts";
 import { messages as enMessages } from "./messages-en.ts";
 
@@ -16,19 +17,35 @@ const catalogs: Record<Locale, Record<string, string>> = {
 
 let currentLocale: Locale = "zh";
 
+export function getLocale(): Locale {
+  return currentLocale;
+}
+
+export function parseLocale(value: unknown): Locale | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (["en", "english", "英文"].includes(normalized)) return "en";
+  if (["zh", "chinese", "中文"].includes(normalized)) return "zh";
+  return null;
+}
+
+export function readLocalePreference(filePath: string): Locale | null {
+  try {
+    return parseLocale(JSON.parse(fs.readFileSync(filePath, "utf8"))?.locale);
+  } catch {
+    return null;
+  }
+}
+
 export function setLocale(locale: Locale): void {
   currentLocale = locale;
 }
 
 export function initLocaleFromEnv(
   env: NodeJS.ProcessEnv = process.env,
+  fallback: Locale = "zh",
 ): void {
-  const value = env.CLI_BRIDGE_LANG?.trim().toLowerCase();
-  if (value === "en" || value === "english") {
-    currentLocale = "en";
-  } else {
-    currentLocale = "zh";
-  }
+  currentLocale = parseLocale(env.CLI_BRIDGE_LANG) ?? fallback;
 }
 
 export function t(key: string, params?: Record<string, string | number>): string {
@@ -36,9 +53,9 @@ export function t(key: string, params?: Record<string, string | number>): string
   let message = catalog[key] ?? catalogs.en[key] ?? key;
 
   if (params) {
-    for (const [name, value] of Object.entries(params)) {
-      message = message.replaceAll(`{${name}}`, String(value));
-    }
+    message = message.replace(/\{(\w+)\}/g, (token, name: string) =>
+      Object.hasOwn(params, name) ? String(params[name]) : token,
+    );
   }
 
   return message;

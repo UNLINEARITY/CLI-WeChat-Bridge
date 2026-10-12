@@ -15,6 +15,9 @@ import {
   resolveDefaultAdapterCommand,
 } from "../bridge/bridge-adapters.ts";
 import { t } from "../i18n/index.ts";
+import { handleLanguageControl } from "../bridge/language-control.ts";
+import { parseBridgeControlCommand } from "../core/bridge-control.ts";
+import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import {
   delay,
   getSharedSessionIdFromAdapterState,
@@ -207,6 +210,7 @@ type DeferredDaemonInput = {
 };
 
 export type WechatDaemonDeps = {
+  localeSettingsFile?: string;
   createRuntime?: typeof createRuntimeHost;
   openVisibleClient?: typeof openVisibleClient;
   isVisibleClientAlive?: typeof isVisibleClientAlive;
@@ -837,10 +841,7 @@ function formatInboundMessagePreview(message: InboundWechatMessage): string {
 }
 
 function formatNoActiveAdapterMessage(): string {
-  return [
-    "No active terminal is selected.",
-    "Send /codex, /claude, /opencode, or /pi to choose one.",
-  ].join("\n");
+  return t("daemon.noActiveAdapter");
 }
 
 export function formatDaemonSwitchResultDetail(result: {
@@ -851,58 +852,40 @@ export function formatDaemonSwitchResultDetail(result: {
   activated?: boolean;
   previousActiveAdapter?: DaemonAdapterKind;
 }): string {
-  if (result.activated === false) {
-    const previous = result.previousActiveAdapter
-      ? ` Active terminal remains ${result.previousActiveAdapter}.`
-      : " No terminal is active yet.";
-    if (result.visibleConnected && result.visibleReady === false) {
-      return `The visible Codex CLI connected, but its active thread is not ready yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
-    }
-    if (result.openedVisible) {
-      return result.created
-        ? `Started the bridge slot and tried to open the visible CLI, but it has not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`
-        : `Tried to open a visible CLI for the existing slot, but it has not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
-    }
-
-    return `The visible CLI is not connected yet.${previous} Check ${BRIDGE_LOG_FILE}.`;
+  const previous = result.activated === false
+    ? result.previousActiveAdapter
+      ? t("daemon.switch.previous", { adapter: result.previousActiveAdapter })
+      : t("daemon.switch.none")
+    : "";
+  if (result.activated === false && result.visibleConnected && result.visibleReady === false) {
+    return t("daemon.switch.threadNotReady", { previous, log: BRIDGE_LOG_FILE });
   }
-
-  if (result.openedVisible && result.visibleConnected) {
-    return result.created
-      ? "Started a new visible CLI."
-      : "Opened a visible CLI for the existing slot.";
+  if (result.openedVisible && (result.activated === false || !result.visibleConnected)) {
+    return t(result.created ? "daemon.switch.newNotConnected" : "daemon.switch.existingNotConnected", { previous, log: BRIDGE_LOG_FILE });
   }
-
-  if (result.openedVisible) {
-    return result.created
-      ? `Started the bridge slot and tried to open the visible CLI, but it has not connected yet. Check ${BRIDGE_LOG_FILE}.`
-      : `Tried to open a visible CLI for the existing slot, but it has not connected yet. Check ${BRIDGE_LOG_FILE}.`;
-  }
-
-  if (result.visibleConnected) {
-    return "Reused the existing visible CLI.";
-  }
-
-  return result.created ? "Started the bridge slot." : "Reused the bridge slot.";
+  if (result.activated === false) return t("daemon.switch.notConnected", { previous, log: BRIDGE_LOG_FILE });
+  if (result.openedVisible && result.visibleConnected) return t(result.created ? "daemon.switchResult.new" : "daemon.switch.opened");
+  if (result.visibleConnected) return t("daemon.switchResult.reused");
+  return t(result.created ? "daemon.switch.slotStarted" : "daemon.switch.slotReused");
 }
 
 export function formatDaemonStatus(status: DaemonStatus): string {
   const lines = [
-    "wechat-daemon status",
-    `cwd: ${status.cwd}`,
-    `active: ${status.activeAdapter ?? "(none)"}`,
-    `started_at: ${status.startedAt}`,
+    t("status.daemon", { channel: status.channelId ?? "wechat" }),
+    `${t("status.label.cwd")}: ${status.cwd}`,
+    `${t("status.label.active")}: ${status.activeAdapter ?? t("status.none")}`,
+    `${t("status.label.started_at")}: ${status.startedAt}`,
   ];
 
   for (const adapter of DAEMON_ADAPTERS) {
     const slot = status.slots.find((entry) => entry.adapter === adapter);
     if (!slot) {
-      lines.push(`${adapter}: not started`);
+      lines.push(`${adapter}: ${t("status.notStarted")}`);
       continue;
     }
     const flags = [
-      slot.pendingApproval ? "pending_approval" : "",
-      slot.pendingUserInput ? "pending_input" : "",
+      slot.pendingApproval ? t("status.pendingApproval") : "",
+      slot.pendingUserInput ? t("status.pendingInput") : "",
       slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
     ].filter(Boolean);
     lines.push(`${adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`);
@@ -1121,7 +1104,7 @@ export class WechatDaemon {
           if (chatType === "direct") {
             const result = await this.channelDriver.sendText({
               target: this.channelDriver.directConversation(senderId),
-              text: "Unauthorized.",
+              text: t("channel.unauthorized"),
               context: "notice",
               log: appendDaemonLog,
             });
@@ -1566,7 +1549,7 @@ export class WechatDaemon {
           slot.adapter,
           slot.pendingUserInput
             ? formatPendingUserInputReminder(slot.pendingUserInput)
-            : `${slot.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+            : t("bridge.input.waiting", { adapter: slot.adapter }),
         );
         reason = "pending_user_input";
         await sendReminder(routeMessage, "user_input_required");
@@ -1574,7 +1557,7 @@ export class WechatDaemon {
       remindBusy: async () => {
         routeMessage = prefixDaemonAdapterMessage(
           slot.adapter,
-          `${slot.adapter} is still working. Wait for the current reply or use /stop.`,
+          t("bridge.busy.remote", { adapter: slot.adapter }),
         );
         reason = "busy";
         await sendReminder(routeMessage, "notice");
@@ -1955,7 +1938,7 @@ export class WechatDaemon {
       await slot.runtime.reset();
     } else if (slot.adapter === "opencode" || slot.adapter === "pi") {
       if (!slot.runtime.createSession) {
-        throw new Error(`/new is not available in ${slot.adapter} mode.`);
+        throw new Error(t("bridge.newSession.unavailable", { adapter: slot.adapter }));
       }
       await slot.runtime.createSession();
     }
@@ -2221,8 +2204,14 @@ export class WechatDaemon {
     if (message.senderId !== this.authorizedUserId) {
       await this.queueWechatMessage(
         message.senderId,
-        `Unauthorized. This daemon only accepts messages from ${this.channelDriver.operatorDescription}.`,
+        t("bridge.unauthorized", { mode: t("bridge.mode.daemon"), operator: this.channelDriver.operatorDescription }),
       );
+      return;
+    }
+
+    const languageCommand = parseBridgeControlCommand(message.text);
+    if (languageCommand?.type === "language") {
+      await this.handleLanguageCommand(message.senderId, languageCommand.target);
       return;
     }
 
@@ -2241,7 +2230,7 @@ export class WechatDaemon {
           const detail = formatDaemonSwitchResultDetail(result);
           await this.queueWechatMessage(
             message.senderId,
-            `Could not activate terminal: ${switchTarget}.\n${detail}`,
+            t("daemon.activateFailed", { adapter: switchTarget, detail }),
           );
           return;
         }
@@ -2263,7 +2252,7 @@ export class WechatDaemon {
       if (!result.activated) {
         await this.queueWechatMessage(
           message.senderId,
-          `Could not activate terminal: ${switchDirective.adapter}.\n${detail}`,
+          t("daemon.activateFailed", { adapter: switchDirective.adapter, detail }),
         );
         return;
       }
@@ -2273,7 +2262,7 @@ export class WechatDaemon {
       } else {
         await this.queueWechatMessage(
           message.senderId,
-          `Active terminal: ${switchDirective.adapter}.\n${detail}`,
+          t("daemon.activeTerminal", { adapter: switchDirective.adapter, detail }),
         );
         return;
       }
@@ -2282,7 +2271,7 @@ export class WechatDaemon {
     if (message.text.trim().toLowerCase() === "/daemon-stop") {
       await this.queueWechatMessage(
         message.senderId,
-        `Stopping ${this.channelId}-daemon...`,
+        t("daemon.stopping", { channel: this.channelId }),
       );
       setTimeout(() => {
         void this.shutdown().finally(() => process.exit(0));
@@ -2344,7 +2333,7 @@ export class WechatDaemon {
               currentSlot.adapter,
               currentSlot.pendingUserInput
                 ? formatPendingUserInputReminder(currentSlot.pendingUserInput)
-                : `${currentSlot.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+                : t("bridge.input.waiting", { adapter: currentSlot.adapter }),
             ),
           );
         },
@@ -2353,7 +2342,7 @@ export class WechatDaemon {
             message.senderId,
             prefixDaemonAdapterMessage(
               currentSlot.adapter,
-              `${currentSlot.adapter} is still working. Wait for the current reply or use /stop.`,
+              t("bridge.busy.remote", { adapter: currentSlot.adapter }),
             ),
           );
         },
@@ -2421,7 +2410,7 @@ export class WechatDaemon {
         setBinding(cmd.emoji, cmd.command);
         await this.queueWechatMessage(
           senderId,
-          `Bound ${cmd.emoji} → ${cmd.command}`,
+          t("binding.bound", { emoji: cmd.emoji, command: cmd.command }),
         );
         return;
       }
@@ -2430,8 +2419,8 @@ export class WechatDaemon {
         await this.queueWechatMessage(
           senderId,
           removed
-            ? `Unbound ${cmd.emoji}`
-            : `No binding found for ${cmd.emoji}`,
+            ? t("binding.unbound", { emoji: cmd.emoji })
+            : t("binding.notFound", { emoji: cmd.emoji }),
         );
         return;
       }
@@ -2444,6 +2433,9 @@ export class WechatDaemon {
     command: NonNullable<ReturnType<typeof parseWechatControlCommand>>,
   ): Promise<void> {
     switch (command.type) {
+      case "language":
+        await this.handleLanguageCommand(message.senderId, command.target);
+        return;
       case "model":
       case "plan":
         await this.queueWechatMessage(message.senderId, await handleAdapterControl(activeSlot.runtime, message.senderId, command));
@@ -2458,7 +2450,7 @@ export class WechatDaemon {
         if (!isWechatResumeEnabled(activeSlot.adapter)) {
           await this.queueWechatMessage(
             message.senderId,
-            `${this.channelDriver.displayName} /resume is disabled for ${activeSlot.adapter} in daemon mode. Use /resume directly inside the visible terminal; the remote channel will follow that local session.`,
+            t("daemon.resume.disabled", { channel: this.channelDriver.displayName, adapter: activeSlot.adapter }),
           );
           return;
         }
@@ -2501,7 +2493,7 @@ export class WechatDaemon {
         if (!activeSlot.runtime.createSession) {
           await this.queueWechatMessage(
             message.senderId,
-            `/new is not available in ${activeSlot.adapter} mode.`,
+            t("bridge.newSession.unavailable", { adapter: activeSlot.adapter }),
           );
           return;
         }
@@ -2523,8 +2515,8 @@ export class WechatDaemon {
           prefixDaemonAdapterMessage(
             activeSlot.adapter,
             interrupted
-              ? "Interrupt signal sent to the active worker."
-              : "No running worker was available to interrupt.",
+              ? t("bridge.interrupt.workerSent")
+              : t("bridge.interrupt.workerIdle"),
           ),
         );
         return;
@@ -2539,7 +2531,7 @@ export class WechatDaemon {
         appendDaemonLog(`reset: adapter=${activeSlot.adapter}`);
         await this.queueWechatMessage(
           message.senderId,
-          prefixDaemonAdapterMessage(activeSlot.adapter, "Worker session has been reset."),
+          prefixDaemonAdapterMessage(activeSlot.adapter, t("bridge.reset.done")),
         );
         return;
       case "confirm":
@@ -2554,13 +2546,21 @@ export class WechatDaemon {
     }
   }
 
+  private async handleLanguageCommand(senderId: string, target?: string): Promise<void> {
+    await this.queueWechatMessage(senderId, await handleLanguageControl({
+      target,
+      settingsFile: this.deps.localeSettingsFile ?? LANGUAGE_FILE,
+      adapters: [...this.slots.values()].map((slot) => slot.runtime),
+    }));
+  }
+
   private async confirmPendingApproval(
     message: InboundWechatMessage,
     activeSlot: DaemonSlot,
   ): Promise<void> {
     const slot = this.resolvePendingApprovalSlot(activeSlot);
     if (!slot || slot.pendingConfirmations.length === 0) {
-      await this.queueWechatMessage(message.senderId, "No pending approval request.");
+      await this.queueWechatMessage(message.senderId, t("approval.noPending"));
       return;
     }
 
@@ -2571,7 +2571,7 @@ export class WechatDaemon {
         message.senderId,
         prefixDaemonAdapterMessage(
           slot.adapter,
-          "The worker could not apply this approval request.",
+          t("bridge.approval.applyFailed"),
         ),
       );
       return;
@@ -2587,7 +2587,7 @@ export class WechatDaemon {
       message.senderId,
       prefixDaemonAdapterMessage(
         slot.adapter,
-        "Approval confirmed. Continuing...",
+        t("approval.confirmed"),
       ),
     );
   }
@@ -2598,7 +2598,7 @@ export class WechatDaemon {
   ): Promise<void> {
     const slot = this.resolvePendingApprovalSlot(activeSlot);
     if (!slot || slot.pendingConfirmations.length === 0) {
-      await this.queueWechatMessage(message.senderId, "No pending approval request.");
+      await this.queueWechatMessage(message.senderId, t("approval.noPending"));
       return;
     }
 
@@ -2609,7 +2609,7 @@ export class WechatDaemon {
         message.senderId,
         prefixDaemonAdapterMessage(
           slot.adapter,
-          "The worker could not deny this approval request cleanly.",
+          t("bridge.approval.denyFailed"),
         ),
       );
       return;
@@ -2624,7 +2624,7 @@ export class WechatDaemon {
       message.senderId,
       prefixDaemonAdapterMessage(
         slot.adapter,
-        "Approval denied.",
+        t("approval.denied"),
       ),
     );
   }
@@ -2641,7 +2641,7 @@ export class WechatDaemon {
     if (!slot) {
       await this.queueWechatMessage(
         message.senderId,
-        prefixDaemonAdapterMessage(activeSlot.adapter, "No pending user input request."),
+        prefixDaemonAdapterMessage(activeSlot.adapter, t("bridge.answer.none")),
       );
       return;
     }
@@ -2650,7 +2650,7 @@ export class WechatDaemon {
     if (!pending) {
       await this.queueWechatMessage(
         message.senderId,
-        prefixDaemonAdapterMessage(activeSlot.adapter, "No pending user input request."),
+        prefixDaemonAdapterMessage(activeSlot.adapter, t("bridge.answer.none")),
       );
       return;
     }
@@ -2670,7 +2670,7 @@ export class WechatDaemon {
         message.senderId,
         prefixDaemonAdapterMessage(
           slot.adapter,
-          "The worker could not apply this answer.",
+          t("bridge.answer.failed"),
         ),
       );
       return;
@@ -2682,7 +2682,7 @@ export class WechatDaemon {
     );
     await this.queueWechatMessage(
       message.senderId,
-      prefixDaemonAdapterMessage(slot.adapter, "Answer submitted. Continuing..."),
+      prefixDaemonAdapterMessage(slot.adapter, t("bridge.answer.sent")),
     );
   }
 
@@ -2742,7 +2742,7 @@ export class WechatDaemon {
     if (startedSlots.length === 0) {
       await this.queueWechatMessage(
         message.senderId,
-        "/all needs at least one running adapter. Open one first with /codex, /claude, /opencode, or /pi.",
+        t("daemon.broadcast.empty"),
       );
       return;
     }
@@ -2753,7 +2753,7 @@ export class WechatDaemon {
       appendDaemonLog(`broadcast_canceled_busy: busy=[${names}]`);
       await this.queueWechatMessage(
         message.senderId,
-        `/all canceled: ${busySlots.length > 1 ? "these workers are" : "this worker is"} still busy — ${names}. Wait for the current replies or use /stop first.`,
+        t("daemon.broadcast.busy", { workers: t(busySlots.length > 1 ? "daemon.broadcast.multipleBusy" : "daemon.broadcast.singleBusy"), names }),
       );
       return;
     }
@@ -2773,10 +2773,10 @@ export class WechatDaemon {
     }
 
     const lines = [
-      `Broadcast dispatched to ${dispatched.length} ${dispatched.length > 1 ? "workers" : "worker"}: ${dispatched.join(", ")}. Each reply arrives prefixed with its adapter name.`,
+      t("daemon.broadcast.sent", { count: dispatched.length, workers: t(dispatched.length > 1 ? "daemon.broadcast.multipleWorkers" : "daemon.broadcast.singleWorker"), names: dispatched.join(", ") }),
     ];
     if (skipped.length > 0) {
-      lines.push(`Not started (skipped): ${skipped.join(", ")}. Start them with their /command to include them next time.`);
+      lines.push(t("daemon.broadcast.skipped", { names: skipped.join(", ") }));
     }
     await this.queueWechatMessage(message.senderId, lines.join("\n"));
   }
@@ -2802,7 +2802,7 @@ export class WechatDaemon {
           message.senderId,
           prefixDaemonAdapterMessage(
             slot.adapter,
-            `${slot.adapter} is still working. Wait for the current reply or use /stop.`,
+            t("bridge.busy.remote", { adapter: slot.adapter }),
           ),
           "notice",
           conversationOverride,

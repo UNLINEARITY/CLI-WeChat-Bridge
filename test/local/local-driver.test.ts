@@ -4,17 +4,20 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { setLocale } from "../../src/i18n/index.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
   LocalChannelDriver,
   LOCAL_CHANNEL_OPERATOR_ID,
 } from "../../src/channels/local/local-driver.ts";
 import type { ChannelInboundMessage } from "../../src/core/channel-types.ts";
+
+beforeEach(() => setLocale("en"));
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -34,6 +37,7 @@ function readTranscript(transcriptFile: string): Record<string, unknown>[] {
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
+
 
 describe("local channel driver", () => {
   test("records outbound text in the transcript and reports sent", async () => {

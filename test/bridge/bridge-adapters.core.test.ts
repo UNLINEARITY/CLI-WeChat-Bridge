@@ -204,6 +204,45 @@ describe("local companion proxy lifecycle", () => {
 });
 
 describe("companion ready gate", () => {
+  test("synchronizes locale before worker readiness and detects legacy companions", async () => {
+    const cwd = path.resolve("tmp/locale-proxy");
+    const adapter = new LocalCompanionProxyAdapter({ kind: "claude", command: "claude", cwd, lifecycle: "persistent", companionLaunchMode: "daemon_auto" });
+    await adapter.start();
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "claude" });
+    const socket = net.connect({ host: "127.0.0.1", port: endpoint!.port });
+    const updates: string[] = [];
+    let acknowledge!: () => void;
+    const handshake = new Promise<void>((resolve) => { acknowledge = resolve; });
+    const detach = attachLocalCompanionMessageListener(socket, (message) => {
+      if (message.type === "hello_ack") {
+        expect(["zh", "en"]).toContain(message.locale!);
+        acknowledge();
+      }
+      if (message.type === "request") {
+        if (message.payload.command === "set_locale") updates.push(message.payload.locale);
+        sendLocalCompanionMessage(socket, { type: "response", id: message.id, ok: true, result: true });
+      }
+    });
+    try {
+      await new Promise<void>((resolve, reject) => { socket.once("connect", resolve); socket.once("error", reject); });
+      sendLocalCompanionMessage(socket, { type: "hello", token: endpoint!.token, supportsLocaleUpdates: true });
+      await handshake;
+      expect(adapter.getState().pid).toBeUndefined();
+      expect(await adapter.updateLocale("en")).toBe(true);
+      expect(updates).toEqual(["en"]);
+      sendLocalCompanionMessage(socket, { type: "state", state: { kind: "claude", command: "claude", cwd, status: "idle", pid: 33_333 } });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(await adapter.updateLocale("zh")).toBe(false);
+      expect(updates).toEqual(["en"]);
+    } finally {
+      socket.destroy();
+      await adapter.dispose();
+      detach();
+      clearLocalCompanionEndpoint(cwd, undefined, { adapter: "claude" });
+    }
+    expect(adapter.getState().supportsLocaleUpdates).toBeUndefined();
+  });
+
   test("proxies model and plan commands with results and remote errors", async () => {
     const cwd = path.resolve("tmp/control-proxy");
     const adapter = new LocalCompanionProxyAdapter({ kind: "claude", command: "claude", cwd, lifecycle: "persistent", companionLaunchMode: "daemon_auto" });

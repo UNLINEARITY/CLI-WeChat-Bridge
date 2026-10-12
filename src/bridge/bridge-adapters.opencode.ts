@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import { spawn as spawnChildProcess, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
@@ -397,7 +398,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const models = await this.listControlModels();
     const target = models.find((model) => model.id === modelId);
     if (!target) {
-      throw new Error("This OpenCode model is no longer available. Send /model again.");
+      throw new Error(t("adapter.opencode.modelUnavailable"));
     }
 
     const currentVariant = session.model?.variant;
@@ -422,7 +423,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       updated.model.id !== target.modelID ||
       (updated.model.variant ?? "default") !== variant
     ) {
-      throw new Error("OpenCode did not confirm the selected model.");
+      throw new Error(t("adapter.opencode.modelUnconfirmed"));
     }
 
     return { id: target.id, displayName: target.displayName, isCurrent: true };
@@ -434,12 +435,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const agents = await this.listPrimaryAgents();
     const planAgent = agents.find((agent) => agent.name === "plan");
     if (!planAgent) {
-      throw new Error("OpenCode primary agent 'plan' is not available.");
+      throw new Error(t("adapter.opencode.planUnavailable"));
     }
 
     const currentAgent = session.agent ?? agents[0]?.name;
     if (!currentAgent) {
-      throw new Error("OpenCode did not return any primary agents.");
+      throw new Error(t("adapter.opencode.agentsMissing"));
     }
     if (enabled && currentAgent === "plan") {
       return true;
@@ -457,7 +458,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         : agents.find((agent) => agent.name === "build")?.name ??
           agents.find((agent) => agent.name !== "plan")?.name;
     if (!target) {
-      throw new Error("OpenCode did not return an agent that can replace plan mode.");
+      throw new Error(t("adapter.opencode.planReplacementMissing"));
     }
 
     const result = await this.client!.v2.session.switchAgent({
@@ -467,7 +468,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.unwrapOrThrow(result);
     const updated = await this.getSessionForCurrentDirectory(session.id);
     if (!updated || updated.agent !== target) {
-      throw new Error("OpenCode did not confirm the selected agent.");
+      throw new Error(t("adapter.opencode.agentUnconfirmed"));
     }
 
     if (enabled) {
@@ -480,16 +481,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private assertRemoteControlReady(): void {
     if (!this.client) {
-      throw new Error("OpenCode is not running.");
+      throw new Error(t("adapter.opencode.notRunning"));
     }
     if (this.state.status === "busy") {
-      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.opencode.busy"));
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.opencode.approvalPending"));
     }
     if (this.pendingQuestion) {
-      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+      throw new Error(t("adapter.opencode.inputPending"));
     }
   }
 
@@ -507,7 +508,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   private async listPrimaryAgents(): Promise<OpenCodeAgent[]> {
-    if (!this.client) throw new Error("OpenCode is not running.");
+    if (!this.client) throw new Error(t("adapter.opencode.notRunning"));
     const agents = this.unwrapOrThrow(
       await this.client.app.agents(
         {
@@ -521,7 +522,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   private async listControlModels(): Promise<OpenCodeControlModel[]> {
-    if (!this.client) throw new Error("OpenCode is not running.");
+    if (!this.client) throw new Error(t("adapter.opencode.notRunning"));
     const providers = this.unwrapOrThrow(await this.client.provider.list({ directory: this.options.cwd, workspace: this.activeWorkspaceId ?? undefined }, { signal: AbortSignal.timeout(10_000) }));
     return providers.all.filter((provider) => providers.connected.includes(provider.id)).flatMap((provider) =>
       Object.entries(provider.models).filter(([id, model]) => model.status !== "deprecated" && !(provider.id === "opencode" && id.includes("-nano"))).map(([id, model]) => ({
@@ -607,16 +608,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async sendInput(text: string): Promise<void> {
     if (!this.client) {
-      throw new Error("OpenCode adapter is not running.");
+      throw new Error(t("adapter.opencode.adapterNotRunning"));
     }
     if (this.state.status === "busy") {
-      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.opencode.busy"));
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.opencode.approvalPending"));
     }
     if (this.pendingQuestion) {
-      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+      throw new Error(t("adapter.opencode.inputPending"));
     }
 
     const normalized = normalizeOutput(text).trim();
@@ -670,7 +671,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
     if (!this.client) {
-      throw new Error("OpenCode is not running yet.");
+      throw new Error(t("adapter.opencode.notReady"));
     }
 
     try {
@@ -718,16 +719,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async resumeSession(sessionId: string): Promise<void> {
     if (!this.client) {
-      throw new Error("OpenCode is not running yet.");
+      throw new Error(t("adapter.opencode.notReady"));
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.opencode.approvalPending"));
     }
     if (this.pendingQuestion) {
-      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+      throw new Error(t("adapter.opencode.inputPending"));
     }
     if (this.state.status === "busy") {
-      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.opencode.busy"));
     }
     if (this.state.status !== "idle") {
       throw new Error(`OpenCode cannot switch sessions while its status is ${this.state.status}.`);
@@ -764,16 +765,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   async createSession(): Promise<void> {
     if (!this.client) {
-      throw new Error("OpenCode adapter is not running.");
+      throw new Error(t("adapter.opencode.adapterNotRunning"));
     }
     if (this.state.status === "busy") {
-      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.opencode.busy"));
     }
     if (this.pendingPermission) {
-      throw new Error("An OpenCode approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.opencode.approvalPending"));
     }
     if (this.pendingQuestion) {
-      throw new Error("OpenCode is waiting for user input. Reply with /answer or use /stop.");
+      throw new Error(t("adapter.opencode.inputPending"));
     }
 
     this.outputBatcher.clear();
@@ -2220,7 +2221,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const request: UserInputRequest = {
-      summary: `OpenCode requested answers to ${questions.length} question${questions.length === 1 ? "" : "s"}.`,
+      summary: t("input.request.opencode", { count: questions.length, questions: t(questions.length === 1 ? "input.request.singular" : "input.request.plural") }),
       questions,
     };
     this.pendingQuestion = {

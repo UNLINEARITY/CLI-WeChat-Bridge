@@ -5,6 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import xterm from "@xterm/headless";
+import { t } from "../i18n/index.ts";
 
 const { Terminal } = xterm;
 const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -119,18 +120,18 @@ export class NativeTerminalControl {
 
   private check(): void {
     const operation = this.operation;
-    if (!operation) throw new Error("No terminal control operation is active.");
+    if (!operation) throw new Error(t("native.control.inactive"));
     if (operation.error) throw operation.error;
     if (operation.identity !== this.options.identity()) {
-      operation.error = new Error("The active CLI session changed during control. Try again.");
+      operation.error = new Error(t("native.control.sessionChanged"));
       throw operation.error;
     }
     this.options.assertReady();
-    if (Date.now() > operation.deadline) throw new Error("Native CLI control timed out; the result could not be confirmed.");
+    if (Date.now() > operation.deadline) throw new Error(t("native.control.timeout"));
   }
 
   async run<T>(action: () => Promise<T>): Promise<T> {
-    if (this.operation) throw new Error("Another CLI control operation is in progress.");
+    if (this.operation) throw new Error(t("native.control.busy"));
     this.options.assertReady();
     this.operation = { identity: this.options.identity(), deadline: Date.now() + 25_000 };
     try {
@@ -140,7 +141,7 @@ export class NativeTerminalControl {
         this.check();
         this.draft = false; // The native input state is authoritative when available.
       } else if (this.draft && this.options.isPromptEmpty?.()) this.draft = false;
-      if (this.draft) throw new Error("The local terminal has an input draft. Submit or clear it before using remote controls.");
+      if (this.draft) throw new Error(t("native.control.draft"));
       const result = await action();
       this.check();
       return result;
@@ -176,7 +177,7 @@ export class NativeTerminalControl {
   }
 
   async command(command: string): Promise<void> {
-    if (!/^\/[a-z]+$/.test(command)) throw new Error("Invalid native control command.");
+    if (!/^\/[a-z]+$/.test(command)) throw new Error(t("native.control.invalid"));
     await this.key(`\u001b[200~${command}\u001b[201~`);
     await this.key("\r");
     // Claude can consume the first Enter to accept a slash completion while its
@@ -204,7 +205,7 @@ export class NativeTerminalControl {
 
   async openMenu(command: string, title: string): Promise<void> {
     if (this.ownedMenu || /Select model|Select agent|Select variant/.test(this.text)) {
-      throw new Error("A native CLI menu is already open. Close it before using remote controls.");
+      throw new Error(t("native.control.menuOpen"));
     }
     await this.command(command);
     await this.waitFor(() => this.hasMenu(title));
@@ -213,7 +214,7 @@ export class NativeTerminalControl {
 
   async closeMenu(): Promise<void> {
     const title = this.ownedMenu;
-    if (!title || !this.hasMenu(title)) throw new Error("The native selector changed unexpectedly.");
+    if (!title || !this.hasMenu(title)) throw new Error(t("native.control.selectorChanged"));
     await this.key("\u001b");
     await this.waitFor(() => !this.hasMenu(title));
     this.ownedMenu = null;
@@ -221,7 +222,7 @@ export class NativeTerminalControl {
 
   async submitMenu(nextTitle?: string, key = "\r"): Promise<void> {
     const title = this.ownedMenu;
-    if (!title || !this.hasMenu(title)) throw new Error("The native selector changed unexpectedly.");
+    if (!title || !this.hasMenu(title)) throw new Error(t("native.control.selectorChanged"));
     await this.key(key);
     await this.waitFor(() => !this.hasMenu(title));
     this.ownedMenu = nextTitle && this.hasMenu(nextTitle) ? nextTitle : null;

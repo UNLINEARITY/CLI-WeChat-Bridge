@@ -39,12 +39,52 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 
 旧版 `CLAUDE_WECHAT_CHANNEL_DATA_DIR` 不再作为活动数据目录配置项；如旧环境中设置过该变量，它只会被视为一次性旧数据迁移来源。新的自定义目录请使用 `CLI_BRIDGE_DATA_DIR`。
 
+## 界面语言
+
+在微信、企业微信或本地通道中发送以下指令，即可切换 bridge 提示语言：
+
+| 指令 | 行为 |
+| --- | --- |
+| `/lang` | 查看当前语言及切换方式 |
+| `/lang zh` | 切换为中文 |
+| `/lang en` | Switch bridge messages to English |
+
+`/language` 是 `/lang` 的别名，也支持 `中文` / `chinese` 和 `英文` / `english`。无效参数只显示用法，不会发送给模型。
+
+切换立即作用于当前 bridge / daemon；daemon 中全部已连接 CLI companion 同步更新桥接提示语言，后续启动的 CLI companion 也会继承。任务运行中或等待审批、回答时也可切换，不会中断任务或清除待处理请求。旧版 companion 无法热更新时会提示重启对应可见 CLI。
+
+偏好保存到活动数据目录的 `language.json`（默认 `~/.cli-bridge/language.json`），下次启动自动读取。多个独立运行的 bridge 不会自动热同步；它们在下次启动时读取保存值。
+
+也可以在启动时通过 `CLI_BRIDGE_LANG` 指定语言：
+
+```bash
+# 中文
+CLI_BRIDGE_LANG=zh wechat-daemon
+
+# English
+CLI_BRIDGE_LANG=en wechat-daemon
+```
+
+企业微信使用相同变量，将命令换为 `wecom-daemon`；直接启动命令如 `wechat-codex`、`wecom-claude` 也会继承该变量。
+
+PowerShell 当前终端会话：
+
+```powershell
+$env:CLI_BRIDGE_LANG = "en"
+wechat-daemon
+```
+
+启动优先级：有效的 `CLI_BRIDGE_LANG` > 已保存偏好 > 中文。显式设置的环境变量在每次重新启动时仍优先；运行中可用 `/lang` 再切换。直接启动命令若委托给已运行的 daemon，使用该 daemon 的当前语言。
+
+语言设置覆盖 bridge 自身的模型 / 计划控制、状态、审批、问答、会话与通道提示。模型生成的回复、原始问题和选项、上游 CLI 界面及上游返回的错误文本保持原样；模型回复语言可通过提示词要求。
+
 ## 环境变量
 
 | 变量名 | 说明 |
 | --- | --- |
 | `WECHAT_ILINK_BASE_URL` | 覆盖默认 iLink API 地址 |
 | `CLI_BRIDGE_DATA_DIR` | 覆盖默认数据目录 |
+| `CLI_BRIDGE_LANG` | 启动时的 bridge 文案语言；`zh` / `en`，优先于已保存偏好；运行中用 `/lang` 切换 |
 | `WECOM_BOT_ID` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Bot ID |
 | `WECOM_BOT_SECRET` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Secret |
 | `WECOM_OPERATOR_USER_ID` | 覆盖已配对的企业微信操作者 userid |

@@ -8,7 +8,7 @@ import net from "node:net";
 import path from "node:path";
 import { spawn as spawnPty } from "node-pty";
 import type { IPty } from "node-pty";
-import { t } from "../i18n/index.ts";
+import { getLocale, t } from "../i18n/index.ts";
 import {
   attachLocalCompanionMessageListener,
   buildLocalCompanionToken,
@@ -260,6 +260,13 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     return await this.sendRequest({ command: "set_plan_mode", enabled }) as boolean;
   }
 
+  async updateLocale(locale: "zh" | "en"): Promise<boolean> {
+    if (!this.socket) return true;
+    if (!this.state.supportsLocaleUpdates) return false;
+    await this.sendRequest({ command: "set_locale", locale });
+    return true;
+  }
+
   async interrupt(): Promise<boolean> {
     const result = await this.sendRequest({
       command: "interrupt",
@@ -371,6 +378,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         }
 
         authenticated = true;
+        this.state.supportsLocaleUpdates = message.supportsLocaleUpdates;
         this.clearReconnectShutdownTimer();
         this.expectedCloseReason = null;
         this.socket = socket;
@@ -389,7 +397,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           this.endpoint?.instanceId,
           { adapter: this.options.kind },
         );
-        sendLocalCompanionMessage(socket, { type: "hello_ack" });
+        sendLocalCompanionMessage(socket, { type: "hello_ack", locale: getLocale() });
         return;
       }
 
@@ -458,6 +466,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.state.pendingApprovals = undefined;
         this.state.supportsApprovalRequestIds = undefined;
         this.state.supportsUserInputRequestIds = undefined;
+        this.state.supportsLocaleUpdates = undefined;
         this.state.pendingUserInput = null;
         this.state.pendingUserInputOrigin = undefined;
         this.state.sharedSessionId = undefined;
@@ -547,6 +556,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.announcedApprovalRequestId = undefined;
     this.announcedUserInputRequestId = undefined;
     this.state.supportsUserInputRequestIds = undefined;
+    this.state.supportsLocaleUpdates = undefined;
     this.state.pendingUserInput = null;
     this.state.pendingUserInputOrigin = undefined;
     this.state.activeTurnId = undefined;
@@ -684,7 +694,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         launchMode: this.options.companionLaunchMode,
       }));
     }
-    if (!this.state.pid && payload.command !== "dispose") {
+    if (!this.state.pid && payload.command !== "dispose" && payload.command !== "set_locale") {
       await this.waitForCompanionReady();
       socket = this.socket;
       if (!socket) {

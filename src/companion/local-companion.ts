@@ -7,6 +7,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import net from "node:net";
 import path from "node:path";
+import { parseLocale, setLocale, t } from "../i18n/index.ts";
 
 import { createBridgeAdapter } from "../bridge/bridge-adapters.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
@@ -224,7 +225,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
 
     sendLocalCompanionMessage(activeSocket, {
       type: "state",
-      state: adapter.getState(),
+      state: { ...adapter.getState(), supportsLocaleUpdates: true },
     });
   };
 
@@ -284,6 +285,14 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
   ) => {
     try {
       switch (message.payload.command) {
+        case "set_locale": {
+          const locale = parseLocale(message.payload.locale);
+          if (!locale) throw new Error(t("language.usage"));
+          setLocale(locale);
+          process.env.CLI_BRIDGE_LANG = locale;
+          sendResponse(socket, message.id, true);
+          break;
+        }
         case "send_input":
           await adapter.sendInput(message.payload.text);
           sendResponse(socket, message.id, true);
@@ -316,16 +325,16 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           sendResponse(socket, message.id, true);
           break;
         case "list_models":
-          if (!adapter.listModels) throw new Error("Model listing is not supported by this companion.");
+          if (!adapter.listModels) throw new Error(t("companion.modelsUnsupported"));
           sendResponse(socket, message.id, true, await adapter.listModels());
           break;
         case "select_model":
-          if (!adapter.selectModel) throw new Error("Model selection is not supported by this companion.");
+          if (!adapter.selectModel) throw new Error(t("companion.modelUnsupported"));
           sendResponse(socket, message.id, true, await adapter.selectModel(message.payload.modelId));
           publishState();
           break;
         case "set_plan_mode":
-          if (!adapter.setPlanMode) throw new Error("Plan mode is not supported by this companion.");
+          if (!adapter.setPlanMode) throw new Error(t("companion.planUnsupported"));
           sendResponse(socket, message.id, true, await adapter.setPlanMode(message.payload.enabled));
           publishState();
           break;
@@ -403,6 +412,11 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           (message: LocalCompanionMessage) => {
             if (!helloAcknowledged) {
               if (message.type === "hello_ack") {
+                const locale = parseLocale(message.locale);
+                if (locale) {
+                  setLocale(locale);
+                  process.env.CLI_BRIDGE_LANG = locale;
+                }
                 helloAcknowledged = true;
                 closeReason = null;
                 activeSocket = socket;
@@ -467,6 +481,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           type: "hello",
           token: endpoint.token,
           companionPid: process.pid,
+          supportsLocaleUpdates: true,
         });
       });
 

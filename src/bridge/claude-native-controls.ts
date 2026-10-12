@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import type { BridgeModelOption } from "./bridge-types.ts";
 import { NativeTerminalControl, parseClaudeModelPicker, parseClaudeModelSwitchConfirmation, readClaudePermissionMode } from "./native-terminal-control.ts";
 
@@ -19,7 +20,7 @@ export class ClaudeNativeControls {
 
   private assertPrompt(): void {
     if (readClaudePermissionMode(this.terminal.text) === null) {
-      throw new Error("Claude must be at an empty native prompt before changing models or plan mode.");
+      throw new Error(t("native.claude.emptyPrompt"));
     }
   }
 
@@ -40,7 +41,7 @@ export class ClaudeNativeControls {
           });
         }
         const focused = rows.find((row) => row.focused);
-        if (!focused) throw new Error("Could not identify the focused Claude model. Close the menu and try again.");
+        if (!focused) throw new Error(t("native.claude.focusClose"));
         if (visited.has(focused.index)) break;
         visited.add(focused.index);
         await this.terminal.key("\u001b[B");
@@ -53,7 +54,7 @@ export class ClaudeNativeControls {
           options.set(row.index, { id: JSON.stringify({ index: row.index, label: row.label }), displayName: row.label, isCurrent: row.current || row.index === initial });
         }
         const focused = rows.find((row) => row.focused);
-        if (!focused) throw new Error("Could not identify the focused Claude model.");
+        if (!focused) throw new Error(t("native.claude.focus"));
         if (visitedUp.has(focused.index)) break;
         visitedUp.add(focused.index);
         if (focused.index === 1) break;
@@ -66,24 +67,24 @@ export class ClaudeNativeControls {
 
   async selectModel(id: string): Promise<BridgeModelOption> {
     const target = JSON.parse(id) as { index: number; label: string };
-    if (!Number.isSafeInteger(target.index) || target.index < 1 || typeof target.label !== "string") throw new Error("Invalid Claude model selection. Send /model again.");
+    if (!Number.isSafeInteger(target.index) || target.index < 1 || typeof target.label !== "string") throw new Error(t("native.claude.invalidModel"));
     return this.terminal.run(async () => {
       this.assertPrompt();
       await this.terminal.openMenu("/model", "Select model");
       const visited = new Set<number>();
       while (true) {
         const focused = parseClaudeModelPicker(this.terminal.text).find((row) => row.focused);
-        if (!focused) throw new Error("Could not identify the focused Claude model.");
+        if (!focused) throw new Error(t("native.claude.focus"));
         if (focused.index === target.index) {
-          if (focused.label !== target.label) throw new Error("The Claude model list changed. Send /model again.");
+          if (focused.label !== target.label) throw new Error(t("native.claude.changed"));
           break;
         }
-        if (visited.has(focused.index)) throw new Error("The Claude model is no longer selectable. Send /model again.");
+        if (visited.has(focused.index)) throw new Error(t("native.claude.unavailable"));
         visited.add(focused.index);
         await this.terminal.key(focused.index < target.index ? "\u001b[B" : "\u001b[A");
       }
       if (!/s to use this session only/i.test(this.terminal.text)) {
-        throw new Error("This Claude version does not expose session-only model selection. Update Claude Code and try again.");
+        throw new Error(t("native.claude.update"));
       }
       await this.terminal.submitMenu(undefined, "s");
       await this.terminal.waitFor(() => parseClaudeModelSwitchConfirmation(this.terminal.text) !== null || readClaudePermissionMode(this.terminal.text) !== null);
@@ -94,14 +95,14 @@ export class ClaudeNativeControls {
         const matchesTarget = targetLabel.includes(confirmedModel)
           || (targetLabel.startsWith("default (recommended)") && confirmedModel.endsWith(" (default)"));
         if (!confirmation.yesFocused || !matchesTarget) {
-          throw new Error("Claude displayed an unexpected model switch confirmation. Check the visible terminal before trying again.");
+          throw new Error(t("native.claude.confirmation"));
         }
         await this.terminal.key("\r");
         await this.terminal.waitFor(() => readClaudePermissionMode(this.terminal.text) !== null);
       }
       await this.terminal.openMenu("/model", "Select model");
       const applied = parseClaudeModelPicker(this.terminal.text).find((row) => row.focused);
-      if (!applied || applied.label !== target.label || applied.index !== target.index) throw new Error("Claude did not confirm the selected model.");
+      if (!applied || applied.label !== target.label || applied.index !== target.index) throw new Error(t("native.claude.notConfirmed"));
       await this.terminal.closeMenu();
       return { id, displayName: target.label, isCurrent: true };
     });
@@ -116,7 +117,7 @@ export class ClaudeNativeControls {
       if (enabled) {
         if (current === "plan") return true;
         if (!["default", "acceptEdits", "bypassPermissions", "auto"].includes(current)) {
-          throw new Error(`Claude cannot restore permission mode ${current} through the native mode switch.`);
+          throw new Error(t("native.claude.restoreUnsupported", { mode: current }));
         }
         await this.terminal.command("/plan");
         await this.terminal.waitFor(() => readClaudePermissionMode(this.terminal.text) === "plan");
@@ -129,7 +130,7 @@ export class ClaudeNativeControls {
       while (true) {
         const mode = readClaudePermissionMode(this.terminal.text);
         if (mode === target) break;
-        if (!mode || visited.has(mode)) throw new Error(`Claude could not restore ${target}; check the native permission mode.`);
+        if (!mode || visited.has(mode)) throw new Error(t("native.claude.restoreFailed", { mode: target }));
         visited.add(mode);
         await this.terminal.key("\u001b[Z");
         await this.terminal.waitFor(() => readClaudePermissionMode(this.terminal.text) !== mode);

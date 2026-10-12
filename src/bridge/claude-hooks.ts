@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { t } from "../i18n/index.ts";
 import type { ApprovalRequest, UserInputRequest } from "./bridge-types.ts";
 import {
   WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
@@ -310,7 +311,7 @@ export function buildClaudePermissionApprovalRequest(
 
   return {
     source: "cli",
-    summary: `Claude permission is required for ${toolName}.`,
+    summary: t("approval.claude.summary", { tool: toolName }),
     commandPreview: `${toolName}: ${detailPreview}`,
     toolName,
     detailLabel,
@@ -530,7 +531,7 @@ export function buildClaudeUserInputRequest(payload: ClaudeHookPayload, requestI
     }
     questions.push({
       id: `q${index + 1}`,
-      header: typeof raw.header === "string" ? raw.header : `Question ${index + 1}`,
+      header: typeof raw.header === "string" ? raw.header : t("input.question.default", { number: index + 1 }),
       question: raw.question,
       multiple: raw.multiSelect === true,
       isOther: true,
@@ -539,7 +540,7 @@ export function buildClaudeUserInputRequest(payload: ClaudeHookPayload, requestI
       options,
     });
   }
-  return { requestId, summary: "Claude is waiting for your answers.", questions };
+  return { requestId, summary: t("input.request.claude"), questions };
 }
 
 export function buildClaudeUserInputHookOutput(

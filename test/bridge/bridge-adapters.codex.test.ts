@@ -4,7 +4,8 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
 
 import {
   CodexPtyAdapter,
@@ -13,6 +14,8 @@ import {
   shouldSuppressCodexTransportFatalError,
   shouldTreatCodexNativeExitAsExpected,
 } from "../../src/bridge/bridge-adapters.codex.ts";
+
+beforeEach(() => setLocale("en"));
 
 describe("Codex version compatibility", () => {
   test("parses the installed Codex CLI version", () => {

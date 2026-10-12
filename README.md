@@ -352,6 +352,7 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/pi [prompt]` | daemon | 切换到 Pi；可选 prompt 在切换成功后转发 |
 | `/all <prompt>` | daemon | 将同一段提示词同时下发给全部已启动的 CLI；未启动的列为跳过，任一 CLI 忙碌时整条取消 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
+| `/lang`、`/lang zh`、`/lang en` | 直接启动、daemon | 查看或切换中文 / English 桥接提示；立即生效并保存偏好，`/language` 为别名 |
 | `/model`、`/model <编号>` | Codex、Claude Code、OpenCode、Pi | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |
 | `/plan`、`/plan on`、`/plan off` | Codex、Claude Code、OpenCode | 开启计划模式，或恢复进入前的模式 / primary agent |
 | `/stop` | 直接启动、daemon | 中断当前任务 |
@@ -365,6 +366,8 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、Claude、OpenCode 的结构化回答 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信首次配置 | 在 `wecom-setup` 提示后完成操作者配对 |
+
+语言切换及启动环境变量的优先级见 [界面语言](docs/configuration.md#界面语言)。
 
 Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单题可回复 `/answer 1` 或自定义文本；多题可回复 `/answer 1=Yes;2=2;3=1,2;4=1`，多选值以逗号分隔。答案一次提交全部题目。钩子超时或断线后，远程问题会清除，并提示在本地终端作答或使用 `/stop`。升级后需重启 daemon 和可见 Claude 窗口。
 

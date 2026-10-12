@@ -9,6 +9,7 @@ import type {
   BridgeTurnOrigin,
   BridgeWorkerStatus,
 } from "../bridge/bridge-types.ts";
+import { t } from "../i18n/index.ts";
 
 export function shouldDeferCodexInboundMessage(params: {
   adapter: BridgeAdapterKind;
@@ -51,11 +52,11 @@ export function canDrainDeferredCodexInboundQueue(params: {
 }
 
 export function formatDeferredCodexInboundQueueMessage(queuePosition: number): string {
-  return `Queued for delivery after the current local Codex turn finishes. Queue position: ${queuePosition}.`;
+  return t("bridge.deferred", { position: queuePosition });
 }
 
 export function isRetryableDeferredCodexDrainError(errorText: string): boolean {
-  return /still working|approval request is pending|waiting for local terminal input/i.test(
+  return /still working|approval request is pending|waiting for local terminal input|仍在运行|有待审批请求|正在等待本地终端输入/i.test(
     errorText,
   );
 }

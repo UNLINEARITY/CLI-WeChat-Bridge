@@ -5,6 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import fs from "node:fs";
+import { t } from "../i18n/index.ts";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
@@ -372,24 +373,24 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     if (!this.pty) {
-      throw new Error("codex adapter is not running.");
+      throw new Error(t("adapter.codex.notRunning"));
     }
     if (this.state.status === "busy") {
-      throw new Error("codex is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.codex.busy"));
     }
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.codex.approvalPending"));
     }
     if (this.startupBlocker) {
-      throw new Error("Codex is waiting for local terminal input before the session can continue.");
+      throw new Error(t("adapter.codex.localInputPending"));
     }
 
     await delay(this.warmupUntilMs - Date.now());
     if (!this.pty) {
-      throw new Error("codex adapter is not running.");
+      throw new Error(t("adapter.codex.notRunning"));
     }
     if (this.startupBlocker) {
-      throw new Error("Codex is waiting for local terminal input before the session can continue.");
+      throw new Error(t("adapter.codex.localInputPending"));
     }
 
     this.clearInterruptTimer();
@@ -422,7 +423,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   override async listModels(): Promise<BridgeModelOption[]> {
     if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
-      throw new Error("Codex model selection requires an active app-server thread.");
+      throw new Error(t("adapter.codex.modelThreadRequired"));
     }
     const response = await this.sendRpcRequest("model/list", { includeHidden: false });
     const data = isRecord(response) && Array.isArray(response.data) ? response.data : [];
@@ -444,7 +445,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.assertVisibleCodexWorkspace();
     const models = await this.listModels();
     const selected = models.find((model) => model.id === modelId);
-    if (!selected) throw new Error(`Codex model ${modelId} is not available.`);
+    if (!selected) throw new Error(t("adapter.codex.modelUnavailable", { model: modelId }));
     await this.sendRpcRequest("thread/settings/update", { threadId: this.sharedThreadId, model: selected.id });
     return selected;
   }
@@ -452,14 +453,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   override async setPlanMode(enabled: boolean): Promise<boolean> {
     this.assertVisibleCodexWorkspace();
     if (!this.usesRpcTurnTransport() || !this.sharedThreadId) {
-      throw new Error("Codex plan mode requires an active app-server thread.");
+      throw new Error(t("adapter.codex.planThreadRequired"));
     }
     const settings = await this.readCodexThreadSettings();
     if (enabled) {
       const response = await this.sendRpcRequest("collaborationMode/list", {});
       const modes = isRecord(response) && Array.isArray(response.data) ? response.data : [];
       const plan = modes.find((item) => isRecord(item) && (item.mode === "plan" || item.name?.toString().toLowerCase() === "plan"));
-      if (!isRecord(plan)) throw new Error("Codex plan mode is not available in this app-server.");
+      if (!isRecord(plan)) throw new Error(t("adapter.codex.planUnavailable"));
       this.previousCollaborationMode = isRecord(settings.collaborationMode) ? settings.collaborationMode : null;
       const mode = typeof plan.mode === "string" ? plan.mode : "plan";
       const model = typeof plan.model === "string" ? plan.model : settings.model;
@@ -485,7 +486,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private async readCodexThreadSettings(): Promise<{ model: string; effort?: unknown; collaborationMode?: unknown }> {
     const response = await this.sendRpcRequest("thread/read", { threadId: this.sharedThreadId, includeTurns: false });
     const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
-    if (!thread || typeof thread.model !== "string") throw new Error("Codex did not return the current thread model.");
+    if (!thread || typeof thread.model !== "string") throw new Error(t("adapter.codex.modelMissing"));
     return { model: thread.model, effort: thread.reasoningEffort, collaborationMode: thread.collaborationMode };
   }
 
@@ -1292,22 +1293,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private async sendPanelTurn(text: string): Promise<void> {
     this.assertVisibleCodexWorkspace();
     if (this.isNativePanelMode() && !this.nativeProcess) {
-      throw new Error("codex panel is not running.");
+      throw new Error(t("adapter.codex.panelNotRunning"));
     }
     this.recoverStaleBusyStateIfNeeded();
     this.recoverStaleActiveTurnStateIfNeeded();
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.codex.approvalPending"));
     }
     if (this.pendingUserInputRequest || this.state.pendingUserInput) {
-      throw new Error("Codex is waiting for user input. Reply with /answer and your response, or use /stop.");
+      throw new Error(t("adapter.codex.inputPending"));
     }
     if (this.pendingTurnStart || this.activeTurn || this.state.status === "busy") {
       const origin = this.state.activeTurnOrigin;
       if (origin === "local") {
-        throw new Error("The local Codex panel is still working. Wait for the current reply or use /stop.");
+        throw new Error(t("adapter.codex.localBusy"));
       }
-      throw new Error("codex is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.codex.busy"));
     }
 
     this.clearInterruptTimer();
@@ -2002,13 +2003,13 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       throw new Error("A thread id is required to resume a Codex thread.");
     }
     if (this.pendingVisibleResume) {
-      throw new Error("Codex is already switching visible threads.");
+      throw new Error(t("adapter.codex.switching"));
     }
     if (this.pendingApproval || this.pendingApprovalRequests.length > 0) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.codex.approvalPending"));
     }
     if (this.pendingUserInputRequest || this.state.pendingUserInput) {
-      throw new Error("Codex is waiting for user input. Reply with /answer or use /stop.");
+      throw new Error(t("adapter.codex.inputPendingShort"));
     }
     if (
       this.pendingTurnStart ||
@@ -2017,7 +2018,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.state.status === "awaiting_approval" ||
       this.state.status === "awaiting_input"
     ) {
-      throw new Error("codex is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.codex.busy"));
     }
     if (this.state.status !== "idle") {
       throw new Error(`Codex cannot switch threads while its status is ${this.state.status}.`);
@@ -2117,7 +2118,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     if (this.pendingApproval) {
-      throw new Error("A Codex approval request is pending. Reply with /confirm or /deny.");
+      throw new Error(t("adapter.codex.approvalPending"));
     }
 
     if (
@@ -2127,7 +2128,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         this.state.status === "busy" ||
         this.state.status === "awaiting_approval")
     ) {
-      throw new Error("codex is still working. Wait for the current reply or use /stop.");
+      throw new Error(t("adapter.codex.busy"));
     }
 
     const response = await this.sendRpcRequest("thread/resume", {
@@ -2232,7 +2233,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.setStatus("idle", "Codex task interrupted.");
       this.emit({
         type: "task_complete",
-        summary: "Interrupted",
+        summary: t("task.interrupted"),
         timestamp: nowIso(),
       });
     }, INTERRUPT_SETTLE_DELAY_MS);

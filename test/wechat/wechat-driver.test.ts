@@ -4,13 +4,16 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import { WechatChannelDriver } from "../../src/channels/wechat/wechat-driver.ts";
 import {
   WechatApiResponseError,
   type WeChatTransport,
 } from "../../src/wechat/wechat-transport.ts";
+
+beforeEach(() => setLocale("en"));
 
 class FakeWechatTransport {
   sendAttempts = 0;
@@ -60,6 +63,7 @@ function makeDriver(transport: FakeWechatTransport) {
   });
   return { driver, logs, errors };
 }
+
 
 describe("WechatChannelDriver basics", () => {
   test("identity, capabilities, and conversation refs", () => {

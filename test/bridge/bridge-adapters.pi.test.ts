@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { beforeEach, afterEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
 
 import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
@@ -23,6 +24,8 @@ import {
   PiTuiAdapter,
 } from "../../src/bridge/bridge-adapters.pi.ts";
 import type { BridgeEvent } from "../../src/bridge/bridge-types.ts";
+
+beforeEach(() => setLocale("en"));
 
 const tempDirectories: string[] = [];
 

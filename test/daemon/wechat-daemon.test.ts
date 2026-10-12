@@ -4,11 +4,12 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { setLocale } from "../../src/i18n/index.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import {
   buildVisibleClientLaunchArgs,
@@ -33,6 +34,8 @@ import type {
   DaemonEndpoint,
   DaemonRequest,
 } from "../../src/daemon/daemon-link.ts";
+
+beforeEach(() => setLocale("en"));
 
 function readRepoFile(relativePath: string): string {
   return fs.readFileSync(path.resolve(process.cwd(), relativePath), "utf8");
@@ -63,6 +66,7 @@ function buildDaemonEndpoint(overrides: Partial<DaemonEndpoint> = {}): DaemonEnd
     ...overrides,
   };
 }
+
 
 describe("wechat-daemon helpers", () => {
   test("parseDaemonSwitchCommand recognizes terminal switch commands", () => {

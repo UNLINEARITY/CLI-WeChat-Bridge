@@ -44,6 +44,8 @@ import {
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
 import { resolveOutboundConversationTarget } from "../core/outbound-target.ts";
 import { handleAdapterControl } from "./adapter-control.ts";
+import { handleLanguageControl } from "./language-control.ts";
+import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
@@ -962,7 +964,7 @@ async function main(): Promise<void> {
                   onBusy: async () => {
                     await queueInboundReply(
                       message.senderId,
-                      `${options.adapter} is still working. Wait for the current reply or use /stop.`,
+                      t("bridge.busy.remote", { adapter: options.adapter }),
                     );
                   },
                   forward: async () => {
@@ -1019,7 +1021,7 @@ async function main(): Promise<void> {
           if (chatType === "direct") {
             const result = await channelDriver.sendText({
               target: channelDriver.directConversation(senderId),
-              text: "Unauthorized.",
+              text: t("channel.unauthorized"),
               context: "notice",
               log: (entry) => stateStore.appendLog(entry),
             });
@@ -1182,7 +1184,7 @@ async function main(): Promise<void> {
                 onBusy: async () => {
                   await queueWechatMessage(
                     message.senderId,
-                    `${options.adapter} is still working. Wait for the current reply or use /stop.`,
+                    t("bridge.busy.remote", { adapter: options.adapter }),
                   );
                 },
                 forward: async () => {
@@ -1550,6 +1552,7 @@ function formatInboundMessagePreview(message: InboundWechatMessage): string {
 }
 
 export async function handleInboundMessage(params: {
+  localeSettingsFile?: string;
   message: InboundWechatMessage;
   channelMessage?: ChannelInboundMessage;
   options: BridgeCliOptions;
@@ -1588,7 +1591,7 @@ export async function handleInboundMessage(params: {
   if (message.senderId !== state.authorizedUserId) {
     await queueWechatMessage(
       message.senderId,
-      `Unauthorized. This bridge only accepts messages from ${channelDriver.operatorDescription}.`,
+      t("bridge.unauthorized", { mode: t("bridge.mode.bridge"), operator: channelDriver.operatorDescription }),
     );
     return null;
   }
@@ -1600,6 +1603,11 @@ export async function handleInboundMessage(params: {
   });
 
   switch (systemCommand?.type) {
+    case "language":
+      await queueWechatMessage(message.senderId, await handleLanguageControl({
+        target: systemCommand.target, settingsFile: params.localeSettingsFile ?? LANGUAGE_FILE, adapters: [adapter],
+      }));
+      return null;
     case "model":
     case "plan":
       await queueWechatMessage(message.senderId, await handleAdapterControl(adapter, message.senderId, systemCommand));
@@ -1607,7 +1615,7 @@ export async function handleInboundMessage(params: {
     case "broadcast":
       await queueWechatMessage(
         message.senderId,
-        "/all is only available in daemon mode. Start the daemon with wechat-daemon or wecom-daemon to broadcast to all workers.",
+        t("bridge.broadcast.daemonOnly"),
       );
       return null;
     case "status":
@@ -1620,7 +1628,7 @@ export async function handleInboundMessage(params: {
       if (!isWechatResumeEnabled(options.adapter)) {
         await queueWechatMessage(
           message.senderId,
-          `${channelDriver.displayName} /resume is disabled in ${options.adapter} mode. Use /resume directly inside "${channelDriver.id}-${options.adapter}"; the remote channel will follow the active local session.`,
+          t("bridge.resume.disabled", { channel: channelDriver.displayName, adapter: options.adapter, command: `${channelDriver.id}-${options.adapter}` }),
         );
         return null;
       }
@@ -1645,7 +1653,7 @@ export async function handleInboundMessage(params: {
       if (!adapter.createSession) {
         await queueWechatMessage(
           message.senderId,
-          `/new is not available in ${options.adapter} mode.`,
+          t("bridge.newSession.unavailable", { adapter: options.adapter }),
         );
         return null;
       }
@@ -1664,8 +1672,8 @@ export async function handleInboundMessage(params: {
       await queueWechatMessage(
         message.senderId,
         interrupted
-          ? "Interrupt signal sent to the active worker."
-          : "No running worker was available to interrupt.",
+          ? t("bridge.interrupt.workerSent")
+          : t("bridge.interrupt.workerIdle"),
       );
       return null;
     }
@@ -1678,19 +1686,19 @@ export async function handleInboundMessage(params: {
       resumeCoordinator.clear();
       await adapter.reset();
       stateStore.appendLog("Worker reset by owner.");
-      await queueWechatMessage(message.senderId, "Worker session has been reset.");
+      await queueWechatMessage(message.senderId, t("bridge.reset.done"));
       return null;
     case "confirm": {
       const pending = state.pendingConfirmation;
       if (!pending) {
-        await queueWechatMessage(message.senderId, "No pending approval request.");
+        await queueWechatMessage(message.senderId, t("approval.noPending"));
         return null;
       }
       const confirmed = await adapter.resolveApproval("confirm", pending.requestId);
       if (!confirmed) {
         await queueWechatMessage(
           message.senderId,
-          "The worker could not apply this approval request.",
+          t("bridge.approval.applyFailed"),
         );
         return null;
       }
@@ -1698,20 +1706,20 @@ export async function handleInboundMessage(params: {
         stateStore.clearPendingConfirmation();
       }
       stateStore.appendLog(`Approval confirmed: ${pending.commandPreview}`);
-      await queueWechatMessage(message.senderId, "Approval confirmed. Continuing...");
+      await queueWechatMessage(message.senderId, t("approval.confirmed"));
       return null;
     }
     case "deny": {
       const pending = state.pendingConfirmation;
       if (!pending) {
-        await queueWechatMessage(message.senderId, "No pending approval request.");
+        await queueWechatMessage(message.senderId, t("approval.noPending"));
         return null;
       }
       const denied = await adapter.resolveApproval("deny", pending.requestId);
       if (!denied) {
         await queueWechatMessage(
           message.senderId,
-          "The worker could not deny this approval request cleanly.",
+          t("bridge.approval.denyFailed"),
         );
         return null;
       }
@@ -1719,13 +1727,13 @@ export async function handleInboundMessage(params: {
         stateStore.clearPendingConfirmation();
       }
       stateStore.appendLog(`Approval denied: ${pending.commandPreview}`);
-      await queueWechatMessage(message.senderId, "Approval denied.");
+      await queueWechatMessage(message.senderId, t("approval.denied"));
       return null;
     }
     case "answer": {
       const pending = state.pendingUserInput;
       if (!pending) {
-        await queueWechatMessage(message.senderId, "No pending user input request.");
+        await queueWechatMessage(message.senderId, t("bridge.answer.none"));
         return null;
       }
 
@@ -1739,14 +1747,14 @@ export async function handleInboundMessage(params: {
       if (!submitted) {
         await queueWechatMessage(
           message.senderId,
-          "The worker could not apply this answer.",
+          t("bridge.answer.failed"),
         );
         return null;
       }
 
       if (stateStore.getState().pendingUserInput?.requestId === pending.requestId) stateStore.clearPendingUserInput();
       stateStore.appendLog(`User input answered: ${parsed.preview}`);
-      await queueWechatMessage(message.senderId, "Answer submitted. Continuing...");
+      await queueWechatMessage(message.senderId, t("bridge.answer.sent"));
       return null;
     }
   }
@@ -1780,7 +1788,7 @@ export async function handleInboundMessage(params: {
         message.senderId,
         pendingUserInput
           ? formatPendingUserInputReminder(pendingUserInput)
-          : `${options.adapter} is waiting for structured input. Reply with /answer <key>=<value> ...`,
+          : t("bridge.input.waiting", { adapter: options.adapter }),
       );
     },
     remindBusy: async () => {
@@ -1791,16 +1799,14 @@ export async function handleInboundMessage(params: {
       ) {
         await queueWechatMessage(
           message.senderId,
-          `${
-            options.adapter === "opencode" ? "OpenCode" : options.adapter === "pi" ? "Pi" : "codex"
-          } is currently busy with a local terminal turn. Wait for it to finish or use /stop.`,
+          t("bridge.busy.local", { adapter: options.adapter === "opencode" ? "OpenCode" : options.adapter === "pi" ? "Pi" : "codex" }),
         );
         return;
       }
 
       await queueWechatMessage(
         message.senderId,
-        `${options.adapter} is still working. Wait for the current reply or use /stop.`,
+        t("bridge.busy.remote", { adapter: options.adapter }),
       );
     },
     defer: async () => {
