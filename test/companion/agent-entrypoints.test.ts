@@ -47,6 +47,13 @@ describe("agent CLI entrypoints", () => {
     };
 
     expect(Object.keys(packageJson.bin ?? {}).sort()).toEqual([
+      "telegram-check-update",
+      "telegram-claude",
+      "telegram-codex",
+      "telegram-daemon",
+      "telegram-opencode",
+      "telegram-pi",
+      "telegram-setup",
       "wechat-check-update",
       "wechat-claude",
       "wechat-codex",

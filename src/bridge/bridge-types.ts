@@ -109,7 +109,7 @@ export type BridgeState = {
   pendingConfirmation?: PendingApproval | null;
   pendingUserInput?: PendingUserInputRequest | null;
   lastActivityAt?: string;
-  channelId?: "wechat" | "wecom" | "local";
+  channelId?: "wechat" | "wecom" | "telegram" | "local";
 };
 
 export type BridgeAdapterState = {

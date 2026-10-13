@@ -129,6 +129,9 @@ import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
+import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
+import { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
+import { TelegramChannelPort } from "../channels/telegram/telegram-channel-port.ts";
 import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
 import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
 import { createChannelDriver } from "../channels/channel-driver-factory.ts";
@@ -242,6 +245,7 @@ function getCliChannelId(argv: string[] = process.argv.slice(2)): BridgeChannelI
   const index = argv.indexOf("--channel");
   const value = index >= 0 ? argv[index + 1] : undefined;
   if (value === "wecom") return "wecom";
+  if (value === "telegram") return "telegram";
   if (value === "local") return "local";
   return "wechat";
 }
@@ -333,7 +337,13 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
 
     if (arg === "--help" || arg === "-h") {
       const channelDisplayName =
-        channelId === "wecom" ? "WeCom" : channelId === "local" ? "Local" : "WeChat";
+        channelId === "wecom"
+          ? "WeCom"
+          : channelId === "telegram"
+            ? "Telegram"
+            : channelId === "local"
+              ? "Local"
+              : "WeChat";
       process.stdout.write(
         [
           `Usage: ${channelId}-daemon [--cwd <path>] [--adapter <codex|claude|opencode|pi>] [--profile <name-or-path>] [--no-open]`,
@@ -356,7 +366,10 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     }
 
     if (arg === "--channel") {
-      if (!next || (next !== "wechat" && next !== "wecom" && next !== "local")) {
+      if (
+        !next ||
+        (next !== "wechat" && next !== "wecom" && next !== "telegram" && next !== "local")
+      ) {
         throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
       }
       channelId = next;
@@ -902,6 +915,7 @@ export class WechatDaemon {
   private readonly channelDriver: ChannelDriver;
   private readonly channelId: BridgeChannelId;
   private readonly wecomTransport: WecomTransport | null;
+  private readonly telegramTransport: TelegramTransport | null;
   private readonly localFiles: LocalChannelFiles | null;
   private readonly inboundConversationContext =
     new InboundConversationContext();
@@ -933,6 +947,7 @@ export class WechatDaemon {
     channelId?: BridgeChannelId;
     accountId?: string;
     wecomTransport?: WecomTransport | null;
+    telegramTransport?: TelegramTransport | null;
     localFiles?: LocalChannelFiles | null;
     deps?: WechatDaemonDeps;
   }) {
@@ -942,6 +957,7 @@ export class WechatDaemon {
     this.transport = params.transport;
     this.channelId = params.channelId ?? "wechat";
     this.wecomTransport = params.wecomTransport ?? null;
+    this.telegramTransport = params.telegramTransport ?? null;
     this.localFiles = params.localFiles ?? null;
     this.deps = params.deps ?? {};
     this.channelDriver = createChannelDriver({
@@ -950,6 +966,7 @@ export class WechatDaemon {
       accountId: params.accountId,
       wechatTransport: this.transport,
       wecomTransport: this.wecomTransport,
+      telegramTransport: this.telegramTransport,
       localFiles: this.localFiles,
       buildWechatInboundPrompt: (text, attachments) =>
         buildWechatInboundPrompt(
@@ -1280,6 +1297,11 @@ export class WechatDaemon {
     }
     try {
       this.wecomTransport?.stop();
+    } catch {
+      // Best effort shutdown.
+    }
+    try {
+      await this.telegramTransport?.stop();
     } catch {
       // Best effort shutdown.
     }
@@ -1950,6 +1972,25 @@ export class WechatDaemon {
     if (this.channelId === "wecom") {
       return new WecomChannelPort({
         transport: this.wecomTransport!,
+        sendText: (target, text, kind) =>
+          this.queueWechatMessage(
+            this.authorizedUserId,
+            text,
+            toWechatSendContext(kind),
+            target,
+          ),
+        prefixText: (currentAdapter, text) =>
+          prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
+        onEmptyVisibleReply: (currentAdapter, rawText) => {
+          appendDaemonLog(
+            `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
+          );
+        },
+      });
+    }
+    if (this.channelId === "telegram") {
+      return new TelegramChannelPort({
+        transport: this.telegramTransport!,
         sendText: (target, text, kind) =>
           this.queueWechatMessage(
             this.authorizedUserId,
@@ -3415,20 +3456,28 @@ export async function runDaemon(
     options.channelId === "wecom"
       ? await ensureWecomAccount({ log })
       : null;
+  const telegramAccount =
+    options.channelId === "telegram"
+      ? await ensureTelegramAccount({ log })
+      : null;
   const credentials = wecomAccount
     ? { userId: wecomAccount.operatorUserId }
-    : options.channelId === "local"
-      ? { userId: LOCAL_CHANNEL_OPERATOR_ID }
-      : await ensureWechatCredentials({
-          requireUserId: true,
-          validateExisting: true,
-          log,
-        });
+    : telegramAccount
+      ? { userId: telegramAccount.operatorUserId }
+      : options.channelId === "local"
+        ? { userId: LOCAL_CHANNEL_OPERATOR_ID }
+        : await ensureWechatCredentials({
+            requireUserId: true,
+            validateExisting: true,
+            log,
+          });
   if (!credentials.userId) {
     throw new Error(
       options.channelId === "wecom"
         ? "Saved WeCom credentials are missing operatorUserId."
-        : "Saved WeChat credentials are missing userId.",
+        : options.channelId === "telegram"
+          ? "Saved Telegram credentials are missing operatorUserId."
+          : "Saved WeChat credentials are missing userId.",
     );
   }
 
@@ -3441,10 +3490,19 @@ export async function runDaemon(
         ? new WeChatTransport({ log, logError })
         : null,
     channelId: options.channelId,
-    accountId: wecomAccount?.botId,
+    accountId: wecomAccount?.botId ?? telegramAccount?.botUsername,
     wecomTransport: wecomAccount
       ? new WecomTransport({
           account: wecomAccount,
+          logger: {
+            log: (message) => log(message),
+            error: (message) => logError(message),
+          },
+        })
+      : null,
+    telegramTransport: telegramAccount
+      ? new TelegramTransport({
+          account: telegramAccount,
           logger: {
             log: (message) => log(message),
             error: (message) => logError(message),

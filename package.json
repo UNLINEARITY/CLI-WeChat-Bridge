@@ -49,7 +49,14 @@
     "wecom-pi": "bin/wecom-pi.mjs",
     "wecom-daemon": "bin/wecom-daemon.mjs",
     "wecom-setup": "bin/wecom-setup.mjs",
-    "wecom-check-update": "bin/wecom-check-update.mjs"
+    "wecom-check-update": "bin/wecom-check-update.mjs",
+    "telegram-codex": "bin/telegram-codex.mjs",
+    "telegram-claude": "bin/telegram-claude.mjs",
+    "telegram-opencode": "bin/telegram-opencode.mjs",
+    "telegram-pi": "bin/telegram-pi.mjs",
+    "telegram-daemon": "bin/telegram-daemon.mjs",
+    "telegram-setup": "bin/telegram-setup.mjs",
+    "telegram-check-update": "bin/telegram-check-update.mjs"
   },
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-permissions.mjs",
@@ -87,7 +94,8 @@
     "test:companion": "bun test test/companion",
     "test:wechat": "bun test test/wechat",
     "test:wecom": "bun test test/wecom",
-    "test:watch": "bun test --watch test"
+    "test:watch": "bun test --watch test",
+    "test:telegram": "bun test test/telegram"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",

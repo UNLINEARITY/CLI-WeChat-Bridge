@@ -122,10 +122,11 @@ describe("wechat-daemon helpers", () => {
   test("parseDaemonCliArgs selects WeCom while preserving the legacy WeChat default", () => {
     expect(parseDaemonCliArgs([]).channelId).toBeUndefined();
     expect(parseDaemonCliArgs(["--channel", "wecom"]).channelId).toBe("wecom");
+    expect(parseDaemonCliArgs(["--channel", "telegram"]).channelId).toBe("telegram");
     expect(parseDaemonCliArgs(["--channel", "local"]).channelId).toBe("local");
     let failure = "";
     try {
-      parseDaemonCliArgs(["--channel", "telegram"]);
+      parseDaemonCliArgs(["--channel", "sms"]);
     } catch (error) {
       failure = String(error);
     }

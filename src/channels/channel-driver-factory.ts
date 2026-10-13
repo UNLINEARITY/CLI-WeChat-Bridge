@@ -9,8 +9,10 @@ import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { WeChatTransport } from "../wechat/wechat-transport.ts";
 import { WecomChannelDriver } from "./wecom/wecom-driver.ts";
 import { WechatChannelDriver } from "./wechat/wechat-driver.ts";
+import { TelegramChannelDriver } from "./telegram/telegram-driver.ts";
 import { LocalChannelDriver, type LocalChannelFiles } from "./local/local-driver.ts";
 import type { WecomTransport } from "./wecom/wecom-transport.ts";
+import type { TelegramTransport } from "./telegram/telegram-transport.ts";
 
 export type CreateChannelDriverInput = {
   channelId: BridgeChannelId;
@@ -18,6 +20,7 @@ export type CreateChannelDriverInput = {
   accountId?: string;
   wechatTransport: WeChatTransport | null;
   wecomTransport: WecomTransport | null;
+  telegramTransport?: TelegramTransport | null;
   localFiles?: LocalChannelFiles | null;
   /**
    * Injected by the caller so the channel layer stays free of bridge-layer
@@ -40,6 +43,17 @@ export function createChannelDriver(input: CreateChannelDriverInput): ChannelDri
     }
     return new WecomChannelDriver({
       transport: input.wecomTransport,
+      accountId: input.accountId,
+      operatorId: input.authorizedUserId,
+      logError: input.logError,
+    });
+  }
+  if (input.channelId === "telegram") {
+    if (!input.telegramTransport) {
+      throw new Error("The telegram channel requires a Telegram transport.");
+    }
+    return new TelegramChannelDriver({
+      transport: input.telegramTransport,
       accountId: input.accountId,
       operatorId: input.authorizedUserId,
       logError: input.logError,

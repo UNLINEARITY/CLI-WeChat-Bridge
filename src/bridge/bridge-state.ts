@@ -178,7 +178,9 @@ export function normalizeBridgeLockPayload(value: unknown): BridgeLockPayload | 
     startedAt: record.startedAt,
     lifecycle: record.lifecycle === "companion_bound" ? "companion_bound" : "persistent",
     legacyLifecycleFallback: hasExplicitLifecycle ? undefined : true,
-    ...(record.channelId === "wechat" || record.channelId === "wecom"
+    ...(record.channelId === "wechat" ||
+      record.channelId === "wecom" ||
+      record.channelId === "telegram"
       ? { channelId: record.channelId }
       : {}),
   };

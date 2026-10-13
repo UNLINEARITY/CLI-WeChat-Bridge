@@ -17,6 +17,7 @@ import {
 } from "../bridge/bridge-adapters.codex.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
+import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
 import type { BridgeChannelId } from "../core/channel-types.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import {
@@ -255,7 +256,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
         [
           `Usage: ${commandName} [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--session-start-mode <restore|new>] [...${helpAdapter} args]`,
           "",
-          `Ensures the ${channelId === "wecom" ? "WeCom" : "WeChat"} runtime for the current directory, then opens or reuses the visible CLI.`,
+          `Ensures the ${channelId === "wecom" ? "WeCom" : channelId === "telegram" ? "Telegram" : "WeChat"} runtime for the current directory, then opens or reuses the visible CLI.`,
           "If a same-workspace daemon is running, the command delegates to that daemon.",
           helpAdapter === "codex"
             ? "Codex restores the current session by default."
@@ -280,7 +281,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     }
 
     if (arg === "--channel") {
-      if (!next || (next !== "wechat" && next !== "wecom")) {
+      if (!next || (next !== "wechat" && next !== "wecom" && next !== "telegram")) {
         throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
       }
       channelId = next;
@@ -514,8 +515,8 @@ export function buildBackgroundBridgeArgs(
     lifecycle,
   );
 
-  if (options.channelId === "wecom") {
-    args.push("--channel", "wecom");
+  if (options.channelId === "wecom" || options.channelId === "telegram") {
+    args.push("--channel", options.channelId);
   }
 
   if (options.sessionStartMode !== "restore") {
@@ -767,6 +768,12 @@ export async function ensureCompanionStartChannelCredentials(
   if (options.channelId === "wecom") {
     await ensureWecomAccount({
       log: (message) => log(options.adapter, message, "wecom"),
+    });
+    return;
+  }
+  if (options.channelId === "telegram") {
+    await ensureTelegramAccount({
+      log: (message) => log(options.adapter, message, "telegram"),
     });
     return;
   }

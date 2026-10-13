@@ -349,6 +349,7 @@ export const messages: Record<string, string> = {
   "status.questions": "{count} 个问题",
   "operator.wechat": "已配置的微信操作者",
   "operator.wecom": "已配对的企业微信操作者",
+  "operator.telegram": "已配对的 Telegram 操作者",
   "operator.local": "本地操作者",
   "status.label.instance_id": "实例 ID",
   "status.label.adapter": "适配器",

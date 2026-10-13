@@ -50,6 +50,9 @@ import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
+import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
+import { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
+import { TelegramChannelDriver } from "../channels/telegram/telegram-driver.ts";
 import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
 import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
 import { WecomChannelDriver } from "../channels/wecom/wecom-driver.ts";
@@ -279,7 +282,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
         i += 1;
         break;
       case "--channel":
-        if (!next || (next !== "wechat" && next !== "wecom")) {
+        if (!next || (next !== "wechat" && next !== "wecom" && next !== "telegram")) {
           throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
         }
         channelId = next;
@@ -393,24 +396,41 @@ async function main(): Promise<void> {
     options.channelId === "wecom"
       ? await ensureWecomAccount({ log })
       : null;
+  const telegramAccount =
+    options.channelId === "telegram"
+      ? await ensureTelegramAccount({ log })
+      : null;
   const credentials = wecomAccount
     ? { userId: wecomAccount.operatorUserId }
-    : await ensureWechatCredentials({
-        requireUserId: true,
-        validateExisting: true,
-        log,
-      });
+    : telegramAccount
+      ? { userId: telegramAccount.operatorUserId }
+      : await ensureWechatCredentials({
+          requireUserId: true,
+          validateExisting: true,
+          log,
+        });
   if (!credentials.userId) {
     throw new Error(
       options.channelId === "wecom"
         ? "Saved WeCom credentials are missing operatorUserId."
-        : "Saved WeChat credentials are missing userId.",
+        : options.channelId === "telegram"
+          ? "Saved Telegram credentials are missing operatorUserId."
+          : "Saved WeChat credentials are missing userId.",
     );
   }
   const transport = new WeChatTransport({ log, logError });
   const wecomTransport = wecomAccount
     ? new WecomTransport({
         account: wecomAccount,
+        logger: {
+          log: (message) => log(message),
+          error: (message) => logError(message),
+        },
+      })
+    : null;
+  const telegramTransport = telegramAccount
+    ? new TelegramTransport({
+        account: telegramAccount,
         logger: {
           log: (message) => log(message),
           error: (message) => logError(message),
@@ -424,16 +444,23 @@ async function main(): Promise<void> {
         operatorId: credentials.userId,
         logError,
       })
-    : new WechatChannelDriver({
-        transport,
-        logError,
-        buildInboundPrompt: (text, attachments) =>
-          buildWechatInboundPrompt(
-            text,
-            attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
-              attachment.kind === "image" || attachment.kind === "file"),
-          ),
-      });
+    : telegramTransport
+      ? new TelegramChannelDriver({
+          transport: telegramTransport,
+          accountId: telegramAccount?.botUsername,
+          operatorId: credentials.userId,
+          logError,
+        })
+      : new WechatChannelDriver({
+          transport,
+          logError,
+          buildInboundPrompt: (text, attachments) =>
+            buildWechatInboundPrompt(
+              text,
+              attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
+                attachment.kind === "image" || attachment.kind === "file"),
+            ),
+        });
 
   // 非阻塞地检查更新（不影响启动速度，也避免首次登录时打断二维码输出）
   // unref：不能让这个延迟检查把 event loop 挂活（如 --doctor 或快速退出场景），

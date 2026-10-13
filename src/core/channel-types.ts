@@ -6,10 +6,11 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
 
-export type BridgeChannelId = "wechat" | "wecom" | "local";
+export type BridgeChannelId = "wechat" | "wecom" | "telegram" | "local";
 
 export function normalizeBridgeChannelId(value: unknown): BridgeChannelId {
   if (value === "wecom") return "wecom";
+  if (value === "telegram") return "telegram";
   if (value === "local") return "local";
   return "wechat";
 }

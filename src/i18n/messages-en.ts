@@ -349,6 +349,7 @@ export const messages: Record<string, string> = {
   "status.questions": "{count} question(s)",
   "operator.wechat": "the configured WeChat owner",
   "operator.wecom": "the paired WeCom operator",
+  "operator.telegram": "the paired Telegram operator",
   "operator.local": "the local operator",
   "status.label.instance_id": "instance_id",
   "status.label.adapter": "adapter",
