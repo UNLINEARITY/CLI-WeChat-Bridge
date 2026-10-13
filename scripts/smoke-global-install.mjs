@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 UNLINEARITY <unlinearity@gmail.com>
+// Source: https://github.com/UNLINEARITY/CLI-WeChat-Bridge
+// This file is part of CLI-WeChat-Bridge. Modifications and derivative works
+// must be released under AGPL-3.0-or-later with full source code; see
+// LICENSE.txt. Network services built on it must offer source to users.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -135,14 +141,13 @@ function printHelp() {
 
 function isSafeSmokeCommand(commandName) {
   return (
-    /^(?:wechat|wecom)-daemon$/.test(commandName) ||
-    /^(?:wechat|wecom)-(?:codex|claude|opencode|pi)$/.test(commandName)
+    /^(?:wechat|wecom|telegram)-daemon$/.test(commandName) ||
+    /^(?:wechat|wecom|telegram)-(?:codex|claude|opencode|pi)$/.test(commandName)
   );
 }
 
-function getSmokeCommands() {
-  return Object.keys(BIN_MAP)
-    .filter((commandName) => !/^(?:wechat|wecom)-(?:setup|check-update)$/.test(commandName))
+export function getSmokeCommands(binMap = BIN_MAP) {
+  return Object.keys(binMap)
     .filter(isSafeSmokeCommand)
     .sort();
 }
@@ -385,8 +390,10 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[smoke-global] ERROR: ${message}\n`);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[smoke-global] ERROR: ${message}\n`);
+    process.exit(1);
+  });
+}

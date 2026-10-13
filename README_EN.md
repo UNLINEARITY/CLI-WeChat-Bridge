@@ -56,7 +56,7 @@ The local CLI remains the primary workspace:
 
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0` (the official LTS release is recommended).
 - Install at least one of these local CLIs and keep it up to date:
-  - [Codex](https://github.com/openai/codex) (validated with `0.149.x`–`0.161.x`).
+  - [Codex](https://github.com/openai/codex) (managed-client workflow validated with `0.149.x`–`0.161.x`; current-session attach requires the `0.162+` shared daemon).
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode) (supports both `1.18.x` and `2.0.x`).
   - [Pi](https://github.com/earendil-works/pi) (connects through a native TUI extension; the `pi` command must be available locally).
@@ -165,7 +165,7 @@ WeCom uses the official smart-bot persistent connection and does not need a publ
 
 #### 3.3 Telegram setup
 
-Telegram uses official [Bot API long polling](https://core.telegram.org/bots/api#getupdates), so no public callback URL is required. Your computer must be able to reach `api.telegram.org`. The published npm version `1.2.2` does not include Telegram commands; install a build that includes this feature. See the [source build instructions](docs/development.md#源码更新) (Chinese).
+Telegram uses official [Bot API long polling](https://core.telegram.org/bots/api#getupdates), so no public callback URL is required. Your computer must be able to reach `api.telegram.org`. Telegram commands are included starting with `1.2.3`. See the [source build instructions](docs/development.md#源码更新) (Chinese).
 
 1. Open [@BotFather](https://t.me/BotFather) in Telegram, send `/newbot`, and follow the prompts to create a bot and obtain its Bot Token ([official instructions](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)).
 2. Run `telegram-setup` in your local terminal and enter the Bot Token.

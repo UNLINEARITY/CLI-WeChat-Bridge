@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 UNLINEARITY <unlinearity@gmail.com>
+// Source: https://github.com/UNLINEARITY/CLI-WeChat-Bridge
+// This file is part of CLI-WeChat-Bridge. Modifications and derivative works
+// must be released under AGPL-3.0-or-later with full source code; see
+// LICENSE.txt. Network services built on it must offer source to users.
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -18,6 +24,7 @@ const MIRROR_FILES = [
   "skills",
   "scripts/ensure-node-pty-permissions.mjs",
   "README.md",
+  "README_EN.md",
   "LICENSE.txt",
 ];
 const NPM_EXEC_PATH = process.env.npm_execpath;
@@ -204,11 +211,11 @@ function copyMirrorFile(sourcePath, targetPath) {
   fs.cpSync(sourcePath, targetPath, { recursive: true });
 }
 
-function createMirrorPackage(packageJson) {
+export function createMirrorPackage(packageJson, sourceRoot = REPO_ROOT) {
   const mirrorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cli-wechat-bridge-mirror-"));
 
   for (const fileName of MIRROR_FILES) {
-    copyMirrorFile(path.join(REPO_ROOT, fileName), path.join(mirrorRoot, fileName));
+    copyMirrorFile(path.join(sourceRoot, fileName), path.join(mirrorRoot, fileName));
   }
 
   const mirrorPackageJson = {
@@ -316,10 +323,12 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
-  process.stderr.write(`[publish-dual] ERROR: ${message}\n`);
-  process.exit(1);
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    main();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[publish-dual] ERROR: ${message}\n`);
+    process.exit(1);
+  }
 }

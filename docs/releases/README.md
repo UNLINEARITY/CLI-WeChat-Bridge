@@ -1,8 +1,14 @@
 # CLI WeChat Bridge 版本发布说明
 
-本目录包含 CLI WeChat Bridge 所有已发布版本的详细说明。
+本目录包含 CLI WeChat Bridge 各版本的详细说明。
 
 ## 版本列表
+
+### [v1.2.3](./1.2.3.md) / [中文说明](./1.2.3_CN.md)
+
+**Telegram 接入、当前 Codex 会话附加与双语 README**
+
+新增 Telegram Bot API 信道，支持操作者私聊配对、四个 CLI 直接启动与常驻 daemon，最终回复和附件回传沿用各自信道。Codex >=0.162 共享 daemon 模式支持 `--attach-current-session` 和 `$codex-bridge` 接入已有 TUI 会话并继承线程设置。修复独立 bridge／attach 的 Telegram 最终回复误走微信端口，以及启动信息硬编码信道的问题；新增完整英文 README 与语言导航，并补齐双包文档打包、版本和命令元数据及 Telegram global smoke。升级要求、运行边界与验证结果见双语说明。
 
 ### [v1.2.2](./1.2.2.md) / [中文说明](./1.2.2_CN.md)
 

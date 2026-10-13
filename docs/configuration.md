@@ -33,7 +33,7 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 ~/.cli-bridge
 ```
 
-企业微信凭据和附件使用独立子目录：`~/.cli-bridge/wecom/account.json`、`~/.cli-bridge/wecom/inbound-attachments/` 和 `~/.cli-bridge/wecom/inbound-message-claims/`。工作区状态、bridge lock、daemon endpoint 与 `bridge.log` 仍由两个通道共用，从而保证同一工作区一次只有一个远程通道拥有本地 CLI。
+企业微信凭据和附件使用独立子目录：`~/.cli-bridge/wecom/account.json`、`~/.cli-bridge/wecom/inbound-attachments/` 和 `~/.cli-bridge/wecom/inbound-message-claims/`。Telegram 对应使用 `~/.cli-bridge/telegram/account.json`、`~/.cli-bridge/telegram/inbound-attachments/` 和 `~/.cli-bridge/telegram/inbound-message-claims/`。工作区状态、bridge lock、daemon endpoint 与 `bridge.log` 仍由各通道共用，从而保证同一工作区一次只有一个远程通道拥有本地 CLI。
 
 可以通过 `CLI_BRIDGE_DATA_DIR` 覆盖。状态文件、日志和旧目录迁移说明见 [问题排查](troubleshooting.md#数据目录与状态文件)。
 
@@ -41,7 +41,7 @@ CLI_BRIDGE_DATA_DIR=/path/to/cli-bridge-data wechat-daemon
 
 ## 界面语言
 
-在微信、企业微信或本地通道中发送以下指令，即可切换 bridge 提示语言：
+在微信、企业微信、Telegram 或本地通道中发送以下指令，即可切换 bridge 提示语言：
 
 | 指令 | 行为 |
 | --- | --- |
@@ -65,7 +65,7 @@ CLI_BRIDGE_LANG=zh wechat-daemon
 CLI_BRIDGE_LANG=en wechat-daemon
 ```
 
-企业微信使用相同变量，将命令换为 `wecom-daemon`；直接启动命令如 `wechat-codex`、`wecom-claude` 也会继承该变量。
+企业微信与 Telegram 使用相同变量，将命令换为 `wecom-daemon` 或 `telegram-daemon`；对应的直接启动命令也会继承该变量。
 
 PowerShell 当前终端会话：
 
@@ -88,6 +88,10 @@ wechat-daemon
 | `WECOM_BOT_ID` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Bot ID |
 | `WECOM_BOT_SECRET` | 覆盖 `wecom-setup` 保存的企业微信智能机器人 Secret |
 | `WECOM_OPERATOR_USER_ID` | 覆盖已配对的企业微信操作者 userid |
+| `TELEGRAM_BOT_TOKEN` | 设置或覆盖 BotFather 创建的 Bot Token；仅设置此项时仍需运行 `telegram-setup` 配对 |
+| `TELEGRAM_OPERATOR_USER_ID` | 覆盖已配对操作者的数字 user ID，用于入站授权；不是 `@username` |
+| `TELEGRAM_OPERATOR_CHAT_ID` | 覆盖操作者的私聊 chat ID，用于默认回复目标 |
+| `TELEGRAM_BOT_USERNAME` | 可选，覆盖机器人用户名 |
 | `WECOM_MAX_INBOUND_IMAGE_MB` | 覆盖企业微信入站图片下载限制，默认 20 MB |
 | `WECOM_MAX_INBOUND_FILE_MB` | 覆盖企业微信入站文件下载限制，默认 50 MB |
 | `WECOM_MAX_INBOUND_VIDEO_MB` | 覆盖企业微信入站视频下载限制，默认 50 MB |

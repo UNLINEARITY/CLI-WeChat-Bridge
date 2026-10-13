@@ -56,7 +56,7 @@
 
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0`（建议直接安装官网 LTS 版本）
 - 已安装以下任意一种本地 CLI，并尽量保持最新版本：
-  - [Codex](https://github.com/openai/codex)（已验证 `0.149.x`–`0.161.x`）
+  - [Codex](https://github.com/openai/codex)（常规桥接已验证 `0.149.x`–`0.161.x`；当前会话 attach 需 `0.162+` 共享 daemon）
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
   - [Pi](https://github.com/earendil-works/pi)（通过原生 TUI extension 接入；需要本机可执行 `pi` 命令）
@@ -165,7 +165,7 @@ wechat-setup --qr-mode normal
 
 #### 3.3 Telegram 接入
 
-Telegram 使用官方 [Bot API 长轮询](https://core.telegram.org/bots/api#getupdates)，不需要公网回调地址，本机需能访问 `api.telegram.org`。npm 发布的 `1.2.2` 尚未包含 Telegram 命令，使用时需安装包含此功能的构建；源码安装步骤见[开发说明](docs/development.md#源码更新)。
+Telegram 使用官方 [Bot API 长轮询](https://core.telegram.org/bots/api#getupdates)，不需要公网回调地址，本机需能访问 `api.telegram.org`。Telegram 从 `1.2.3` 起提供上述全局命令；源码安装步骤见[开发说明](docs/development.md#源码更新)。
 
 1. 在 Telegram 中打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示创建机器人并取得 Bot Token（[官方创建说明](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)）。
 2. 在本地终端运行 `telegram-setup`，输入 Bot Token。

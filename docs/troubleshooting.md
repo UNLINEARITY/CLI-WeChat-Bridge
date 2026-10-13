@@ -1,6 +1,6 @@
 # 问题排查
 
-本文记录 CLI WeChat Bridge 的常见问题、已知限制和排查入口，包括状态文件、网络发送、会话同步、审批行为以及微信与企业微信通道。
+本文记录 CLI WeChat Bridge 的常见问题、已知限制和排查入口，包括状态文件、网络发送、会话同步、审批行为以及微信、企业微信与 Telegram 通道。
 
 ## 数据目录与状态文件
 
@@ -28,27 +28,38 @@
 | --- | --- |
 | `account.json` | 微信凭据 |
 | `wecom/account.json` | 企业微信 Bot 凭据与操作者配对信息 |
+| `telegram/account.json` | Telegram Bot Token、操作者 user ID 与私聊 chat ID |
 | `sync_buf.txt` | iLink 增量同步游标 |
 | `context_tokens.json` | 微信上下文 token 缓存 |
-| `bridge.log` | bridge、daemon、适配器、微信和企业微信发送失败日志 |
+| `bridge.log` | bridge、daemon、适配器与各信道发送失败日志 |
 | `bridge.lock.json` | 独立 bridge 运行锁 |
 | `daemon-endpoint.json` | 当前通道 daemon 的本地 IPC endpoint |
 | `inbound-attachments/<date>/` | 微信入站图片和普通文件的本地保存目录 |
 | `wecom/inbound-attachments/<date>/` | 企业微信入站媒体的本地保存目录 |
+| `telegram/inbound-attachments/` | Telegram 入站图片、文件、视频与音频的本地保存目录 |
 | `workspaces/<workspace-key>/bridge-state.json` | 当前工作区状态、会话和 adapter 状态 |
 | `workspaces/<workspace-key>/codex-panel-endpoint.json` | 当前工作区 companion endpoint；文件名保留历史兼容 |
 | `workspaces/<workspace-key>/<adapter>-companion-endpoint.json` | daemon / 多适配器模式下的 companion endpoint |
 
 如果微信没有收到回复，优先确认 `bridge.log` 中是否出现 `wechat_send_failed`、`UND_ERR_CONNECT_TIMEOUT`、`context_token`、`endpoint`、`final_reply` 或 adapter 相关错误。
 
-## `wechat-*` / `wecom-*` 提示找不到 bridge
+## Telegram 配对或消息收发异常
+
+- 运行 `telegram-setup --check` 校验已配置的 Bot Token；401 表示 token 被拒绝，需要核对 BotFather 提供的值并重新配对。
+- 配对必须在机器人私聊内发送终端显示的 `/pair <code>`，有效期为 10 分钟；后续使用同一 Telegram 账号发送任务。
+- 409 冲突通常来自同一 Bot Token 被其他 bridge、daemon 或程序轮询占用。配对和日常运行也不能同时轮询；先停止旧程序再重试。
+- 如果这个机器人曾配置 webhook，需先通过官方 [`deleteWebhook`](https://core.telegram.org/bots/api#deletewebhook) 移除，再使用本项目的长轮询。
+- 网络异常时确认启动 bridge 的 Node.js 进程能访问 `api.telegram.org`；手机 Telegram 可以连接，不代表本地 Node.js 的代理配置已生效。
+- 没有收到最终回复时，检查 `bridge.log` 的 `final_reply`、`telegram_send_started`、`telegram_send_completed`、`telegram_send_failed` 和 `telegram_forward_failed`。升级前独立 bridge 误走微信端口的错误 `WeChat channel cannot send to telegram` 已在 1.2.3 修复；升级后重启 bridge 或重新 attach，使运行进程加载新代码。
+
+## `wechat-*` / `wecom-*` / `telegram-*` 提示找不到 bridge
 
 通常原因是：
 
 - 可见 CLI 与内部 runtime 不在同一个工作目录；
 - 当前工作区 endpoint 文件来自旧进程或已经失效。
 
-请在目标项目目录重新运行对应的 `wechat-*` 或 `wecom-*` 直接命令。直接命令会自动复用同目录同通道 daemon，或在没有 daemon 时重建内部 runtime 和可见 CLI。
+请在目标项目目录重新运行对应通道的直接命令。直接命令会自动复用同目录同通道 daemon，或在没有 daemon 时重建内部 runtime 和可见 CLI。
 
 ## 全局命令不存在
 

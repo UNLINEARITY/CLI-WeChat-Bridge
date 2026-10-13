@@ -1,10 +1,10 @@
 # 通信架构
 
-本文档介绍 CLI WeChat Bridge 的微信与企业微信远程通道，以及 Codex、Claude Code、OpenCode、Pi 四个主要适配器的通信架构，解释各 CLI 原生提供的 API 支持，以及为什么它们对 `node-pty` 的依赖程度不同。
+本文档介绍 CLI WeChat Bridge 的微信、企业微信与 Telegram 远程通道，以及 Codex、Claude Code、OpenCode、Pi 四个主要适配器的通信架构，解释各 CLI 原生提供的 API 支持，以及为什么它们对 `node-pty` 的依赖程度不同。
 
 ## 概述
 
-项目的核心职责是将微信或企业微信消息桥接到本地运行的 CLI 工具，同时把 CLI 的输出、审批请求和运行状态同步回对应远程通道。每个 CLI 工具提供的编程接口不同，因此 bridge 为每个 CLI 实现了独立的适配器：
+项目的核心职责是将各消息通道接入本地运行的 CLI 工具，同时把 CLI 的输出、审批请求和运行状态同步回对应远程通道。每个 CLI 工具提供的编程接口不同，因此 bridge 为每个 CLI 实现了独立的适配器：
 
 | 适配器 | CLI 工具 | 通信协议 | PTY 依赖 |
 |--------|----------|----------|----------|
@@ -19,8 +19,9 @@
 | --- | --- | --- | --- | --- |
 | 微信 | iLink HTTPS `getupdates` 长轮询 | iLink HTTPS `sendmessage` | `account.json`、`sync_buf.txt`、`context_tokens.json` | 回复必须携带最近入站消息的 `context_token`；token 失效后需等待新的微信消息刷新 |
 | 企业微信 | 官方智能机器人 WebSocket 长连接 | WebSocket 文本、流式回复和媒体接口 | `wecom/account.json`、工作区状态和通道队列 | 每个 Bot 同时只能保持一个有效连接；当前支持内部单聊和内部群聊 |
+| Telegram | 官方 Bot API `getUpdates` 长轮询 | `sendMessage`、`sendPhoto`、`sendDocument` | `telegram/account.json`、附件与消息 claims | 每个 Bot Token 同时只运行一个轮询端；操作者通过私聊配对 |
 
-两种通道共享工作区锁、daemon endpoint 和适配器 slot，但凭据、入站媒体和消息去重目录相互隔离。通道选择在启动入口完成，bridge core 只处理通道无关的会话、审批、输入和输出事件。
+三种通道共享工作区锁、daemon endpoint 和适配器 slot，但凭据、入站媒体和消息去重目录相互隔离。通道选择在启动入口完成，bridge core 只处理通道无关的会话、审批、输入和输出事件。
 
 ## 架构总览
 
@@ -50,7 +51,7 @@
    codex app-server   claude      opencode serve   pi 原生 TUI
 ```
 
-下文适配器流程中的“微信”标签代表远程通道；企业微信在通道层使用 WebSocket，但进入 bridge core 后复用相同的 BridgeEvent、控制命令、审批和会话事件。
+上图展示微信和企业微信路径；Telegram 通过 Bot API HTTPS 长轮询接入同一 Bridge Controller。下文适配器流程中的“微信”标签代表远程通道，各通道进入 bridge core 后复用相同的 BridgeEvent、控制命令、审批和会话事件。
 
 <!-- PLACEHOLDER_SECTION_3 -->
 
