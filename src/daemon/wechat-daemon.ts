@@ -153,6 +153,11 @@ import type {
   ChannelOutputKind,
 } from "../core/channel-types.ts";
 import {
+  getBridgeChannelDisplayName,
+  isBridgeChannelId,
+  normalizeBridgeChannelId,
+} from "../core/channel-types.ts";
+import {
   clearLocalCompanionEndpoint,
   clearLocalCompanionOccupancy,
   readLocalCompanionEndpoint,
@@ -244,10 +249,7 @@ const DAEMON_ADAPTERS: DaemonAdapterKind[] = ["codex", "claude", "opencode", "pi
 function getCliChannelId(argv: string[] = process.argv.slice(2)): BridgeChannelId {
   const index = argv.indexOf("--channel");
   const value = index >= 0 ? argv[index + 1] : undefined;
-  if (value === "wecom") return "wecom";
-  if (value === "telegram") return "telegram";
-  if (value === "local") return "local";
-  return "wechat";
+  return normalizeBridgeChannelId(value);
 }
 
 function log(message: string): void {
@@ -336,14 +338,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     const next = argv[i + 1];
 
     if (arg === "--help" || arg === "-h") {
-      const channelDisplayName =
-        channelId === "wecom"
-          ? "WeCom"
-          : channelId === "telegram"
-            ? "Telegram"
-            : channelId === "local"
-              ? "Local"
-              : "WeChat";
+      const channelDisplayName = getBridgeChannelDisplayName(channelId);
       process.stdout.write(
         [
           `Usage: ${channelId}-daemon [--cwd <path>] [--adapter <codex|claude|opencode|pi>] [--profile <name-or-path>] [--no-open]`,
@@ -366,10 +361,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     }
 
     if (arg === "--channel") {
-      if (
-        !next ||
-        (next !== "wechat" && next !== "wecom" && next !== "telegram" && next !== "local")
-      ) {
+      if (!isBridgeChannelId(next)) {
         throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
       }
       channelId = next;

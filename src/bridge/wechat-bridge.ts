@@ -68,6 +68,7 @@ import type {
   ChannelInboundMessage,
   ChannelOutputKind,
 } from "../core/channel-types.ts";
+import { isBridgeChannelId } from "../core/channel-types.ts";
 import type {
   ApprovalRequest,
   BridgeAdapter,
@@ -282,7 +283,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
         i += 1;
         break;
       case "--channel":
-        if (!next || (next !== "wechat" && next !== "wecom" && next !== "telegram")) {
+        if (!isBridgeChannelId(next) || next === "local") {
           throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
         }
         channelId = next;

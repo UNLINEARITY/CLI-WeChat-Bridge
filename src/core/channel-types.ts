@@ -6,13 +6,25 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
 
-export type BridgeChannelId = "wechat" | "wecom" | "telegram" | "local";
+export const BRIDGE_CHANNEL_DISPLAY_NAMES = {
+  wechat: "WeChat",
+  wecom: "WeCom",
+  telegram: "Telegram",
+  local: "Local",
+} as const;
+
+export type BridgeChannelId = keyof typeof BRIDGE_CHANNEL_DISPLAY_NAMES;
+
+export function isBridgeChannelId(value: unknown): value is BridgeChannelId {
+  return typeof value === "string" && Object.hasOwn(BRIDGE_CHANNEL_DISPLAY_NAMES, value);
+}
+
+export function getBridgeChannelDisplayName(channelId: BridgeChannelId): string {
+  return BRIDGE_CHANNEL_DISPLAY_NAMES[channelId];
+}
 
 export function normalizeBridgeChannelId(value: unknown): BridgeChannelId {
-  if (value === "wecom") return "wecom";
-  if (value === "telegram") return "telegram";
-  if (value === "local") return "local";
-  return "wechat";
+  return isBridgeChannelId(value) ? value : "wechat";
 }
 
 export type ChannelAttachmentKind = "image" | "file" | "voice" | "video";

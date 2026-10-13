@@ -18,7 +18,12 @@ import {
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
 import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
-import type { BridgeChannelId } from "../core/channel-types.ts";
+import {
+  getBridgeChannelDisplayName,
+  isBridgeChannelId,
+  normalizeBridgeChannelId,
+  type BridgeChannelId,
+} from "../core/channel-types.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import {
   readBridgeLockFile,
@@ -112,11 +117,10 @@ const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
 const DEFAULT_ADAPTER: LocalCompanionLaunchAdapter = "codex";
 
 function log(
-  adapter: LocalCompanionLaunchAdapter,
+  options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">,
   message: string,
-  channelId: BridgeChannelId = "wechat",
 ): void {
-  process.stderr.write(`[${channelId}-${adapter}] ${message}\n`);
+  process.stderr.write(`[${options.channelId ?? "wechat"}-${options.adapter}] ${message}\n`);
 }
 
 export function normalizeComparablePath(cwd: string): string {
@@ -256,17 +260,13 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
         [
           `Usage: ${commandName} [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [--session-start-mode <restore|new>] [...${helpAdapter} args]`,
           "",
-          `Ensures the ${channelId === "wecom" ? "WeCom" : channelId === "telegram" ? "Telegram" : "WeChat"} runtime for the current directory, then opens or reuses the visible CLI.`,
+          `Ensures the ${getBridgeChannelDisplayName(channelId)} runtime for the current directory, then opens or reuses the visible CLI.`,
           "If a same-workspace daemon is running, the command delegates to that daemon.",
-          helpAdapter === "codex"
-            ? "Codex restores the current session by default."
-            : `${adapterLabel} starts a fresh session by default.`,
-          helpAdapter === "codex"
-            ? "Use --session-start-mode new to explicitly start a fresh session."
-            : "Use --session-start-mode restore to explicitly restore the previous session.",
+          `${adapterLabel} starts a fresh session by default.`,
+          "Use --session-start-mode restore to explicitly restore the previous session.",
           "Use --doctor to check the selected adapter and workspace without starting it.",
           helpAdapter === "codex"
-            ? "Use --attach-current-session to attach WeChat to the live Codex daemon session in this directory (Codex >= 0.162 shared background server), instead of opening a visible client."
+            ? `Use --attach-current-session to attach ${getBridgeChannelDisplayName(channelId)} to the live Codex daemon session in this directory (Codex >= 0.162 shared background server), instead of opening a visible client.`
             : "",
           "Without a daemon, the transient runtime is companion-bound and stops when the visible CLI closes.",
           "Unknown arguments are forwarded to the visible CLI client.",
@@ -281,7 +281,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     }
 
     if (arg === "--channel") {
-      if (!next || (next !== "wechat" && next !== "wecom" && next !== "telegram")) {
+      if (!isBridgeChannelId(next) || next === "local") {
         throw new Error(`Invalid channel: ${next ?? "(missing)"}`);
       }
       channelId = next;
@@ -398,10 +398,10 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boole
 
 async function stopExistingBridge(
   lock: BridgeLockPayload,
-  requestedAdapter: LocalCompanionLaunchAdapter,
+  options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">,
 ): Promise<void> {
   const { pid, cwd } = lock;
-  log(requestedAdapter, `Stopping existing bridge for ${cwd} (pid=${pid})...`);
+  log(options, `Stopping existing bridge for ${cwd} (pid=${pid})...`);
 
   try {
     process.kill(pid);
@@ -429,7 +429,7 @@ async function stopExistingBridge(
     clearLocalCompanionEndpoint(cwd);
   }
   log(
-    requestedAdapter,
+    options,
     `Cleared stale local companion endpoint for previous workspace ${cwd}.`,
   );
 }
@@ -462,9 +462,9 @@ async function isEndpointReachable(endpoint: LocalCompanionEndpoint): Promise<bo
 }
 
 async function readUsableEndpoint(
-  cwd: string,
-  adapter: LocalCompanionLaunchAdapter,
+  options: Pick<LocalCompanionStartCliOptions, "cwd" | "adapter" | "channelId">,
 ): Promise<EndpointReadResult> {
+  const { cwd, adapter } = options;
   const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
   if (!endpoint || endpoint.kind !== adapter) {
     return { endpoint: null };
@@ -475,7 +475,7 @@ async function readUsableEndpoint(
   }
 
   clearLocalCompanionEndpoint(cwd, endpoint.instanceId, { adapter });
-  log(adapter, `Removed stale local companion endpoint for ${cwd}.`);
+  log(options, `Removed stale local companion endpoint for ${cwd}.`);
   return { endpoint: null };
 }
 
@@ -515,12 +515,14 @@ export function buildBackgroundBridgeArgs(
     lifecycle,
   );
 
-  if (options.channelId === "wecom" || options.channelId === "telegram") {
+  if (options.channelId) {
     args.push("--channel", options.channelId);
   }
 
-  if (options.sessionStartMode !== "restore") {
-    args.push("--session-start-mode", options.sessionStartMode);
+  // Attach discovery owns thread selection; do not restore stale bridge state.
+  const sessionStartMode = options.attachCurrentSession ? "new" : options.sessionStartMode;
+  if (sessionStartMode !== "restore") {
+    args.push("--session-start-mode", sessionStartMode);
   }
 
   if (options.profile) {
@@ -564,14 +566,13 @@ function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
 }
 
 async function waitForEndpoint(
-  cwd: string,
-  adapter: LocalCompanionLaunchAdapter,
-  timeoutMs: number,
+  options: LocalCompanionStartCliOptions,
 ): Promise<LocalCompanionEndpoint> {
+  const { cwd, adapter, timeoutMs } = options;
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
-    const result = await readUsableEndpoint(cwd, adapter);
+    const result = await readUsableEndpoint(options);
     if (result.endpoint) {
       return result.endpoint;
     }
@@ -587,27 +588,27 @@ async function ensureBridgeReady(
   options: LocalCompanionStartCliOptions,
 ): Promise<EnsureBridgeReadyResult> {
   // If the lock is absent or the lock-holding process is dead, do NOT trust a
-  // leftover endpoint.  The bridge (WeChat transport) may have crashed while
+  // leftover endpoint.  The channel transport may have crashed while
   // the opencode server kept running.  Starting only the panel would leave no
-  // bridge to poll WeChat messages.
+  // bridge to receive channel messages.
   const lock = readBridgeLockFile();
   const lockProcessAlive = lock ? isPidAlive(lock.pid) : false;
   if (!lock || !lockProcessAlive) {
     if (lock && !lockProcessAlive) {
-      log(options.adapter, `Found stale lock for ${options.cwd} (pid=${lock.pid} dead). Clearing.`);
+      log(options, `Found stale lock for ${options.cwd} (pid=${lock.pid} dead). Clearing.`);
       clearLocalCompanionEndpoint(options.cwd, undefined, {
         adapter: options.adapter,
       });
     }
 
-    log(options.adapter, `Starting bridge in background for ${options.cwd}...`);
+    log(options, `Starting bridge in background for ${options.cwd}...`);
     startBridgeInBackground(options);
-    await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
+    await waitForEndpoint(options);
     return { shouldOpenVisibleClient: true };
   }
 
   // Lock is held by a live process; decide whether to reuse, switch, or replace it.
-  const endpointResult = await readUsableEndpoint(options.cwd, options.adapter);
+  const endpointResult = await readUsableEndpoint(options);
   const decision = decideLaunchAction({
     requestedAdapter: options.adapter,
     requestedCwd: options.cwd,
@@ -620,7 +621,7 @@ async function ensureBridgeReady(
     requestedChannelId: options.channelId,
   });
 
-  log(options.adapter, decision.message);
+  log(options, decision.message);
 
   if (decision.kind === "already_active") {
     return { shouldOpenVisibleClient: false };
@@ -628,25 +629,25 @@ async function ensureBridgeReady(
 
   if (decision.kind === "open_companion") {
     if (!endpointResult.endpoint) {
-      await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
+      await waitForEndpoint(options);
     }
     return { shouldOpenVisibleClient: true };
   }
 
   if (decision.kind === "switch_workspace") {
     try {
-      await stopExistingBridge(lock, options.adapter);
+      await stopExistingBridge(lock, options);
     } catch (error) {
-      log(options.adapter, decision.failureMessage);
+      log(options, decision.failureMessage);
       throw error;
     }
   } else {
-    await stopExistingBridge(lock, options.adapter);
+    await stopExistingBridge(lock, options);
   }
 
-  log(options.adapter, `Starting replacement bridge in background for ${options.cwd}...`);
+  log(options, `Starting replacement bridge in background for ${options.cwd}...`);
   startBridgeInBackground(options);
-  await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
+  await waitForEndpoint(options);
   return { shouldOpenVisibleClient: true };
 }
 
@@ -715,16 +716,15 @@ export async function tryDelegateToDaemon(
     // gets a working terminal instead of an error for work the daemon may
     // still complete.
     log(
-      options.adapter,
+      options,
       `Daemon delegation failed (${response.error ?? "unknown error"}). Falling back to a local bridge.`,
     );
     return false;
   }
 
   log(
-    options.adapter,
+    options,
     `Delegated to running ${requestedChannel}-daemon for ${options.cwd}.`,
-    requestedChannel,
   );
   return true;
 }
@@ -758,26 +758,37 @@ export async function ensureCompanionStartWechatCredentials(
   await ensureCredentials({
     requireUserId: true,
     validateExisting: true,
-    log: (message) => log(adapter, message),
+    log: (message) => log({ adapter, channelId: "wechat" }, message),
   });
 }
+
+const channelCredentialSetups = {
+  wechat: async (options) => {
+    await ensureCompanionStartWechatCredentials(options.adapter);
+  },
+  wecom: async (options) => {
+    await ensureWecomAccount({
+      log: (message) => log(options, message),
+    });
+  },
+  telegram: async (options) => {
+    await ensureTelegramAccount({
+      log: (message) => log(options, message),
+    });
+  },
+} satisfies Record<
+  Exclude<BridgeChannelId, "local">,
+  (options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">) => Promise<void>
+>;
 
 export async function ensureCompanionStartChannelCredentials(
   options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">,
 ): Promise<void> {
-  if (options.channelId === "wecom") {
-    await ensureWecomAccount({
-      log: (message) => log(options.adapter, message, "wecom"),
-    });
-    return;
+  const channelId = options.channelId ?? "wechat";
+  if (channelId === "local") {
+    throw new Error("The local channel does not support companion launchers.");
   }
-  if (options.channelId === "telegram") {
-    await ensureTelegramAccount({
-      log: (message) => log(options.adapter, message, "telegram"),
-    });
-    return;
-  }
-  await ensureCompanionStartWechatCredentials(options.adapter);
+  await channelCredentialSetups[channelId](options);
 }
 
 export async function runLocalCompanionStart(
@@ -811,10 +822,45 @@ type AttachedBridgeState = {
   sharedThreadId: string;
 };
 
+export function resolveAttachedBridgeThreadId(
+  state: unknown,
+  lock: BridgeLockPayload | null,
+  options: Pick<LocalCompanionStartCliOptions, "cwd" | "channelId" | "codexThreadId">,
+): string | null {
+  if (!lock || !state || typeof state !== "object") {
+    return null;
+  }
+  const parsed = state as Record<string, unknown>;
+  const channelId = options.channelId ?? "wechat";
+  if (
+    lock.adapter !== "codex" ||
+    !isSameWorkspaceCwd(lock.cwd, options.cwd) ||
+    (lock.channelId ?? "wechat") !== channelId ||
+    parsed.instanceId !== lock.instanceId ||
+    parsed.adapter !== "codex" ||
+    typeof parsed.cwd !== "string" ||
+    !isSameWorkspaceCwd(parsed.cwd, options.cwd) ||
+    (parsed.channelId ?? "wechat") !== channelId ||
+    typeof parsed.sharedThreadId !== "string" ||
+    !parsed.sharedThreadId ||
+    (options.codexThreadId && parsed.sharedThreadId !== options.codexThreadId)
+  ) {
+    return null;
+  }
+  return parsed.sharedThreadId;
+}
+
+export function formatAttachedBridgeMessage(
+  options: Pick<LocalCompanionStartCliOptions, "cwd" | "channelId">,
+  sharedThreadId: string,
+): string {
+  return `Attached Codex daemon thread ${sharedThreadId.slice(0, 8)} for ${options.cwd}. ${getBridgeChannelDisplayName(options.channelId ?? "wechat")} forwarding is active; the visible Codex session keeps running unchanged.`;
+}
+
 async function waitForAttachedBridgeState(
-  cwd: string,
-  timeoutMs: number,
+  options: LocalCompanionStartCliOptions,
 ): Promise<AttachedBridgeState> {
+  const { cwd, timeoutMs } = options;
   const stateFile = getWorkspaceChannelPaths(cwd).stateFile;
   const deadline = Date.now() + timeoutMs;
 
@@ -822,11 +868,9 @@ async function waitForAttachedBridgeState(
     try {
       const raw = fs.readFileSync(stateFile, "utf8");
       const parsed: unknown = JSON.parse(raw);
-      const sharedThreadId =
-        parsed && typeof parsed === "object" && typeof (parsed as { sharedThreadId?: unknown }).sharedThreadId === "string"
-          ? (parsed as { sharedThreadId: string }).sharedThreadId
-          : null;
-      if (sharedThreadId) {
+      const lock = readBridgeLockFile();
+      const sharedThreadId = resolveAttachedBridgeThreadId(parsed, lock, options);
+      if (sharedThreadId && lock && isPidAlive(lock.pid)) {
         return { sharedThreadId };
       }
     } catch {
@@ -841,7 +885,7 @@ async function waitForAttachedBridgeState(
 }
 
 /**
- * Attach flow: bind WeChat to the live Codex shared-daemon session in the
+ * Attach flow: bind the selected channel to the live Codex shared-daemon session in the
  * workspace. No visible client is opened — the owning Codex TUI stays as-is —
  * so readiness is the persisted bridge state carrying the attached thread id.
  */
@@ -864,19 +908,19 @@ async function runAttachCurrentSession(options: LocalCompanionStartCliOptions): 
   const lock = readBridgeLockFile();
   if (lock) {
     if (isPidAlive(lock.pid)) {
-      await stopExistingBridge(lock, options.adapter);
+      await stopExistingBridge(lock, options);
     } else {
       clearLocalCompanionEndpoint(options.cwd, undefined, { adapter: options.adapter });
-      log(options.adapter, `Cleared stale bridge lock and endpoint for ${lock.cwd}.`);
+      log(options, `Cleared stale bridge lock and endpoint for ${lock.cwd}.`);
     }
   }
 
-  log(options.adapter, `Starting attach bridge in background for ${options.cwd}...`);
+  log(options, `Starting attach bridge in background for ${options.cwd}...`);
   startBridgeInBackground(options);
-  const state = await waitForAttachedBridgeState(options.cwd, options.timeoutMs);
+  const state = await waitForAttachedBridgeState(options);
   log(
-    options.adapter,
-    `Attached Codex daemon thread ${state.sharedThreadId.slice(0, 8)} for ${options.cwd}. WeChat forwarding is active; the visible Codex session keeps running unchanged.`,
+    options,
+    formatAttachedBridgeMessage(options, state.sharedThreadId),
   );
   return 0;
 }
@@ -886,21 +930,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     const exitCode = await runLocalCompanionStart(argv);
     process.exit(exitCode);
   } catch (error) {
-    const adapter = (() => {
-      try {
-        return parseCliArgs(argv).adapter;
-      } catch {
-        return DEFAULT_ADAPTER;
-      }
-    })();
-    const channelId = (() => {
-      try {
-        return parseCliArgs(argv).channelId ?? "wechat";
-      } catch {
-        return "wechat";
-      }
-    })();
-    log(adapter, error instanceof Error ? error.message : String(error), channelId);
+    // Argument validation may fail; retain the wrapper's channel and adapter
+    // without running the failing parser again.
+    const adapterIndex = argv.lastIndexOf("--adapter");
+    const adapterValue = adapterIndex >= 0 ? argv[adapterIndex + 1] : undefined;
+    const adapter = adapterValue && ["codex", "claude", "opencode", "pi"].includes(adapterValue)
+      ? adapterValue as LocalCompanionLaunchAdapter
+      : DEFAULT_ADAPTER;
+    const channelIndex = argv.lastIndexOf("--channel");
+    const channelId = normalizeBridgeChannelId(channelIndex >= 0 ? argv[channelIndex + 1] : undefined);
+    log({ adapter, channelId }, error instanceof Error ? error.message : String(error));
     process.exit(1);
   }
 }
