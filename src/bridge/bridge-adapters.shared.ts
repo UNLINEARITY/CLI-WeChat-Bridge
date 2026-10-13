@@ -71,6 +71,15 @@ export type AdapterOptions = {
   initialResumeConversationId?: string;
   initialTranscriptPath?: string;
   renderMode?: "embedded" | "panel" | "companion" | "headless";
+  /**
+   * Codex-only: attach to a live thread on the shared Codex app-server daemon
+   * (~/.codex/app-server-control) instead of spawning an owned app-server.
+   * Requires Codex >= 0.162 with the shared background server; embedded
+   * sessions (desktop app, --no-daemon, --oss, --profile) cannot attach.
+   */
+  codexAttachDaemon?: boolean;
+  /** Explicit thread id for codexAttachDaemon; discovered from cwd when omitted. */
+  codexAttachThreadId?: string;
 };
 
 export type EventSink = (event: BridgeEvent) => void;

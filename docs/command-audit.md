@@ -112,6 +112,8 @@
 | `--profile <name-or-path>` | 传递给内部 adapter runtime | 高级保留 |
 | `--timeout-ms <ms>` | endpoint 等待上限，至少 1000 ms | 高级保留 |
 | `--session-start-mode <restore\|new>` | 覆盖默认会话策略 | 高级保留 |
+| `--attach-current-session` | 仅 Codex：后台启动 attach bridge，把微信绑定到当前 cwd 内运行中的共享 daemon 会话（>= 0.162），不打开可见 CLI | 高级保留 |
+| `--codex-thread-id <id>` | 仅 Codex：attach 时显式指定线程，代替自动发现 | 高级保留 |
 | `--doctor` | 只运行所选 adapter/workspace 的 doctor，不启动 CLI | 核心保留 |
 | `--help`、`-h` | 输出直接命令 usage | 核心保留 |
 | 其他未知参数 | 原样透传给可见底层 CLI | 必须保留 |

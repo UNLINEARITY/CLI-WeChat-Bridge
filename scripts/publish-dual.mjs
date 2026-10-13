@@ -15,6 +15,7 @@ const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 const MIRROR_FILES = [
   "bin",
   "dist",
+  "skills",
   "scripts/ensure-node-pty-permissions.mjs",
   "README.md",
   "LICENSE.txt",

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Bridge"
+  short_description: "把当前 Codex 会话接入微信通道：加入共享 app-server daemon，rejoin 活线程，微信消息与回复双向流转"
+  default_prompt: "使用 $codex-bridge 把当前 Codex 会话接入微信通道。"

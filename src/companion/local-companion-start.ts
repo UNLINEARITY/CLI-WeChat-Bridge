@@ -5,12 +5,16 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
+import { BRIDGE_LOG_FILE, getWorkspaceChannelPaths } from "../wechat/channel-config.ts";
+import {
+  resolveCodexDaemonControlSocketPath,
+} from "../bridge/bridge-adapters.codex.ts";
 import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { ensureWecomAccount } from "../channels/wecom/setup.ts";
 import type { BridgeChannelId } from "../core/channel-types.ts";
@@ -51,6 +55,9 @@ type LocalCompanionStartCliOptions = {
   sessionStartMode: BridgeSessionStartMode;
   cliArgs: string[];
   channelId?: BridgeChannelId;
+  /** Codex-only: attach the bridge to the live shared-daemon session in cwd. */
+  attachCurrentSession?: boolean;
+  codexThreadId?: string;
 };
 
 type EndpointReadResult = {
@@ -224,6 +231,8 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
   let sessionStartMode: BridgeSessionStartMode | undefined;
   let channelId: BridgeChannelId = "wechat";
+  let attachCurrentSession = false;
+  let codexThreadId: string | undefined;
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -255,6 +264,9 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
             ? "Use --session-start-mode new to explicitly start a fresh session."
             : "Use --session-start-mode restore to explicitly restore the previous session.",
           "Use --doctor to check the selected adapter and workspace without starting it.",
+          helpAdapter === "codex"
+            ? "Use --attach-current-session to attach WeChat to the live Codex daemon session in this directory (Codex >= 0.162 shared background server), instead of opening a visible client."
+            : "",
           "Without a daemon, the transient runtime is companion-bound and stops when the visible CLI closes.",
           "Unknown arguments are forwarded to the visible CLI client.",
           "",
@@ -325,7 +337,25 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
       continue;
     }
 
+    if (arg === "--attach-current-session") {
+      attachCurrentSession = true;
+      continue;
+    }
+
+    if (arg === "--codex-thread-id") {
+      if (!next) {
+        throw new Error("--codex-thread-id requires a value");
+      }
+      codexThreadId = next;
+      i += 1;
+      continue;
+    }
+
     cliArgs.push(arg);
+  }
+
+  if (attachCurrentSession && adapter !== "codex") {
+    throw new Error("--attach-current-session requires the codex adapter");
   }
 
   return {
@@ -336,6 +366,8 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     sessionStartMode: sessionStartMode ?? defaultSessionStartMode(adapter),
     cliArgs,
     channelId,
+    attachCurrentSession,
+    codexThreadId,
   };
 }
 
@@ -465,7 +497,9 @@ export function buildBackgroundBridgeArgs(
   entryPath: string,
   options: LocalCompanionStartCliOptions,
 ): string[] {
-  const lifecycle = "companion_bound";
+  // The attach bridge outlives this launcher (no visible client keeps the
+  // foreground alive), so it must not be companion-bound to the launcher pid.
+  const lifecycle = options.attachCurrentSession ? "persistent" : "companion_bound";
   const args = ["--no-warnings"];
   if (path.extname(entryPath) === ".ts") {
     args.push("--experimental-strip-types");
@@ -490,6 +524,13 @@ export function buildBackgroundBridgeArgs(
 
   if (options.profile) {
     args.push("--profile", options.profile);
+  }
+
+  if (options.attachCurrentSession) {
+    args.push("--codex-attach-daemon");
+    if (options.codexThreadId) {
+      args.push("--codex-thread-id", options.codexThreadId);
+    }
   }
 
   return args;
@@ -744,6 +785,10 @@ export async function runLocalCompanionStart(
   const options = parseCliArgs(argv);
   await ensureCompanionStartChannelCredentials(options);
 
+  if (options.attachCurrentSession) {
+    return await runAttachCurrentSession(options);
+  }
+
   if (await tryDelegateToDaemon(options)) {
     return 0;
   }
@@ -753,6 +798,80 @@ export async function runLocalCompanionStart(
     return 0;
   }
   return await runVisibleClient(options);
+}
+
+type AttachedBridgeState = {
+  sharedThreadId: string;
+};
+
+async function waitForAttachedBridgeState(
+  cwd: string,
+  timeoutMs: number,
+): Promise<AttachedBridgeState> {
+  const stateFile = getWorkspaceChannelPaths(cwd).stateFile;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    try {
+      const raw = fs.readFileSync(stateFile, "utf8");
+      const parsed: unknown = JSON.parse(raw);
+      const sharedThreadId =
+        parsed && typeof parsed === "object" && typeof (parsed as { sharedThreadId?: unknown }).sharedThreadId === "string"
+          ? (parsed as { sharedThreadId: string }).sharedThreadId
+          : null;
+      if (sharedThreadId) {
+        return { sharedThreadId };
+      }
+    } catch {
+      // Not written yet; keep polling until the deadline.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+
+  throw new Error(
+    `Timed out waiting for the attach bridge to bind a Codex thread for ${cwd}. Check ${BRIDGE_LOG_FILE}.`,
+  );
+}
+
+/**
+ * Attach flow: bind WeChat to the live Codex shared-daemon session in the
+ * workspace. No visible client is opened — the owning Codex TUI stays as-is —
+ * so readiness is the persisted bridge state carrying the attached thread id.
+ */
+async function runAttachCurrentSession(options: LocalCompanionStartCliOptions): Promise<number> {
+  const daemonEndpoint = readDaemonEndpoint();
+  if (daemonEndpoint && (await isDaemonEndpointAlive(daemonEndpoint))) {
+    const channel = daemonEndpoint.channelId ?? "wechat";
+    throw new Error(
+      `A ${channel}-daemon is running for ${daemonEndpoint.cwd}. Attach mode needs the workspace bridge lock; stop the daemon first or use its slots.`,
+    );
+  }
+
+  const socketPath = resolveCodexDaemonControlSocketPath();
+  if (!fs.existsSync(socketPath)) {
+    throw new Error(
+      `No shared Codex app-server daemon socket at ${socketPath}. Attach mode requires Codex >= 0.162 with its shared background server (the default). Sessions started with --no-daemon, --oss, or a --profile, and desktop-app embedded sessions, cannot be attached.`,
+    );
+  }
+
+  const lock = readBridgeLockFile();
+  if (lock) {
+    if (isPidAlive(lock.pid)) {
+      await stopExistingBridge(lock, options.adapter);
+    } else {
+      clearLocalCompanionEndpoint(options.cwd, undefined, { adapter: options.adapter });
+      log(options.adapter, `Cleared stale bridge lock and endpoint for ${lock.cwd}.`);
+    }
+  }
+
+  log(options.adapter, `Starting attach bridge in background for ${options.cwd}...`);
+  startBridgeInBackground(options);
+  const state = await waitForAttachedBridgeState(options.cwd, options.timeoutMs);
+  log(
+    options.adapter,
+    `Attached Codex daemon thread ${state.sharedThreadId.slice(0, 8)} for ${options.cwd}. WeChat forwarding is active; the visible Codex session keeps running unchanged.`,
+  );
+  return 0;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {

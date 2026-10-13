@@ -33,6 +33,7 @@
 ## 文档导航
 
 - [问题排查](docs/troubleshooting.md)：上下文 token、网络代理、本地 endpoint、已知限制等常见问题。
+- [Codex 通道连接 skill（实验性）](docs/codex-connection.md)：`$codex-bridge` skill 与 `--attach-current-session`，把当前 Codex 会话（0.162+ 共享 daemon 模式）接入微信。
 - [运行配置](docs/configuration.md)：微信与企业微信的数据目录、上传大小限制、调试开关等环境变量。
 - [开发说明](docs/development.md)：源码运行、测试、构建、打包和全局 smoke 验证。
 - [发布说明](docs/releases/README.md)：各版本变更与升级说明。
@@ -323,6 +324,8 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `--profile <name-or-path>` | 传给内部 runtime | `wechat-claude --profile work` |
 | `--timeout-ms <ms>` | 等待当前目录 endpoint 的最长时间，默认 `15000` | `wechat-codex --timeout-ms 30000` |
 | `--session-start-mode <restore / new>` | 显式选择恢复或新建会话 | `wechat-pi --session-start-mode restore` |
+| `--attach-current-session` | （仅 Codex）把微信接入当前目录中运行中的共享 daemon 会话，不打开可见 CLI，需 Codex >= 0.162 | `wechat-codex --attach-current-session` |
+| `--codex-thread-id <id>` | （仅 Codex）附加时显式指定线程，代替按目录自动发现 | `wechat-codex --attach-current-session --codex-thread-id <id>` |
 | `--doctor` | 检查选定适配器和工作区，不启动 CLI | `wechat-claude --doctor` |
 | 其他参数 | 继续透传给可见的底层 CLI | `wechat-codex --model gpt-5.2 --yolo` |
 

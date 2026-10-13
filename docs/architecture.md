@@ -78,6 +78,24 @@ codex app-server --listen ws://127.0.0.1:<port> --ws-auth capability-token --ws-
 
 Headless 和 Panel 模式（占绝大多数使用场景）完全通过 WebSocket RPC 通信，不依赖 node-pty。
 
+### Daemon 附加模式（attach）
+
+除自建 app-server 外，Codex 适配器支持以 `--attach-current-session` 进入 **daemon 附加模式**：Bridge 不再 spawn 自己的 app-server，而是作为第二个客户端加入 Codex（>= 0.162）默认启用的共享后台 daemon——`~/.codex/app-server-control/app-server-control.sock` 上的 WebSocket JSON-RPC，安全边界为同用户文件权限。
+
+两种模式的所有权方向相反，协议完全相同：
+
+| | 自建模式（默认） | Daemon 附加模式 |
+| --- | --- | --- |
+| app-server 归属 | Bridge 拥有子进程与 token | Codex 共享 daemon 拥有 |
+| 可见客户端 | Bridge 以 `--remote` 拉起并托管 | 用户的 TUI，Bridge 不接管 |
+| 线程获取 | `thread/start` / 以 writer 身份 resume | `thread/list`（cwd 过滤 + `status != notLoaded`）发现后 `thread/resume` **rejoin** 活线程 |
+| 设置策略 | `turn/start` 携带 approvalPolicy/sandbox 覆盖 | 不携带任何覆盖，完整继承会话自身设置（避免改写共享线程配置） |
+| 生命周期 | Bridge 关闭 app-server 与可见客户端 | Bridge 仅断开连接；daemon、TUI 与线程不受影响 |
+
+rejoin 语义：对运行中的线程调用 `thread/resume` 会返回历史并原子订阅后续事件，不夺取原客户端持有的 rollout writer 锁。因此微信消息注入同一线程后会实时出现在用户的 TUI 中；审批与 `request_user_input` 仍按连接路由，由发起 turn 的连接处理。daemon 意外断连时 Bridge 自动重连并重新 rejoin。
+
+边界：`--no-daemon`、`--oss`、`--profile` 启动的会话与桌面 App（Codex Desktop）会话运行内嵌 app-server（桌面侧为无 `--listen` 的 stdio 子进程，不暴露任何接入面），无法附加；对这些线程的 resume 会以 `already has an active writer` 失败。详见 [Codex 通道连接 skill](codex-connection.md)。
+
 ### 通信流程
 
 ```

@@ -6,10 +6,13 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import fs from "node:fs";
 import { t } from "../i18n/index.ts";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn as spawnChild, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
+import { WebSocket as WsPackageWebSocket } from "ws";
 import type {
   BridgeModelOption,
   BridgeResumeSessionCandidate,
@@ -80,6 +83,125 @@ export function isCodexVersionInCompatibilityRange(version: string): boolean {
   const major = parts[0] ?? -1;
   const minor = parts[1] ?? -1;
   return major === 0 && minor >= 149 && minor <= 161;
+}
+
+/**
+ * Minimal socket surface the RPC client uses, satisfied by both the global
+ * (Bun/Node) WebSocket against the owned app-server and the `ws` package
+ * client dialed over the daemon's Unix control socket.
+ */
+export type CodexRpcSocket = {
+  readonly readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  addEventListener(
+    type: "message",
+    listener: (event: { data: unknown }) => void,
+    options?: { once?: boolean },
+  ): void;
+  addEventListener(
+    type: "close",
+    listener: (event: { code?: number; reason?: string }) => void,
+    options?: { once?: boolean },
+  ): void;
+};
+
+/** Resolve the shared Codex app-server daemon control socket path. */
+export function resolveCodexDaemonControlSocketPath(
+  codexHomeEnv: string | undefined = process.env.CODEX_HOME,
+): string {
+  const codexHome = codexHomeEnv && codexHomeEnv.trim()
+    ? codexHomeEnv
+    : path.join(os.homedir(), ".codex");
+  return path.join(codexHome, "app-server-control", "app-server-control.sock");
+}
+
+export type CodexDaemonAttachCandidate = {
+  id: string;
+  updatedAt: number;
+  originator: string | null;
+};
+
+/**
+ * Pick attachable threads from a `thread/list` response: only threads that are
+ * live in the shared daemon (`status.type !== "notLoaded"`), belong to the
+ * requested cwd, are root threads, accept direct input, and were not started
+ * by a bridge (`originator === "wechat-bridge"`). Newest activity wins.
+ */
+export function selectCodexDaemonAttachCandidates(
+  response: unknown,
+  cwd: string,
+): CodexDaemonAttachCandidate[] {
+  if (!isRecord(response) || !Array.isArray(response.data)) {
+    return [];
+  }
+  const candidates: CodexDaemonAttachCandidate[] = [];
+  for (const entry of response.data) {
+    if (!isRecord(entry)) continue;
+    const id = typeof entry.id === "string" ? entry.id : null;
+    if (!id) continue;
+    const threadCwd = typeof entry.cwd === "string" ? entry.cwd : null;
+    if (!threadCwd || normalizeComparablePath(threadCwd) !== normalizeComparablePath(cwd)) {
+      continue;
+    }
+    if (entry.parentThreadId !== null && entry.parentThreadId !== undefined) continue;
+    if (entry.canAcceptDirectInput === false) continue;
+    const status = isRecord(entry.status) ? entry.status.type : undefined;
+    if (typeof status !== "string" || status === "notLoaded") continue;
+    const originator = typeof entry.originator === "string" ? entry.originator : null;
+    if (originator === "wechat-bridge") continue;
+    const updatedAt = typeof entry.updatedAt === "number"
+      ? entry.updatedAt
+      : typeof entry.lastUpdatedAt === "number"
+        ? entry.lastUpdatedAt
+        : 0;
+    candidates.push({ id, updatedAt, originator });
+  }
+  return candidates.sort((left, right) => right.updatedAt - left.updatedAt);
+}
+
+/**
+ * Resume params for the bridge's app-server client. In daemon-attach mode the
+ * thread already has an owner with its own settings; sending cwd/approval/
+ * sandbox overrides would rewrite the shared thread's settings
+ * (`thread/settings/updated`), so attach mode resumes without overrides.
+ */
+export function buildCodexThreadResumeParams(params: {
+  threadId: string;
+  cwd: string;
+  attachDaemon: boolean;
+}): Record<string, unknown> {
+  if (params.attachDaemon) {
+    return { threadId: params.threadId, excludeTurns: true };
+  }
+  return {
+    threadId: params.threadId,
+    cwd: params.cwd,
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    sandbox: "workspace-write",
+    excludeTurns: true,
+  };
+}
+
+/** Turn params; daemon-attach mode inherits the thread's existing settings. */
+export function buildCodexTurnStartParams(params: {
+  threadId: string;
+  text: string;
+  cwd: string;
+  attachDaemon: boolean;
+}): Record<string, unknown> {
+  const input = [{ type: "text", text: params.text }];
+  if (params.attachDaemon) {
+    return { threadId: params.threadId, input };
+  }
+  return {
+    threadId: params.threadId,
+    cwd: params.cwd,
+    approvalPolicy: "on-request",
+    approvalsReviewer: "user",
+    input,
+  };
 }
 
 const {
@@ -195,7 +317,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private appServerLog = "";
   private appServerAuthToken: string | null = null;
   private appServerAuthTokenFilePath: string | null = null;
-  private rpcSocket: WebSocket | null = null;
+  private rpcSocket: CodexRpcSocket | null = null;
   private lastRpcCloseDetail = "";
   private rpcShuttingDown = false;
   private rpcReconnectPromise: Promise<boolean> | null = null;
@@ -273,6 +395,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.resumeThreadId = options.sessionStartMode === "new"
       ? null
       : options.initialSharedSessionId ?? options.initialSharedThreadId ?? null;
+    if (options.codexAttachDaemon) {
+      // Daemon attach binds an explicit (or discovered) live thread; stale
+      // persisted session ids must not leak into the attach target.
+      this.resumeThreadId = options.codexAttachThreadId?.trim() || null;
+    }
     if (this.resumeThreadId && options.renderMode !== "panel") {
       this.state.sharedSessionId = this.resumeThreadId;
       this.state.sharedThreadId = this.resumeThreadId;
@@ -295,6 +422,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         : `outside-supported-range=${this.codexCliVersion}`
       : "unknown-version";
     this.setStatus("starting", `Codex protocol compatibility: ${compatibility}.`);
+
+    if (this.options.codexAttachDaemon) {
+      await this.startDaemonAttach();
+      return;
+    }
 
     await this.startAppServer();
     await this.connectRpcClient();
@@ -418,7 +550,61 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         'WeChat /resume requires the managed "wechat-codex" visible client.',
       );
     }
+    if (this.options.codexAttachDaemon) {
+      await this.resumeDaemonAttachedThread(threadId);
+      return;
+    }
     await this.resumeVisibleSharedThread(threadId);
+  }
+
+  /**
+   * WeChat /resume in daemon-attach mode: rejoin another thread on the shared
+   * daemon. Live threads rejoin in place; cold threads are loaded by the
+   * daemon (the bridge never becomes the rollout writer for an embedded
+   * desktop session — that resume fails with an active-writer error).
+   */
+  private async resumeDaemonAttachedThread(threadId: string): Promise<void> {
+    const trimmedThreadId = threadId.trim();
+    if (!trimmedThreadId) {
+      throw new Error("A thread id is required to resume a Codex thread.");
+    }
+
+    if (this.pendingApproval) {
+      throw new Error(t("adapter.codex.approvalPending"));
+    }
+    if (
+      this.pendingTurnStart ||
+      this.activeTurn ||
+      this.state.status === "busy" ||
+      this.state.status === "awaiting_approval"
+    ) {
+      throw new Error(t("adapter.codex.busy"));
+    }
+
+    const response = await this.sendRpcRequest("thread/resume", buildCodexThreadResumeParams({
+      threadId: trimmedThreadId,
+      cwd: this.options.cwd,
+      attachDaemon: true,
+    }));
+    this.validateCodexResumeThread(response, trimmedThreadId);
+    if (isRecord(response) && isRecord(response.thread) && typeof response.thread.path === "string") {
+      this.sessionFilePath = response.thread.path;
+    }
+
+    const previousThreadId = this.sharedThreadId;
+    this.subscribedThreadIds.add(trimmedThreadId);
+    this.sessionReadOffset = 0;
+    this.sessionPartialLine = "";
+    this.sessionFinalText = null;
+    this.pendingThreadFollowId = null;
+    this.updateSharedThread(trimmedThreadId, {
+      source: "wechat",
+      reason: "wechat_resume",
+      notify: true,
+    });
+    if (previousThreadId && previousThreadId !== trimmedThreadId) {
+      await this.unsubscribeCodexThreadBestEffort(previousThreadId);
+    }
   }
 
   override async listModels(): Promise<BridgeModelOption[]> {
@@ -718,6 +904,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   private isCodexClientRunning(): boolean {
     if (this.isHeadlessRuntimeMode()) {
+      if (this.options.codexAttachDaemon) {
+        return Boolean(this.rpcSocket);
+      }
       return Boolean(this.appServer);
     }
     return this.isNativePanelMode() ? Boolean(this.nativeProcess) : Boolean(this.pty);
@@ -1327,18 +1516,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.setStatus("busy");
 
     try {
-      const response = await this.sendRpcRequest("turn/start", {
+      const response = await this.sendRpcRequest("turn/start", buildCodexTurnStartParams({
         threadId,
+        text,
         cwd: this.options.cwd,
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-        input: [
-          {
-            type: "text",
-            text,
-          },
-        ],
-      });
+        attachDaemon: Boolean(this.options.codexAttachDaemon),
+      }));
 
       const turnId = this.extractTurnIdFromResponse(response);
       if (!turnId) {
@@ -1400,6 +1583,201 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     await this.requestActiveTurnInterrupt();
     this.armInterruptFallback();
     return true;
+  }
+
+  /**
+   * Daemon-attach mode: instead of spawning an owned app-server, join the
+   * shared Codex app-server daemon (codex >= 0.162) as an additional client
+   * and rebind the bridge to a live thread in this workspace. The daemon and
+   * the owning TUI keep their lifecycle; the bridge is a guest connection.
+   */
+  private async startDaemonAttach(): Promise<void> {
+    this.setStatus("starting", "Attaching to the shared Codex app-server daemon...");
+    await this.connectDaemonRpcClient();
+    try {
+      await this.attachDaemonThread();
+    } catch (error) {
+      await this.disconnectRpcClient();
+      throw error;
+    }
+
+    this.shuttingDown = false;
+    this.cleanPanelExitInProgress = false;
+    this.hasAcceptedInput = true;
+    this.state.startedAt = nowIso();
+    this.state.pendingApproval = null;
+    this.afterStart();
+    this.setStatus("idle", "Attached to the live Codex daemon session.");
+  }
+
+  private async connectDaemonRpcClient(): Promise<void> {
+    if (this.rpcSocket) {
+      return;
+    }
+
+    const socket = await this.openDaemonRpcSocket();
+    this.attachRpcSocket(socket);
+    await this.initializeRpcClient();
+  }
+
+  private async openDaemonRpcSocket(): Promise<CodexRpcSocket> {
+    const socketPath = resolveCodexDaemonControlSocketPath();
+    if (!fs.existsSync(socketPath)) {
+      throw new Error(
+        `No shared Codex app-server daemon socket at ${socketPath}. Attach mode requires Codex >= 0.162 with its shared background server (the default). Sessions started with --no-daemon, --oss, or a --profile, and desktop-app embedded sessions, cannot be attached.`,
+      );
+    }
+
+    return await new Promise<CodexRpcSocket>((resolve, reject) => {
+      // ws 8.22 ignores the `agent` option and installs its own TCP
+      // createConnection; passing createConnection at the top level is
+      // forwarded to http.request and takes precedence, which is how the
+      // Unix control socket is dialed.
+      const socket = new WsPackageWebSocket("ws://localhost/", {
+        createConnection: () => net.connect(socketPath),
+      });
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        try {
+          socket.close();
+        } catch {
+          // Best effort cleanup after timeout.
+        }
+        reject(new Error(`Timed out connecting to the Codex daemon socket ${socketPath}.`));
+      }, CODEX_APP_SERVER_READY_TIMEOUT_MS);
+
+      const cleanup = () => {
+        clearTimeout(timer);
+      };
+
+      socket.once("open", () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        resolve(socket as unknown as CodexRpcSocket);
+      });
+      socket.once("error", (error: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        cleanup();
+        reject(new Error(`Failed to connect to the Codex daemon socket ${socketPath}: ${String(error)}`));
+      });
+    });
+  }
+
+  /**
+   * Bind the bridge to a live daemon thread. An explicit thread id wins;
+   * otherwise the newest live interactive thread in the workspace cwd is
+   * selected. `thread/resume` on a running thread rejoins it (history plus a
+   * live subscription) without taking the rollout writer lock, which stays
+   * with the owning client.
+   */
+  private async attachDaemonThread(): Promise<void> {
+    const targetThreadId = this.resumeThreadId ?? await this.discoverDaemonAttachThreadId();
+    this.setStatus("starting", `Attaching Codex daemon thread ${targetThreadId.slice(0, 12)}...`);
+
+    const response = await this.sendRpcRequest("thread/resume", buildCodexThreadResumeParams({
+      threadId: targetThreadId,
+      cwd: this.options.cwd,
+      attachDaemon: true,
+    }));
+    const resumedThreadId = this.extractThreadIdFromResponse(response);
+    if (!resumedThreadId) {
+      throw new Error("Codex daemon did not confirm the attached thread id.");
+    }
+    if (resumedThreadId !== targetThreadId) {
+      throw new Error(`Codex daemon opened ${resumedThreadId}, expected ${targetThreadId}.`);
+    }
+    this.validateCodexThreadWorkspaceIfPresent(response, resumedThreadId);
+    if (isRecord(response) && isRecord(response.thread) && typeof response.thread.path === "string") {
+      this.sessionFilePath = response.thread.path;
+    }
+
+    this.subscribedThreadIds.add(resumedThreadId);
+    this.resumeThreadId = null;
+    this.updateSharedThread(resumedThreadId, {
+      source: "restore",
+      reason: "startup_restore",
+      notify: true,
+    });
+  }
+
+  private async discoverDaemonAttachThreadId(): Promise<string> {
+    const response = await this.sendRpcRequest("thread/list", {
+      limit: 50,
+      sortKey: "updated_at",
+      sortDirection: "desc",
+      sourceKinds: ["cli", "vscode"],
+      archived: false,
+      cwd: this.options.cwd,
+    });
+    const candidates = selectCodexDaemonAttachCandidates(response, this.options.cwd);
+    if (candidates.length === 0) {
+      throw new Error(
+        `No live Codex daemon session found for ${this.options.cwd}. Open codex (>= 0.162, default shared-server mode) in this directory, then retry. Embedded sessions (desktop app, --no-daemon, --oss, --profile) cannot be attached.`,
+      );
+    }
+    if (candidates.length > 1) {
+      const listed = candidates
+        .slice(0, 5)
+        .map((candidate) => candidate.id.slice(0, 8))
+        .join(", ");
+      this.setStatus(
+        "starting",
+        `Multiple live Codex daemon sessions for ${this.options.cwd}; attaching the newest (${listed}).`,
+      );
+    }
+    return candidates[0]!.id;
+  }
+
+  /** Reconnect after the daemon socket dropped unexpectedly. */
+  private async reconnectDaemonRpcClient(): Promise<boolean> {
+    const reconnectDeadline = Date.now() + CODEX_RPC_RECONNECT_TIMEOUT_MS;
+    let lastError = "Codex daemon connection closed.";
+
+    while (
+      !this.shuttingDown &&
+      !this.cleanPanelExitInProgress &&
+      Date.now() < reconnectDeadline
+    ) {
+      try {
+        await this.connectDaemonRpcClient();
+        // The daemon may have restarted; rejoin the bound thread. Cold threads
+        // are reloaded from disk, so this also recovers after daemon restarts.
+        if (this.state.sharedThreadId) {
+          await this.ensureSharedThreadSubscribed(this.state.sharedThreadId);
+        }
+        return true;
+      } catch (error) {
+        lastError = describeUnknownError(error);
+        await delay(CODEX_RPC_CONNECT_RETRY_MS);
+      }
+    }
+
+    if (
+      shouldSuppressCodexTransportFatalError({
+        transportShuttingDown: this.rpcShuttingDown,
+        shuttingDown: this.shuttingDown,
+        cleanPanelExitInProgress: this.cleanPanelExitInProgress,
+      })
+    ) {
+      return false;
+    }
+    this.emit({
+      type: "fatal_error",
+      message: `Lost the connection to the shared Codex app-server daemon (${this.lastRpcCloseDetail || lastError}). The attached session may have closed; restart the attach bridge.`,
+      timestamp: nowIso(),
+    });
+    this.terminateCodexClient();
+    return false;
   }
 
   private async startAppServer(): Promise<void> {
@@ -1563,12 +1941,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     url: string,
     authToken: string | null,
     timeoutMs: number,
-  ): Promise<WebSocket> {
+  ): Promise<CodexRpcSocket> {
     if (!authToken) {
       throw new Error("Codex app-server websocket auth token is unavailable.");
     }
 
-    return await new Promise<WebSocket>((resolve, reject) => {
+    return await new Promise<CodexRpcSocket>((resolve, reject) => {
       const socket = new WebSocket(url, {
         headers: {
           Authorization: `Bearer ${authToken}`,
@@ -1600,7 +1978,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           }
           settled = true;
           cleanup();
-          resolve(socket);
+          resolve(socket as unknown as CodexRpcSocket);
         },
         { once: true },
       );
@@ -1620,7 +1998,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     });
   }
 
-  private attachRpcSocket(socket: WebSocket): void {
+  private attachRpcSocket(socket: CodexRpcSocket): void {
     this.rpcSocket = socket;
     this.rpcShuttingDown = false;
     this.subscribedThreadIds.clear();
@@ -1708,6 +2086,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         })
       ) {
         return false;
+      }
+
+      if (this.options.codexAttachDaemon) {
+        return await this.reconnectDaemonRpcClient();
       }
 
       if (!this.appServer || !this.appServerPort) {
@@ -1872,14 +2254,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const response = await this.sendRpcRequest("thread/resume", {
+    const response = await this.sendRpcRequest("thread/resume", buildCodexThreadResumeParams({
       threadId,
       cwd: this.options.cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
-      excludeTurns: true,
-    });
+      attachDaemon: Boolean(this.options.codexAttachDaemon),
+    }));
 
     const resumedThreadId = this.extractThreadIdFromResponse(response);
     if (!resumedThreadId) {

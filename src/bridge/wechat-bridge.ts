@@ -126,6 +126,8 @@ type BridgeCliOptions = {
   lifecycle: BridgeLifecycleMode;
   sessionStartMode: BridgeSessionStartMode;
   channelId: BridgeChannelId;
+  codexAttachDaemon: boolean;
+  codexAttachThreadId?: string;
 };
 
 type ActiveTask = {
@@ -226,6 +228,8 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
   let lifecycle: BridgeLifecycleMode = "persistent";
   let sessionStartMode: BridgeSessionStartMode = "restore";
   let channelId: BridgeChannelId = "wechat";
+  let codexAttachDaemon = false;
+  let codexAttachThreadId: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -284,6 +288,16 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
       case "--shutdown-on-parent-exit":
         lifecycle = "companion_bound";
         break;
+      case "--codex-attach-daemon":
+        codexAttachDaemon = true;
+        break;
+      case "--codex-thread-id":
+        if (!next) {
+          throw new Error("--codex-thread-id requires a value");
+        }
+        codexAttachThreadId = next;
+        i += 1;
+        break;
       case "--help":
       case "-h":
         printUsageAndExit();
@@ -297,6 +311,10 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
     throw new Error("Missing required --adapter <codex|claude|opencode|pi>");
   }
 
+  if (codexAttachDaemon && adapter !== "codex") {
+    throw new Error("--codex-attach-daemon requires --adapter codex");
+  }
+
   const defaultCommand = resolveDefaultAdapterCommand(adapter);
   return {
     adapter,
@@ -306,6 +324,8 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
     lifecycle,
     sessionStartMode,
     channelId,
+    codexAttachDaemon,
+    codexAttachThreadId,
   };
 }
 
@@ -343,7 +363,7 @@ function printUsageAndExit(): never {
   process.stdout.write(
     [
       "Internal bridge runtime usage:",
-      "  npm run bridge -- --adapter <codex|claude|opencode|pi> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>] [--session-start-mode <restore|new>]",
+      "  npm run bridge -- --adapter <codex|claude|opencode|pi> [--cmd <executable>] [--cwd <path>] [--profile <name-or-path>] [--lifecycle <persistent|companion_bound>] [--session-start-mode <restore|new>] [--codex-attach-daemon [--codex-thread-id <id>]]",
       "",
       "This entry is internal. Users should run a wechat-* or wecom-* launcher.",
       "",
@@ -488,10 +508,15 @@ async function main(): Promise<void> {
     profile: options.profile,
     lifecycle: options.lifecycle,
     sessionStartMode: options.sessionStartMode,
-    initialSharedSessionId:
-      stateStore.getState().sharedSessionId ?? stateStore.getState().sharedThreadId,
+    // Daemon attach binds an explicit or discovered live thread; a stale
+    // persisted session id must not leak into the attach target.
+    initialSharedSessionId: options.codexAttachDaemon
+      ? options.codexAttachThreadId
+      : stateStore.getState().sharedSessionId ?? stateStore.getState().sharedThreadId,
     initialResumeConversationId: stateStore.getState().resumeConversationId,
     initialTranscriptPath: stateStore.getState().transcriptPath,
+    codexAttachDaemon: options.codexAttachDaemon,
+    codexAttachThreadId: options.codexAttachThreadId,
   });
   const pendingWechatMessages = new PendingWechatMessageStore(
     options.channelId === "wechat"
