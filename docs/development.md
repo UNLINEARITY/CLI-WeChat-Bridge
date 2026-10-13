@@ -239,7 +239,7 @@ notice、approval、错误或最终回复发到错误会话。
 新增远程信道时，需要补齐以下入口：
 
 1. 在名称表中登记信道，并在 `src/channels/<channel>/` 实现配置、传输和 driver。
-2. 在 `src/channels/channel-driver-factory.ts` 接入 driver，在 bridge 和 daemon 启动流程中接入对应凭据与 transport。
+2. 在 `src/channels/channel-driver-factory.ts` 接入 driver，在 bridge 和 daemon 启动流程中接入对应凭据与 transport。输出端口也必须注册：standalone bridge 的 `portFactories` 覆盖全部远程信道，daemon 的 `createWechatChannelPort` 选择对应的 `ChannelPort`。
 3. 在 `src/companion/local-companion-start.ts` 的 `channelCredentialSetups` 注册初始化函数。该映射覆盖全部远程信道，遗漏会触发类型检查错误；后台启动参数会直接传递所选信道。
 4. 添加 `bin/<channel>-*.mjs`、`package.json` 命令映射及对应测试。参考 `test/companion/channel-launcher.test.ts`，覆盖帮助、成功提示、错误日志和 attach 状态校验。
 

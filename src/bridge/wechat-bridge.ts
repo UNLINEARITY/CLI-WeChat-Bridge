@@ -53,6 +53,7 @@ import { ensureWecomAccount } from "../channels/wecom/setup.ts";
 import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
 import { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
 import { TelegramChannelDriver } from "../channels/telegram/telegram-driver.ts";
+import { TelegramChannelPort } from "../channels/telegram/telegram-channel-port.ts";
 import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
 import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
 import { WecomChannelDriver } from "../channels/wecom/wecom-driver.ts";
@@ -676,9 +677,9 @@ async function main(): Promise<void> {
   const trackWechatForwardTask = (task: Promise<void>): void => {
     const tracked = task
       .catch((error) => {
-        logError(`WeChat forward task failed: ${describeWechatTransportError(error)}`);
+        logError(`${channelDriver.displayName} forward task failed: ${describeWechatTransportError(error)}`);
         stateStore.appendLog(
-          `wechat_forward_failed: error=${truncatePreview(describeWechatTransportError(error), 400)}`,
+          `${channelDriver.id}_forward_failed: error=${truncatePreview(describeWechatTransportError(error), 400)}`,
         );
       })
       .finally(() => {
@@ -957,6 +958,7 @@ async function main(): Promise<void> {
       },
       requestShutdown,
       wecomTransport,
+      telegramTransport,
       getWecomTarget: () => turns.resolveTarget(operatorConversation),
     });
 
@@ -1350,6 +1352,7 @@ export function wireAdapterEvents(params: {
   syncLocalClientEndpoint: () => void;
   requestShutdown: (message: string, exitCode?: number) => void;
   wecomTransport?: WecomTransport | null;
+  telegramTransport?: TelegramTransport | null;
   getWecomTarget?: () => ChannelConversationRef;
 }): void {
   const {
@@ -1370,44 +1373,58 @@ export function wireAdapterEvents(params: {
     syncLocalClientEndpoint,
     requestShutdown,
     wecomTransport,
+    telegramTransport,
     getWecomTarget,
   } = params;
-  const channelPort: BridgeChannelPort = options.channelId === "wecom"
-    ? new WecomChannelPort({
-        transport: wecomTransport!,
-        sendText: (target, text, kind) =>
-          queueWechatMessage(
-            stateStore.getState().authorizedUserId,
-            text,
-            toWechatSendContext(kind),
-            target,
-          ),
-        onEmptyVisibleReply: (adapter, rawText) => {
-          stateStore.appendLog(
-            `empty_visible_final_reply: adapter=${adapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
-          );
-        },
-      })
-    : new WechatChannelPort({
-        sendText: (recipientId, text, context) =>
-          queueWechatMessage(recipientId, text, context as WechatSendContext),
-        sendImage: (recipientId, filePath) =>
-          queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
-        sendFile: (recipientId, filePath) =>
-          queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
-        sendVoice: (recipientId, filePath) =>
-          queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
-        sendVideo: (recipientId, filePath) =>
-          queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
-        onEmptyVisibleReply: (adapter, rawText) => {
-          stateStore.appendLog(
-            `empty_visible_final_reply: adapter=${adapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
-          );
-        },
-        onTextSent: (_adapter, text) => {
-          stateStore.appendLog(`final_reply_sent: chars=${Array.from(text).length}`);
-        },
-      });
+  const remotePortCallbacks = {
+    sendText: (target: ChannelConversationRef, text: string, kind: ChannelOutputKind) =>
+      queueWechatMessage(
+        stateStore.getState().authorizedUserId,
+        text,
+        toWechatSendContext(kind),
+        target,
+      ),
+    onEmptyVisibleReply: (adapter: BridgeAdapterKind | undefined, rawText: string) => {
+      stateStore.appendLog(
+        `empty_visible_final_reply: adapter=${adapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
+      );
+    },
+  };
+  // Every remote channel must provide its own port; never fall back to WeChat.
+  const portFactories: Record<Exclude<BridgeChannelId, "local">, () => BridgeChannelPort> = {
+    wecom: () => {
+      if (!wecomTransport) {
+        throw new Error("The wecom channel port requires a WeCom transport.");
+      }
+      return new WecomChannelPort({ transport: wecomTransport, ...remotePortCallbacks });
+    },
+    telegram: () => {
+      if (!telegramTransport) {
+        throw new Error("The telegram channel port requires a Telegram transport.");
+      }
+      return new TelegramChannelPort({ transport: telegramTransport, ...remotePortCallbacks });
+    },
+    wechat: () => new WechatChannelPort({
+      sendText: (recipientId, text, context) =>
+        queueWechatMessage(recipientId, text, context as WechatSendContext),
+      sendImage: (recipientId, filePath) =>
+        queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
+      sendFile: (recipientId, filePath) =>
+        queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
+      sendVoice: (recipientId, filePath) =>
+        queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
+      sendVideo: (recipientId, filePath) =>
+        queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
+      onEmptyVisibleReply: remotePortCallbacks.onEmptyVisibleReply,
+      onTextSent: (_adapter, text) => {
+        stateStore.appendLog(`final_reply_sent: chars=${Array.from(text).length}`);
+      },
+    }),
+  };
+  if (options.channelId === "local") {
+    throw new Error("The local channel does not support standalone bridge output.");
+  }
+  const channelPort = portFactories[options.channelId]();
   let lastFinalReplyAtMs = 0;
   let eventForwardChain = Promise.resolve();
 
