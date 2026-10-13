@@ -1,10 +1,15 @@
 # CLI WeChat Bridge
 
+<p align="center">
+  <strong>简体中文</strong> · <a href="README_EN.md">English</a>
+</p>
+
 <p align='center'><img src='docs/images/logo.png' width=90%></p>
 
-<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&duration=4000&pause=500&color=06C763&center=true&vCenter=true&width=660&lines=CLI+WeChat+Bridge+%E5%BE%AE%E4%BF%A1%E6%A1%A5%E6%8E%A5;%E7%9C%9F%E6%AD%A3%E7%9A%84%E2%80%9C%E7%BB%88%E7%AB%AF-%E5%BE%AE%E4%BF%A1%E2%80%9D%E5%8E%9F%E7%94%9F%E5%8F%8C%E5%90%91%E4%BA%A4%E4%BA%92"></p>
+<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&duration=4000&pause=500&color=06C763&center=true&vCenter=true&width=660&lines=CLI+WeChat+Bridge+AI+%E7%BB%88%E7%AB%AF%E5%B7%A5%E5%85%B7%E6%A1%A5%E6%8E%A5;%E7%9C%9F%E6%AD%A3%E7%9A%84%E2%80%9C%E7%BB%88%E7%AB%AF-%E8%81%8A%E5%A4%A9%E5%B7%A5%E5%85%B7%E2%80%9D%E5%8E%9F%E7%94%9F%E5%8F%8C%E5%90%91%E4%BA%A4%E4%BA%92"></p>
 
 <p align="center">
+  <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/"><img alt="Product website" src="https://img.shields.io/badge/Website-Visit-0284c7?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNyI%2BPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOSIvPjxlbGxpcHNlIGN4PSIxMiIgY3k9IjEyIiByeD0iNCIgcnk9IjkiLz48cGF0aCBkPSJNMyAxMmgxOCIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=1c1917"></a>
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge"><img alt="GitHub stars" src="https://img.shields.io/github/stars/UNLINEARITY/CLI-WeChat-Bridge?label=Stars&style=for-the-badge&logo=github&color=0891b2&labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm version" src="https://img.shields.io/npm/v/cli-wechat-bridge?label=npm&style=for-the-badge&logo=npm&color=cb3837&labelColor=1c1917"></a>
   <a href="https://www.npmjs.com/package/cli-wechat-bridge"><img alt="npm downloads" src="https://img.shields.io/npm/dt/cli-wechat-bridge?label=Downloads&style=for-the-badge&logo=npm&color=16a34a&labelColor=1c1917"></a>
@@ -15,21 +20,18 @@
   <a href="https://github.com/UNLINEARITY/CLI-WeChat-Bridge/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/UNLINEARITY/CLI-WeChat-Bridge/ci.yml?branch=main&label=CI&style=for-the-badge&logo=githubactions&logoColor=white&labelColor=1c1917"></a>
 </p>
 
-**命令行工具的微信与企业微信桥接**：本项目将微信或企业微信消息桥接到本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、[`OpenCode`](https://github.com/anomalyco/opencode) 和 [`Pi`](https://github.com/earendil-works/pi)，同时把本地输出、审批请求与运行状态同步回对应通道。
+**命令行工具的微信、企业微信与 Telegram 桥接**：本项目将微信、企业微信或 Telegram 消息桥接到本地运行的 [`Codex`](https://github.com/openai/codex)、[`Claude Code`](https://code.claude.com/docs/en/overview)、[`OpenCode`](https://github.com/anomalyco/opencode) 和 [`Pi`](https://github.com/earendil-works/pi)，同时把本地输出、审批请求与运行状态同步回对应通道。
 
-项目围绕本地工作流设计，重点是保留**本地原生终端体验**：你仍然在本地使用原生 CLI 和高级启动参数，微信或企业微信负责远程输入、结果回流与状态同步。
-
-<p align="center">
-  <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/"><strong>产品主页 ↗</strong></a>
-</p>
+项目围绕本地工作流设计，重点是保留**本地原生终端体验**：你仍然在本地使用原生 CLI 和高级启动参数，微信、企业微信或 Telegram 负责远程输入、结果回流与状态同步。
 
 <p align='center'><img src='docs/images/animation.webp' width=90%></p>
 
 ## 文档导航
 
+- [Telegram 接入](#33-telegram-接入)：创建机器人、配对操作者、启动 CLI 或附加当前 Codex 会话。
 - [问题排查](docs/troubleshooting.md)：上下文 token、网络代理、本地 endpoint、已知限制等常见问题。
-- [Codex 通道连接 skill（实验性）](docs/codex-connection.md)：`$codex-bridge` skill 与 `--attach-current-session`，把当前 Codex 会话（0.162+ 共享 daemon 模式）接入微信。
-- [运行配置](docs/configuration.md)：微信与企业微信的数据目录、上传大小限制、调试开关等环境变量。
+- [Codex 通道连接 skill（实验性）](docs/codex-connection.md)：`$codex-bridge` skill 与 `--attach-current-session`，把当前 Codex 会话（0.162+ 共享 daemon 模式）接入微信、企业微信或 Telegram。
+- [运行配置](docs/configuration.md)：共享数据目录、界面语言、上传大小限制、调试开关等环境变量。
 - [开发说明](docs/development.md)：源码运行、测试、构建、打包和全局 smoke 验证。
 - [发布说明](docs/releases/README.md)：各版本变更与升级说明。
 - [通信架构](docs/architecture.md)：各 CLI 适配器的通信机制、PTY / RPC 依赖分析和技术决策。
@@ -40,12 +42,12 @@
 
 - 你的主工作流仍在本地终端中进行；
 - 你希望继续使用 Codex、Claude Code、OpenCode、Pi 等原生 CLI，而不是迁移到网页或托管机器人；
-- 你希望离开电脑后，仍能通过微信或企业微信向本地会话发送请求，并接收必要输出和状态更新。
+- 你希望离开电脑后，仍能通过微信、企业微信或 Telegram 向本地会话发送请求，并接收必要输出和状态更新。
 
-本项目不试图把微信或企业微信变成新的主工作界面。它的定位是：
+本项目不试图把微信、企业微信或 Telegram 变成新的主工作界面。它的定位是：
 
 - 本地 CLI 仍然是主工作界面，并保持原生的使用逻辑；
-- **微信或企业微信是远程入口**，用来接入本地会话；
+- **微信、企业微信或 Telegram 是远程入口**，用来接入本地会话；
 - 会话一致性、线程状态和审批流仍以**本地会话为中心**。
 
 ## 二、快速开始
@@ -59,7 +61,7 @@
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
   - [Pi](https://github.com/earendil-works/pi)（通过原生 TUI extension 接入；需要本机可执行 `pi` 命令）
 - Bridge 仅调用安装在 `PATH` 中、可直接执行的独立 CLI；不会发现或调用 ChatGPT.app 等桌面应用内部捆绑的私有可执行文件。
-- 已准备一个远程通道：个人微信使用 `wechat-setup`，企业微信使用 `wecom-setup`
+- 已准备一个远程通道：个人微信使用 `wechat-setup`，企业微信使用 `wecom-setup`，Telegram 使用 `telegram-setup`
 
 ### 2. 安装与更新
 
@@ -141,7 +143,9 @@ wechat-setup --qr-mode normal
 3. 等待你在微信中扫码并确认；
 4. 保存本地登录凭据。
 
-![微信登录二维码](docs/images/image-0.png)
+<p align="center">
+  <img src="docs/images/image-0.png" alt="微信登录二维码" width="85%">
+</p>
 
 登录成功后，程序会清理旧的同步游标和上下文 token，避免旧会话状态污染新的登录状态。数据目录、状态文件和旧版本迁移说明见 [问题排查](docs/troubleshooting.md#数据目录与状态文件)。
 
@@ -155,9 +159,36 @@ wechat-setup --qr-mode normal
 2. 运行 `wecom-setup`，输入 Bot ID 和 Secret；
 3. 在企业微信中与机器人单聊，发送终端显示的 `/pair <code>` 完成一次性操作者配对；
 
-![企业微信配置](docs/images/image-11.png)
+<p align="center">
+  <img src="docs/images/image-11.png" alt="企业微信配置" width="85%">
+</p>
 
-### 4. 先从微信发一条同步消息（重要）
+#### 3.3 Telegram 接入
+
+Telegram 使用官方 [Bot API 长轮询](https://core.telegram.org/bots/api#getupdates)，不需要公网回调地址，本机需能访问 `api.telegram.org`。npm 发布的 `1.2.2` 尚未包含 Telegram 命令，使用时需安装包含此功能的构建；源码安装步骤见[开发说明](docs/development.md#源码更新)。
+
+1. 在 Telegram 中打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示创建机器人并取得 Bot Token（[官方创建说明](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)）。
+2. 在本地终端运行 `telegram-setup`，输入 Bot Token。
+3. 打开新建机器人的私聊，点击 **Start**，在 10 分钟内发送终端显示的 `/pair <六位配对码>`。配对必须使用你之后操控 CLI 的 Telegram 账号。
+4. 终端显示 `Telegram operator pairing completed.` 即完成；凭据和操作者身份保存到 `~/.cli-bridge/telegram/account.json`，下次启动会自动使用。
+5. 进入目标项目目录，运行 `telegram-daemon --adapter codex`，或选择下表中的 `telegram-*` 直接启动命令，然后在机器人私聊中发送任务。
+
+```bash
+telegram-setup          # 创建本地配置并完成操作者配对
+telegram-setup --check  # 检查已配置的 Bot Token 是否有效
+```
+
+同一个 Bot Token 同时只运行一个 bridge／daemon；重新运行 `telegram-setup` 配对前，先停止正在使用这个机器人的桥接进程。
+
+如果要将 **当前 Codex 会话**接入 Telegram，在该项目目录中使用：
+
+```bash
+telegram-codex --attach-current-session
+```
+
+此方式需要 Codex >= 0.162 的共享 daemon 会话；成功输出 `Attached Codex daemon thread <id>`，不会打开新的可见 CLI。同一目录有多个活会话时可追加 `--codex-thread-id <id>`，详见 [Codex 通道连接说明](docs/codex-connection.md)。
+
+### 4. 先从微信发一条同步消息（仅微信）
 
 启动 bridge 后，建议先在微信里向 Bot 发送一条消息，例如 `hello`、你要执行的任务，或任意一句话。这样 bridge 能拿到最新的微信会话 `context_token`，之后本地终端中的输入、最终回复和审批提示才能稳定同步回微信。
 
@@ -173,17 +204,17 @@ cd D:\work\your-project
 
 然后选择一个单命令入口：
 
-| 使用的本地 CLI | 微信启动命令 | 企业微信启动命令 |
-| --- | --- | --- |
-| Codex | `wechat-codex` | `wecom-codex` |
-| Claude Code | `wechat-claude` | `wecom-claude` |
-| OpenCode | `wechat-opencode` | `wecom-opencode` |
-| Pi | `wechat-pi` | `wecom-pi` |
+| 使用的本地 CLI | 微信启动命令 | 企业微信启动命令 | Telegram 启动命令 |
+| --- | --- | --- | --- |
+| Codex | `wechat-codex` | `wecom-codex` | `telegram-codex` |
+| Claude Code | `wechat-claude` | `wecom-claude` | `telegram-claude` |
+| OpenCode | `wechat-opencode` | `wecom-opencode` | `telegram-opencode` |
+| Pi | `wechat-pi` | `wecom-pi` | `telegram-pi` |
 
 
 没有 daemon 时，四个直接命令按**单个活动工作区切换器**工作：
 
-- 同一时间只有一个项目与微信或企业微信对话；
+- 同一时间只有一个项目与所选的微信、企业微信或 Telegram 通道对话；
 - 如果检测到可见端仍在运行但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端；
 - 在其他目录执行会显式切换活动工作区。
 
@@ -202,6 +233,8 @@ wechat-daemon
 wecom-daemon --adapter claude
 ```
 
+Telegram 使用 `telegram-daemon --adapter codex`，支持同样的 CLI 切换指令。
+
 启动后，在对应远程通道里发送以下指令即可选择当前活动终端：
 
 | 指令 | 行为 |
@@ -213,11 +246,17 @@ wecom-daemon --adapter claude
 
 daemon 启动后，后续切换都可以直接从对应远程通道发起；如果对应 CLI 还没有可见窗口，daemon 会自动打开或复用它，不需要再手动运行适配器命令。
 
-![多 CLI 示例-微信](docs/images/image-9.png)
+<p align="center">
+  <img src="docs/images/image-9.png" alt="多 CLI 示例-微信" width="85%">
+</p>
 
-![多 CLI 示例-企业微信](docs/images/image-12.png)
+<p align="center">
+  <img src="docs/images/image-12.png" alt="多 CLI 示例-企业微信" width="85%">
+</p>
 
-![多 CLI 示例-企业微信](docs/images/image-13.png)
+<p align="center">
+  <img src="docs/images/image-13.png" alt="多 CLI 示例-企业微信" width="85%">
+</p>
 
 当前 daemon 行为如下：
 
@@ -238,55 +277,65 @@ wechat-daemon --adapter claude --profile work
 
 ## 三、适配器支持情况
 
-> 目前支持将本地文件发送到微信或企业微信，微信和企业微信也允许发送文件给本地 CLI 解析（注意模型本身要具备处理对应文件的能力！）
+> 目前支持将本地文件发送到微信、企业微信或 Telegram，这些通道也允许发送文件给本地 CLI 解析（注意模型本身要具备处理对应文件的能力！）
 
-![文件传输](docs/images/image-8.png)
+<p align="center">
+  <img src="docs/images/image-8.png" alt="文件传输" width="85%">
+</p>
 
-微信或企业微信发来的图片和普通文件也会被接收并保存到本地：
+微信、企业微信或 Telegram 发来的图片和普通文件也会被接收并保存到本地：
 
 - bridge 会将本地路径追加到转发给 Codex / Claude Code / OpenCode / Pi 的 prompt 中，模型可按需读取或解析这些文件；
 - 当前不会自动 OCR 图片，也不会自动抽取 PDF / DOCX 正文；如需解析，由本地 CLI 根据路径完成。
-- 具体保存位置见 [问题排查](docs/troubleshooting.md#数据目录与状态文件)。
+- Telegram 附件保存到 `~/.cli-bridge/telegram/inbound-attachments/`，也支持接收视频、语音和音频文件。其他通道的具体保存位置见 [问题排查](docs/troubleshooting.md#数据目录与状态文件)。
 
 | 适配器 | 当前状态 | 说明 |
 | --- | --- | --- |
-| `codex` | 已接入 | `wechat-codex` / `wecom-codex` 自动确保内部 runtime 并打开可见 Codex；远程通道跟随本地 thread |
-| `claude` | 已接入 | `wechat-claude` / `wecom-claude` 自动启动或复用 Claude Code；会话、最终回复与审批按 Claude session 语义同步 |
-| `opencode` | 已接入 | `wechat-opencode` / `wecom-opencode` 自动启动或复用 OpenCode；支持本地 session 跟随及远程通道 `/new` / `/new-session` |
-| `pi` | 已接入 | `wechat-pi` / `wecom-pi` 启动用户原生 Pi TUI，并通过本地 extension 让远程通道接管同一 session，支持最终回复、停止、新建和恢复 session |
+| `codex` | 已接入 | `wechat-codex` / `wecom-codex` / `telegram-codex` 自动确保内部 runtime 并打开可见 Codex；远程通道跟随本地 thread |
+| `claude` | 已接入 | `wechat-claude` / `wecom-claude` / `telegram-claude` 自动启动或复用 Claude Code；会话、最终回复与审批按 Claude session 语义同步 |
+| `opencode` | 已接入 | `wechat-opencode` / `wecom-opencode` / `telegram-opencode` 自动启动或复用 OpenCode；支持本地 session 跟随及远程通道 `/new` / `/new-session` |
+| `pi` | 已接入 | `wechat-pi` / `wecom-pi` / `telegram-pi` 启动用户原生 Pi TUI，并通过本地 extension 让远程通道接管同一 session，支持最终回复、停止、新建和恢复 session |
 
-Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目的配置、扩展与其他本地文件；该参数不是逐项工具审批开关；读写文件和执行命令均使用启动 `wechat-pi` 的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` 本身就是被微信接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。Pi `0.85.0` 及更新版本要求 Node.js `>=22.19.0`，低于该版本时 `wechat-pi` / `wecom-pi` 会在启动前明确提示。
+Pi 按全权限本地代理运行：bridge 不增加工具审批层，并传入 `--approve` 信任当前项目的配置、扩展与其他本地文件；该参数不是逐项工具审批开关；读写文件和执行命令均使用启动 Pi 桥接命令的本地用户权限。原生 TUI 的主题、快捷键、模型选择和 extension UI 都会保留。`wechat-pi` / `wecom-pi` / `telegram-pi` 本身就是被对应远程通道接管的 Pi TUI；不要再启动第二个 Pi 进程同时写入同一个 session 文件。Pi `0.85.0` 及更新版本要求 Node.js `>=22.19.0`，低于该版本时 `wechat-pi` / `wecom-pi` / `telegram-pi` 会在启动前明确提示。
 
 ### Codex 示例
 
-![Codex windows](docs/images/image-3.png)
+<p align="center">
+  <img src="docs/images/image-3.png" alt="Codex windows" width="85%">
+</p>
 
-![Codex Linux](docs/images/image-4.png)
+<p align="center">
+  <img src="docs/images/image-4.png" alt="Codex Linux" width="85%">
+</p>
 
 ### Claude Code 示例
 
-![Claude Windows](docs/images/image-6.png)
+<p align="center">
+  <img src="docs/images/image-6.png" alt="Claude Windows" width="85%">
+</p>
 
-![Claude Linux](docs/images/image-7.png)
+<p align="center">
+  <img src="docs/images/image-7.png" alt="Claude Linux" width="85%">
+</p>
 
 ### OpenCode / Pi 示例
 
-OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session` 创建新 session；如果在本地 OpenCode CLI 中创建新 session，远程通道消息也会跟随新的 session。
+OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `/new-session` 创建新 session；如果在本地 OpenCode CLI 中创建新 session，远程通道消息也会跟随新的 session。
 
 ## 四、终端侧命令说明
 
-所有命令都在目标项目目录中执行。`wechat-*` 使用个人微信，`wecom-*` 使用企业微信；两类入口的适配器名称和参数保持一致。
+所有命令都在目标项目目录中执行。`wechat-*` 使用个人微信，`wecom-*` 使用企业微信，`telegram-*` 使用 Telegram；三类入口的适配器名称和参数保持一致。
 
 ### 4.1 全局入口
 
-| 用途 | 微信 | 企业微信 | 说明 |
-| --- | --- | --- | --- |
-| 登录 / 配对 | `wechat-setup` | `wecom-setup` | 微信扫码登录；企业微信输入 Bot ID、Secret 并完成 `/pair` |
-| 常驻 daemon | `wechat-daemon` | `wecom-daemon` | 在当前目录保持远程连接并管理多个 CLI slot |
-| Codex | `wechat-codex` | `wecom-codex` | 启动或复用 Codex 可见终端 |
-| Claude Code | `wechat-claude` | `wecom-claude` | 启动或复用 Claude Code 可见终端 |
-| OpenCode | `wechat-opencode` | `wecom-opencode` | 启动或复用 OpenCode 可见终端 |
-| Pi | `wechat-pi` | `wecom-pi` | 启动或复用 Pi 原生 TUI |
+| 用途 | 微信 | 企业微信 | Telegram | 说明 |
+| --- | --- | --- | --- | --- |
+| 登录 / 配对 | `wechat-setup` | `wecom-setup` | `telegram-setup` | 微信扫码登录；企业微信输入 Bot ID、Secret，Telegram 输入 Bot Token，两者均需 `/pair` |
+| 常驻 daemon | `wechat-daemon` | `wecom-daemon` | `telegram-daemon` | 在当前目录保持远程连接并管理多个 CLI slot |
+| Codex | `wechat-codex` | `wecom-codex` | `telegram-codex` | 启动或复用 Codex 可见终端 |
+| Claude Code | `wechat-claude` | `wecom-claude` | `telegram-claude` | 启动或复用 Claude Code 可见终端 |
+| OpenCode | `wechat-opencode` | `wecom-opencode` | `telegram-opencode` | 启动或复用 OpenCode 可见终端 |
+| Pi | `wechat-pi` | `wecom-pi` | `telegram-pi` | 启动或复用 Pi 原生 TUI |
 
 1.1.5 已移除完成弃用周期的 `wechat-*-start` 别名；请直接使用上表中的入口。公开的 `wechat-bridge*` 命令和 Shell adapter 也已移除，内部 bridge runtime 由直接命令和 daemon 自动管理。
 
@@ -300,16 +349,16 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `--no-open` | 创建 runtime slot，但不自动打开可见 CLI | `wechat-daemon --no-open` |
 | `--doctor` | 检查 Node.js、CLI、锁、endpoint 和 daemon 状态 | `wechat-daemon --doctor` |
 
-企业微信 daemon 使用相同参数，例如 `wecom-daemon --adapter claude --profile work`。daemon 绑定启动时的工作目录；具体的微信 / 企业微信侧控制指令见[下一章](#五微信--企业微信侧支持的指令)。
+企业微信和 Telegram daemon 使用相同参数，例如 `wecom-daemon --adapter claude --profile work` 或 `telegram-daemon --adapter claude --profile work`。daemon 绑定启动时的工作目录；具体的远程通道控制指令见[下一章](#五微信--企业微信--telegram-侧支持的指令)。
 
 ### 4.3 直接启动适配器
 
-| 适配器 | 微信入口 | 企业微信入口 | 默认会话策略 |
-| --- | --- | --- | --- |
-| Codex | `wechat-codex` | `wecom-codex` | 恢复当前会话 |
-| Claude Code | `wechat-claude` | `wecom-claude` | 新建会话 |
-| OpenCode | `wechat-opencode` | `wecom-opencode` | 新建会话 |
-| Pi | `wechat-pi` | `wecom-pi` | 新建会话 |
+| 适配器 | 微信入口 | 企业微信入口 | Telegram 入口 | 默认会话策略 |
+| --- | --- | --- | --- | --- |
+| Codex | `wechat-codex` | `wecom-codex` | `telegram-codex` | 新建会话 |
+| Claude Code | `wechat-claude` | `wecom-claude` | `telegram-claude` | 新建会话 |
+| OpenCode | `wechat-opencode` | `wecom-opencode` | `telegram-opencode` | 新建会话 |
+| Pi | `wechat-pi` | `wecom-pi` | `telegram-pi` | 新建会话 |
 
 通用参数：
 
@@ -319,25 +368,25 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `--profile <name-or-path>` | 传给内部 runtime | `wechat-claude --profile work` |
 | `--timeout-ms <ms>` | 等待当前目录 endpoint 的最长时间，默认 `15000` | `wechat-codex --timeout-ms 30000` |
 | `--session-start-mode <restore / new>` | 显式选择恢复或新建会话 | `wechat-pi --session-start-mode restore` |
-| `--attach-current-session` | （仅 Codex）把微信接入当前目录中运行中的共享 daemon 会话，不打开可见 CLI，需 Codex >= 0.162 | `wechat-codex --attach-current-session` |
+| `--attach-current-session` | （仅 Codex）把所选的微信、企业微信或 Telegram 通道接入当前目录中运行中的共享 daemon 会话，不打开可见 CLI，需 Codex >= 0.162 | `wechat-codex --attach-current-session` |
 | `--codex-thread-id <id>` | （仅 Codex）附加时显式指定线程，代替按目录自动发现 | `wechat-codex --attach-current-session --codex-thread-id <id>` |
 | `--doctor` | 检查选定适配器和工作区，不启动 CLI | `wechat-claude --doctor` |
 | 其他参数 | 继续透传给可见的底层 CLI | `wechat-codex --model gpt-5.2 --yolo` |
 
-`--yolo` 会传给 Codex，`--dangerously-skip-permissions` 会传给 Claude Code；这些参数只影响本地可见 CLI，不会覆盖内部 runtime、通道凭据或工作区锁。对应的企业微信入口只需将命令前缀替换为 `wecom-`。
+`--yolo` 会传给 Codex，`--dangerously-skip-permissions` 会传给 Claude Code；这些参数只影响本地可见 CLI，不会覆盖内部 runtime、通道凭据或工作区锁。对应的企业微信或 Telegram 入口只需将命令前缀替换为 `wecom-` 或 `telegram-`。
 
 ### 4.4 更新
 
 | 操作 | 命令 | 说明 |
 | --- | --- | --- |
-| 检查更新 | `wechat-check-update` / `wecom-check-update` | 查询 npm 上的最新版本 |
+| 检查更新 | `wechat-check-update` / `wecom-check-update` / `telegram-check-update` | 查询 npm 上的最新版本 |
 | 升级 | `npm install -g cli-wechat-bridge@latest` | 升级后重启正在运行的 bridge、daemon 和 companion |
 
 直接启动命令也支持 `--doctor`，用于检查选定适配器和当前工作区而不启动 CLI。
 
-## 五、微信 / 企业微信侧支持的指令
+## 五、微信 / 企业微信 / Telegram 侧支持的指令
 
-以下通用指令同时适用于微信和企业微信。普通文本会发送到当前活动会话；带 `[prompt]` 的适配器切换指令会先切换 CLI，再转发剩余文本。
+以下通用指令同时适用于微信、企业微信和 Telegram。普通文本会发送到当前活动会话；带 `[prompt]` 的适配器切换指令会先切换 CLI，再转发剩余文本。
 
 ### 5.1 通用控制指令
 
@@ -363,7 +412,7 @@ OpenCode 模式下，微信和企业微信侧都支持 `/new` 或 `/new-session`
 | `deny`、`no` | 有待审批时 | `/deny` 的文本别名 |
 | `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、Claude、OpenCode 的结构化回答 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
-| `/pair <code>` | 企业微信首次配置 | 在 `wecom-setup` 提示后完成操作者配对 |
+| `/pair <code>` | 企业微信、Telegram 配置 | 在 `wecom-setup` 或 `telegram-setup` 提示后完成操作者配对 |
 
 语言切换及启动环境变量的优先级见 [界面语言](docs/configuration.md#界面语言)。
 
@@ -371,7 +420,7 @@ Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单
 
 Claude Code 的模型、计划模式控制需要可见 CLI 处于空闲原生提示符，且没有待审批、本地草稿或打开的弹窗。操作会短暂打开原生选择器并等待确认；控制期间操作本地键盘会取消远程控制。Claude Code 使用选择器的 `s`（仅当前会话）切换模型，需要 CLI 支持此选项；`/plan off` 会恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
 
-OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥接通过 OpenCode server 的会话 API 查询已连接模型、提交模型与 primary agent，并回读 session 确认结果；微信和企业微信消息直接通过 SDK 提交，同时显式携带已生效的 agent、model 和 variant。OpenCode 的 `/plan` 选择 `plan` primary agent；缺少该 agent 时会提示错误，`/plan off` 没有历史记录时恢复 `build` 或首个非 plan primary agent。
+OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥接通过 OpenCode server 的会话 API 查询已连接模型、提交模型与 primary agent，并回读 session 确认结果；微信、企业微信和 Telegram 消息直接通过 SDK 提交，同时显式携带已生效的 agent、model 和 variant。OpenCode 的 `/plan` 选择 `plan` primary agent；缺少该 agent 时会提示错误，`/plan off` 没有历史记录时恢复 `build` 或首个非 plan primary agent。
 
 Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理：每次 `/confirm` 或 `/deny` 只处理当前显示的一项，再提示下一项；本地终端已处理的请求会同步移除。子代理的权限请求仍由所属父任务接收，审批不会切换当前会话或改变回复目标。升级后请重启已打开的 CLI 窗口，旧 companion 仍可显示状态，但需要重启才能远程审批。
 
@@ -385,11 +434,13 @@ Pi 的 `/model` 通过已连接原生 TUI extension 读取当前 scoped model �
 
 从微信派发任务后，聊天窗口会显示原生的「对方正在输入…」状态，并以 5 秒心跳保持，直到回复送达、任务失败或 daemon 关闭。typing 凭证按联系人从微信官方配置端点获取并自动刷新，获取失败时整体静默降级，不影响消息收发。
 
-较长的回复现在作为一条完整消息发出，不再按固定长度拆分，与微信官方机器人客户端的行为一致。若服务器拒收超长消息，既有的重试与待发队列机制仍会记录失败，回复不会无声丢失。
+微信较长的回复现在作为一条完整消息发出，不再按固定长度拆分，与微信官方机器人客户端的行为一致。若服务器拒收超长消息，既有的重试与待发队列机制仍会记录失败，回复不会无声丢失。
+
+Telegram 任务运行期间也会保持原生的「正在输入」提示，较长回复按 Telegram 的消息长度限制自动拆分投递。
 
 ### daemon IPC（外部程序接入）
 
-`wechat-daemon` 与 `wecom-daemon` 在本地开放带 token 认证的 IPC 接口，外部程序（网页面板、脚本、自建机器人前端等）可以将文本按与聊天消息完全一致的处理规则下发给任意 CLI，或借用通道发送消息：忙碌时拒绝、有待审批或结构化输入时等待、Codex 本地任务期间自动排队，回复始终发回所属会话，输入被拒绝或失败时自动回滚状态。接口语义见 [docs/development.md](docs/development.md)。Claude 原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端；OpenCode 只有在 server 回读确认后才报告切换成功。
+`wechat-daemon`、`wecom-daemon` 与 `telegram-daemon` 在本地开放带 token 认证的 IPC 接口，外部程序（网页面板、脚本、自建机器人前端等）可以将文本按与聊天消息完全一致的处理规则下发给任意 CLI，或借用通道发送消息：忙碌时拒绝、有待审批或结构化输入时等待、Codex 本地任务期间自动排队，回复始终发回所属会话，输入被拒绝或失败时自动回滚状态。接口语义见 [docs/development.md](docs/development.md)。Claude 原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端；OpenCode 只有在 server 回读确认后才报告切换成功。
 
 ### 5.2 会话恢复与本地同步
 
@@ -404,9 +455,11 @@ Pi 的 `/model` 通过已连接原生 TUI extension 读取当前 scoped model �
 
 ### 5.3 daemon 表情绑定
 
-Daemon 模式支持将消息开头的表情映射为命令。表情绑定对微信和企业微信 daemon 均使用同一份配置，修改后立即生效并持久化到 `~/.cli-bridge/emoji-bindings.json`。
+Daemon 模式支持将消息开头的表情映射为命令。表情绑定对微信、企业微信和 Telegram daemon 均使用同一份配置，修改后立即生效并持久化到 `~/.cli-bridge/emoji-bindings.json`。
 
-![表情触发](docs/images/image-10.png)
+<p align="center">
+  <img src="docs/images/image-10.png" alt="表情触发" width="85%">
+</p>
 
 | 表情 | 默认命令 | 作用 |
 | --- | --- | --- |
@@ -483,5 +536,7 @@ Daemon 模式支持将消息开头的表情映射为命令。表情绑定对微�
 - GitHub: [@UNLINEARITY](https://github.com/UNLINEARITY)
 
 <!-- star-history:start -->
-[![Star History](https://raw.githubusercontent.com/UNLINEARITY/CLI-WeChat-Bridge/main/assets/star-history/star-history.png)](https://star-history.com/#UNLINEARITY/CLI-WeChat-Bridge&Date)
+<p align="center">
+  <a href="https://star-history.com/#UNLINEARITY/CLI-WeChat-Bridge&amp;Date"><img src="https://raw.githubusercontent.com/UNLINEARITY/CLI-WeChat-Bridge/main/assets/star-history/star-history.png" alt="Star History" width="85%"></a>
+</p>
 <!-- star-history:end -->
