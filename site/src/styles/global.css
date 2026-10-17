@@ -173,7 +173,7 @@ img { max-width: 100%; }
 .command-controls small { width: 100%; margin-bottom: 4px; color: var(--muted); font: 600 12px/1.2 var(--sans); letter-spacing: .04em; }
 .choice { padding: 7px 11px; border: 1px solid #cadbd0; border-radius: 7px; color: var(--soft); background: rgba(255,255,255,.74); cursor: pointer; font: 400 13px/1.2 var(--sans); transition: color .2s ease, border-color .2s ease, background .2s ease; }
 .choice:hover, .choice.active { border-color: var(--wechat); color: var(--green-dark); background: var(--green-pale); }
-.setup-note { margin: 0; padding: 17px 22px; color: var(--muted); font-size: 13px; }
+.setup-note { margin: 0; padding: 17px 22px; color: var(--muted); font-size: 13px; white-space: pre-line; }
 
 .proof { overflow: hidden; border-bottom: 1px solid var(--line); }
 .proof-rail { overflow: hidden; margin-inline: calc((100vw - min(1180px, calc(100vw - 48px))) / -2); padding: 10px 0 25px; }

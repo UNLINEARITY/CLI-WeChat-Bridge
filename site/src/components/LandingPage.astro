@@ -12,28 +12,28 @@ const pageUrl = isZh ? siteRoot : `${siteRoot}en/`;
 const alternateUrl = isZh ? `${base}en/` : base;
 const repoUrl = "https://github.com/UNLINEARITY/CLI-WeChat-Bridge";
 const npmUrl = "https://www.npmjs.com/package/cli-wechat-bridge";
-const docsUrl = `${repoUrl}#二快速开始`;
-const securityUrl = `${repoUrl}#三适配器支持情况`;
+const docsUrl = isZh ? `${repoUrl}#二快速开始` : `${repoUrl}/blob/main/README_EN.md#2-quick-start`;
+const securityUrl = isZh ? `${repoUrl}#三适配器支持情况` : `${repoUrl}/blob/main/README_EN.md#3-adapter-support`;
 const architectureUrl = `${repoUrl}/blob/main/docs/architecture.md`;
 const install = "npm install -g cli-wechat-bridge@latest";
 
 const copy = isZh ? {
-  title: "CLI WeChat Bridge｜微信与本地 CLI，真正的原生双向",
-  description: "从微信或企业微信操作本地 Codex、Claude Code、OpenCode 和 Pi。输入、审批、状态、会话与结果在手机和原生终端之间双向同步。",
+  title: "CLI WeChat Bridge｜微信、企业微信与 Telegram 连接本地 CLI",
+  description: "从微信、企业微信或 Telegram 操作本地 Codex、Claude Code、OpenCode 和 Pi。输入、审批、状态、会话与结果在手机和原生终端之间双向同步。",
   lang: "EN",
   nav: ["快速开始", "双向能力", "工作原理", "安全边界"],
   navIds: ["quickstart", "capabilities", "architecture", "trust"],
   github: "GitHub",
-  eyebrow: "WECHAT / WECOM × NATIVE LOCAL CLI",
+  eyebrow: "WECHAT / WECOM / TELEGRAM × NATIVE LOCAL CLI",
   headlineA: "微信与本地 CLI，",
   headlineB: "真正的原生双向。",
-  lede: "不是把最终结果简单转发到手机，而是让输入、审批、提问、状态和会话在两端保持连贯。Codex、Claude Code、OpenCode 和 Pi 始终原生运行在你的电脑上。",
+  lede: "不是把最终结果简单转发到手机，而是让输入、审批、提问、状态和会话在微信、企业微信或 Telegram 与本地 CLI 之间保持连贯。Codex、Claude Code、OpenCode 和 Pi 始终原生运行在你的电脑上。",
   install: "复制安装命令",
   copied: "已复制",
   source: "查看 GitHub",
   local: "本地执行",
   native: "原生终端",
-  channels: "双通道",
+  channels: "三通道",
   heroDiagram: { channel: "远程通道", bridge: "CLI Bridge", workspace: "本地工作区", summary: "输入・审批・状态・结果", phases: ["任务正在发送", "正在路由到本地 CLI", "本地 CLI 正在执行", "结果、审批与状态正在回流"] },
   metrics: { stars: "GitHub Stars", version: "当前版本", downloads: "npm 总下载量" },
   capability: {
@@ -41,22 +41,22 @@ const copy = isZh ? {
     title: "一次交互，双向贯穿整个任务。",
     lede: "手机是远程入口，本地终端仍是主工作界面。无论从哪一端开始，都围绕同一个本地会话继续。",
     items: [
-      ["01", "远程输入与结果", "从微信发送自然语言或命令，本地 CLI 执行后把结果回复到原会话。"],
+      ["01", "远程输入与结果", "从微信、企业微信或 Telegram 发送自然语言或命令，本地 CLI 执行后把结果回复到原会话。"],
       ["02", "终端与手机同步", "原生 CLI 保持可见、可操作；回到电脑后可以直接从当前上下文继续。"],
       ["03", "审批与提问回流", "CLI 的审批、澄清和选择请求可回到手机，不必守在终端前等待。"],
-      ["04", "状态与会话控制", "远程切换 CLI、查询状态、停止任务、重置或恢复会话。"],
+      ["04", "状态与会话控制", "用 /codex、/claude、/opencode、/pi 切换 CLI；/status、/stop、/resume 查询状态、停止任务或恢复会话。"],
     ],
   },
   architecture: {
     eyebrow: "两层架构",
     title: "通道负责抵达，Bridge 负责保持原生。",
-    lede: "消息进入当前工作区后，由 daemon 或直接启动器交给对应 adapter。每个 adapter 使用该 CLI 的原生通信方式，而不是把它替换成另一个聊天机器人。",
+    lede: "消息进入当前工作区后，由 daemon 或直接启动器交给对应 adapter。每个 adapter 使用该 CLI 的原生通信方式，而不是把它替换成另一个聊天机器人。Codex 常规桥接兼容 0.149.x–0.161.x；把当前会话接入通道需要 0.162+ 的共享 daemon。",
     channel: "Channel",
     orchestration: "Workspace bridge",
     native: "Native CLI",
-    channelItems: ["WeChat iLink", "WeCom Bot"],
+    channelItems: ["WeChat iLink", "WeCom Smart Bot", "Telegram Bot API"],
     bridgeItems: ["Daemon / direct launcher", "Turn & session routing", "Approvals / local companion"],
-    cliItems: ["Codex · WebSocket RPC", "Claude Code · PTY + Hook", "OpenCode · HTTP + SSE", "Pi · TUI extension"],
+    cliItems: ["Codex · WebSocket RPC", "Claude Code · PTY + Hook", "OpenCode · HTTP + SSE (1.18 / 2.0)", "Pi · TUI extension"],
     upstream: "message · command · approval response",
     downstream: "output · question · status · final reply",
     detail: "阅读通信架构",
@@ -67,7 +67,7 @@ const copy = isZh ? {
     lede: "Bridge 在你的电脑和当前用户权限下运行。它连接现有本地 CLI，不把项目迁移到网页工作区。",
     items: [
       ["任务留在本地", "工作目录、CLI 进程和会话状态保留在你的电脑；远程通道只负责传递消息与媒体。"],
-      ["身份与通道绑定", "个人微信使用登录账号；企业微信通过 Bot 凭据和操作者配对限制控制入口。"],
+      ["身份与通道绑定", "个人微信使用登录账号；企业微信通过 Bot 凭据和操作者配对限制控制入口；Telegram 只接受已配对的操作者。"],
       ["继承原生权限", "Codex、Claude Code 等沿用对应 CLI 的权限和审批语义；Pi 以全权限本地代理运行。"],
       ["边界清晰可见", "daemon 绑定启动目录；你可以在本地终端观察、接管或停止运行中的会话。"],
     ],
@@ -82,7 +82,8 @@ const copy = isZh ? {
     steps: ["全局安装", "登录 / 配对", "选择启动方式"],
     wechat: "微信",
     wecom: "企业微信",
-    note: "需要 Node.js ≥ 22.13.0，并预先安装至少一个受支持的 CLI。Pi 0.85.0+ 需要 Node.js ≥ 22.19.0。",
+    telegram: "Telegram",
+    note: "需要 Node.js ≥ 22.13.0 与至少一个受支持的 CLI。Pi 0.85.0+ 需 Node.js ≥ 22.19.0。\nTelegram 从 1.2.3 起提供全局命令；微信启动后先发消息刷新 context_token；Codex ≥ 0.162 支持接入当前会话。",
     docs: "查看完整安装说明",
   },
   proof: {
@@ -94,22 +95,22 @@ const copy = isZh ? {
   closing: { title: "让任务离开屏幕，\n但不离开你的本地工作流。", install: "复制安装命令", github: "打开 GitHub" },
   footer: "AGPL-3.0 · 本地优先 · 为原生 CLI 而建",
 } : {
-  title: "CLI WeChat Bridge | Native two-way control for local AI CLIs",
-  description: "Control local Codex, Claude Code, OpenCode, and Pi sessions from WeChat or WeCom. Inputs, approvals, status, sessions, and results stay connected to your native terminal.",
+  title: "CLI WeChat Bridge | WeChat, WeCom, and Telegram for local AI CLIs",
+  description: "Control local Codex, Claude Code, OpenCode, and Pi sessions from WeChat, WeCom, or Telegram. Inputs, approvals, status, sessions, and results stay connected to your native terminal.",
   lang: "中文",
   nav: ["Quick start", "Capabilities", "Architecture", "Trust"],
   navIds: ["quickstart", "capabilities", "architecture", "trust"],
   github: "GitHub",
-  eyebrow: "WECHAT / WECOM × NATIVE LOCAL CLI",
+  eyebrow: "WECHAT / WECOM / TELEGRAM × NATIVE LOCAL CLI",
   headlineA: "WeChat and local CLIs,",
   headlineB: "truly two-way.",
-  lede: "More than forwarding a final answer. Inputs, approvals, questions, status, and sessions stay continuous across your phone and terminal, while Codex, Claude Code, OpenCode, and Pi keep running natively on your computer.",
+  lede: "More than forwarding a final answer. Inputs, approvals, questions, status, and sessions stay continuous between WeChat, WeCom, or Telegram and your local CLIs, while Codex, Claude Code, OpenCode, and Pi keep running natively on your computer.",
   install: "Copy install command",
   copied: "Copied",
   source: "View on GitHub",
   local: "Local execution",
   native: "Native terminals",
-  channels: "Two channels",
+  channels: "Three channels",
   heroDiagram: { channel: "Remote channels", bridge: "CLI Bridge", workspace: "Local workspace", summary: "Input · approval · status · results", phases: ["Sending task", "Routing to the local CLI", "Local CLI is executing", "Results, approvals, and status are returning"] },
   metrics: { stars: "GitHub Stars", version: "Current version", downloads: "Total npm downloads" },
   capability: {
@@ -117,22 +118,22 @@ const copy = isZh ? {
     title: "Two-way through the entire task.",
     lede: "Your phone is the remote entry point; the native terminal remains the primary workspace. Start from either side and continue in the same local session.",
     items: [
-      ["01", "Remote input and results", "Send natural language or commands from chat, run them in the local CLI, and receive results in the same conversation."],
+      ["01", "Remote input and results", "Send natural language or commands from WeChat, WeCom, or Telegram, run them in the local CLI, and receive results in the same conversation."],
       ["02", "Phone and terminal continuity", "The native CLI stays visible and usable, ready for you to continue from the current context when you return."],
       ["03", "Approvals and questions", "Route supported approval, clarification, and selection requests to your phone instead of waiting at the terminal."],
-      ["04", "Status and session control", "Switch CLIs, inspect status, stop tasks, and reset or resume sessions remotely."],
+      ["04", "Status and session control", "Switch CLIs with /codex, /claude, /opencode, and /pi; inspect status, stop tasks, or resume sessions with /status, /stop, and /resume."],
     ],
   },
   architecture: {
     eyebrow: "Two-layer architecture",
     title: "Channels provide reach. The Bridge preserves native behavior.",
-    lede: "Messages enter the current workspace through a daemon or direct launcher, then reach the matching adapter. Each adapter uses the CLI's native communication path instead of replacing it with another hosted chatbot.",
+    lede: "Messages enter the current workspace through a daemon or direct launcher, then reach the matching adapter. Each adapter uses the CLI's native communication path instead of replacing it with another hosted chatbot. Regular Codex bridging supports 0.149.x–0.161.x; attaching the current conversation needs Codex 0.162+ with its shared daemon.",
     channel: "Channel",
     orchestration: "Workspace bridge",
     native: "Native CLI",
-    channelItems: ["WeChat iLink", "WeCom Bot"],
+    channelItems: ["WeChat iLink", "WeCom Smart Bot", "Telegram Bot API"],
     bridgeItems: ["Daemon / direct launcher", "Turn & session routing", "Approvals / local companion"],
-    cliItems: ["Codex · WebSocket RPC", "Claude Code · PTY + Hook", "OpenCode · HTTP + SSE", "Pi · TUI extension"],
+    cliItems: ["Codex · WebSocket RPC", "Claude Code · PTY + Hook", "OpenCode · HTTP + SSE (1.18 / 2.0)", "Pi · TUI extension"],
     upstream: "message · command · approval response",
     downstream: "output · question · status · final reply",
     detail: "Read the architecture",
@@ -143,7 +144,7 @@ const copy = isZh ? {
     lede: "The Bridge runs on your computer with your local user permissions. It connects existing local CLIs without moving your project into a web workspace.",
     items: [
       ["Work stays local", "The workspace, CLI processes, and session state remain on your computer; channels carry messages and media."],
-      ["Bound channel identity", "Personal WeChat uses the logged-in account; WeCom pairs an operator with configured bot credentials."],
+      ["Bound channel identity", "Personal WeChat uses the logged-in account; WeCom pairs an operator with configured bot credentials; Telegram accepts only the paired operator."],
       ["Native permissions", "Codex and Claude Code retain their CLI permission semantics. Pi runs as a fully approved local agent."],
       ["Visible boundaries", "A daemon is bound to its startup directory, and you can observe, take over, or stop sessions locally."],
     ],
@@ -158,7 +159,8 @@ const copy = isZh ? {
     steps: ["Install globally", "Log in / pair", "Choose a launcher"],
     wechat: "WeChat",
     wecom: "WeCom",
-    note: "Requires Node.js ≥ 22.13.0 and at least one supported CLI. Pi 0.85.0+ requires Node.js ≥ 22.19.0.",
+    telegram: "Telegram",
+    note: "Requires Node.js ≥ 22.13.0 and at least one supported CLI. Pi 0.85.0+ requires Node.js ≥ 22.19.0.\nTelegram provides global commands since 1.2.3; send one WeChat message after launch to refresh the context token; Codex ≥ 0.162 can attach the current conversation.",
     docs: "Read the complete setup guide",
   },
   proof: {
@@ -202,7 +204,7 @@ const proofImages = [
   <meta property="og:image" content={`${siteRoot}assets/generated/og-image.jpg`} />
   <meta property="og:image:width" content="1200" />
   <meta property="og:image:height" content="630" />
-  <meta property="og:image:alt" content="CLI WeChat Bridge" />
+  <meta property="og:image:alt" content="CLI WeChat Bridge — WeChat, WeCom, and Telegram for local AI CLIs" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content={copy.title} />
   <meta name="twitter:description" content={copy.description} />
@@ -239,7 +241,7 @@ const proofImages = [
       </div>
     </div>
 
-    <div class="bridge-stage" data-bridge-stage data-active="bridge" aria-label={isZh ? "微信、CLI Bridge 与本地 CLI 的双向架构示意" : "Two-way architecture between channels, CLI Bridge, and local CLIs"}>
+    <div class="bridge-stage" data-bridge-stage data-active="bridge" aria-label={isZh ? "微信、企业微信、Telegram、CLI Bridge 与本地 CLI 的双向架构示意" : "Two-way architecture between WeChat, WeCom, Telegram, CLI Bridge, and local CLIs"}>
       <div class="stage-glow"></div>
       <div class="stage-status" aria-live="polite">
         <i></i>{copy.heroDiagram.phases.map((phase, index) => <span data-phase={index + 1}>{phase}</span>)}
@@ -247,12 +249,15 @@ const proofImages = [
       <svg class="stage-lines" viewBox="0 0 720 480" aria-hidden="true">
         <defs><filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs>
         <path class="flow-line channel-path" d="M112 145 C215 145 220 240 330 240" />
+        <path class="flow-line channel-path" d="M112 240 C215 240 220 240 330 240" />
         <path class="flow-line channel-path" d="M112 335 C215 335 220 240 330 240" />
         <path class="flow-line cli-path" d="M390 240 C490 240 486 92 608 92" />
         <path class="flow-line cli-path" d="M390 240 C495 240 500 192 608 192" />
         <path class="flow-line cli-path" d="M390 240 C495 240 500 292 608 292" />
         <path class="flow-line cli-path" d="M390 240 C490 240 486 392 608 392" />
         <path class="story-pulse request-channel" d="M112 145 C215 145 220 240 330 240" pathLength="1" />
+        <path class="story-pulse request-channel" d="M112 240 C215 240 220 240 330 240" pathLength="1" />
+        <path class="story-pulse request-channel" d="M112 335 C215 335 220 240 330 240" pathLength="1" />
         <path class="story-pulse request-cli" d="M390 240 C490 240 486 92 608 92" pathLength="1" />
         <path class="story-pulse request-cli" d="M390 240 C495 240 500 192 608 192" pathLength="1" />
         <path class="story-pulse request-cli" d="M390 240 C495 240 500 292 608 292" pathLength="1" />
@@ -262,12 +267,14 @@ const proofImages = [
         <path class="story-pulse return-cli" d="M390 240 C495 240 500 292 608 292" pathLength="1" />
         <path class="story-pulse return-cli" d="M390 240 C490 240 486 392 608 392" pathLength="1" />
         <path class="story-pulse return-channel" d="M112 145 C215 145 220 240 330 240" pathLength="1" />
+        <path class="story-pulse return-channel" d="M112 240 C215 240 220 240 330 240" pathLength="1" />
         <path class="story-pulse return-channel" d="M112 335 C215 335 220 240 330 240" pathLength="1" />
       </svg>
       <div class="stage-column channels">
         <span class="column-label">{copy.heroDiagram.channel}</span>
         <button class="stage-node channel-node" data-stage-node="channel" type="button"><span class="wechat-mark">••</span><b>WeChat</b><small>iLink</small></button>
         <button class="stage-node channel-node" data-stage-node="channel" type="button"><span class="wecom-mark">W</span><b>WeCom</b><small>Smart Bot</small></button>
+        <button class="stage-node channel-node" data-stage-node="channel" type="button"><img src={`${base}assets/icons/telegram.svg`} alt="" /><b>Telegram</b><small>Bot API</small></button>
       </div>
       <button class="bridge-core" data-stage-node="bridge" type="button">
         <span class="core-ring"></span><img src={`${base}assets/real/brand-mark.png`} alt="" /><b>{copy.heroDiagram.bridge}</b><small>{copy.heroDiagram.summary}</small>
@@ -296,7 +303,7 @@ const proofImages = [
       <div class="setup-row"><span class="step-index">02</span><span class="step-label">{copy.quickstart.steps[1]}</span><code>$ <span data-setup-command>wechat-setup</span></code><button type="button" data-copy-dynamic="setup">{isZh ? "复制" : "Copy"}</button></div>
       <div class="setup-row command-row"><span class="step-index">03</span><span class="step-label">{copy.quickstart.steps[2]}</span><code>$ <span data-command-prefix>wechat-</span><span class="rotating-word" data-command-word>codex</span></code><button type="button" data-copy-dynamic="launch">{isZh ? "复制" : "Copy"}</button></div>
       <div class="command-controls">
-        <div><small>{copy.quickstart.channel}</small><button class="choice active" data-channel-choice="wechat" type="button">{copy.quickstart.wechat}</button><button class="choice" data-channel-choice="wecom" type="button">{copy.quickstart.wecom}</button></div>
+        <div><small>{copy.quickstart.channel}</small><button class="choice active" data-channel-choice="wechat" type="button">{copy.quickstart.wechat}</button><button class="choice" data-channel-choice="wecom" type="button">{copy.quickstart.wecom}</button><button class="choice" data-channel-choice="telegram" type="button">{copy.quickstart.telegram}</button></div>
         <div><small>{copy.quickstart.adapter}</small>{["codex", "claude", "opencode", "pi", "daemon"].map((name) => <button class={`choice ${name === "codex" ? "active" : ""}`} data-adapter-choice={name} type="button">{name}</button>)}</div>
       </div>
       <p class="setup-note">{copy.quickstart.note}</p>

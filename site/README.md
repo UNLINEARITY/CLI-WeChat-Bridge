@@ -21,4 +21,4 @@ Outputs land in the ignored `public/assets/real/` and `public/assets/generated/`
 
 The shared page lives in `src/components/LandingPage.astro`. `/` renders Chinese and `/en/` renders English through the two small route files under `src/pages/`. Keep both copy objects and SEO metadata aligned when changing product claims.
 
-The interactive architecture uses pointer-driven highlighting on desktop, tap selection on touch devices, and a static reduced-motion fallback. The quick-start command builder switches between WeChat and WeCom and rotates across the four direct launchers plus daemon.
+The interactive architecture uses pointer-driven highlighting on desktop, tap selection on touch devices, and a static reduced-motion fallback. The quick-start command builder switches between WeChat, WeCom, and Telegram and rotates across the four direct launchers plus daemon.

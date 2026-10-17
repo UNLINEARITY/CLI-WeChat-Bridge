@@ -76,7 +76,7 @@ function updateStagePaths() {
   const bridge = stage.querySelector(".bridge-core");
   const channelNodes = [...stage.querySelectorAll(".channel-node")];
   const cliNodes = [...stage.querySelectorAll(".cli-node")];
-  if (!svg || !bridge || channelNodes.length !== 2 || cliNodes.length !== 4) return;
+  if (!svg || !bridge || channelNodes.length !== 3 || cliNodes.length !== 4) return;
   const stageRect = stage.getBoundingClientRect();
   const localRect = (element) => {
     const rect = element.getBoundingClientRect();
@@ -88,7 +88,7 @@ function updateStagePaths() {
     return `M${from.x.toFixed(1)} ${from.y.toFixed(1)} C${(from.x + control).toFixed(1)} ${from.y.toFixed(1)} ${(to.x - control).toFixed(1)} ${to.y.toFixed(1)} ${to.x.toFixed(1)} ${to.y.toFixed(1)}`;
   };
   const bridgeHeight = bridgeRect.bottom - bridgeRect.top;
-  const channelPorts = [.34, .66];
+  const channelPorts = [.26, .5, .74];
   const cliPorts = [.18, .39, .61, .82];
   const channelCurves = channelNodes.map((node, index) => {
     const rect = localRect(node);
@@ -103,8 +103,8 @@ function updateStagePaths() {
   svg.setAttribute("viewBox", `0 0 ${stageRect.width.toFixed(1)} ${stageRect.height.toFixed(1)}`);
   [...stage.querySelectorAll(".flow-line.channel-path")].forEach((path, index) => path.setAttribute("d", channelCurves[index]));
   [...stage.querySelectorAll(".flow-line.cli-path")].forEach((path, index) => path.setAttribute("d", cliCurves[index]));
-  storyPaths.requestChannel.forEach((path) => path.setAttribute("d", channelCurves[0]));
-  storyPaths.returnChannel.forEach((path, index) => path.setAttribute("d", channelCurves[index]));
+  storyPaths.requestChannel.forEach((path, index) => path.setAttribute("d", channelCurves[index % channelCurves.length]));
+  storyPaths.returnChannel.forEach((path, index) => path.setAttribute("d", channelCurves[index % channelCurves.length]));
   storyPaths.requestCli.forEach((path, index) => path.setAttribute("d", cliCurves[index]));
   storyPaths.returnCli.forEach((path, index) => path.setAttribute("d", cliCurves[index]));
 }
