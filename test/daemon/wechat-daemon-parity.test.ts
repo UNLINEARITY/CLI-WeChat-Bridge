@@ -700,6 +700,45 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
     expect(env.opened.map((entry) => `${entry.cwd}|${entry.adapter}`)).toEqual([`${OTHER_CWD}|claude`]);
   });
 
+  test("a closed window ends its slot even when the adapter never reports it (Codex)", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    daemon.setEphemeral(true);
+    await launcherSlot(daemon, TEST_CWD, "codex");
+    const slots = (daemon as unknown as {
+      slotManager: { releaseClosedWindows(nowMs?: number): void };
+    }).slotManager;
+
+    env.alive.add(`${TEST_CWD}|codex`);
+    slots.releaseClosedWindows();
+    env.alive.delete(`${TEST_CWD}|codex`);
+    slots.releaseClosedWindows();
+    expect(daemon.getStatus().slots).toHaveLength(1);
+    slots.releaseClosedWindows();
+    await tick(20);
+
+    expect(daemon.getStatus().slots).toEqual([]);
+    expect(env.exitCodes).toEqual([0]);
+  });
+
+  test("a launcher slot whose window never connects is released after the grace period", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, OTHER_CWD, "claude");
+    const slots = (daemon as unknown as {
+      slotManager: { releaseClosedWindows(nowMs?: number): void };
+    }).slotManager;
+
+    slots.releaseClosedWindows(Date.now() + 10_000);
+    expect(daemon.getStatus().slots).toHaveLength(1);
+    slots.releaseClosedWindows(Date.now() + 61_000);
+
+    expect(daemon.getStatus().slots).toEqual([]);
+    expect(env.logs.some((line) => line.startsWith("window_never_connected: adapter=claude"))).toBe(true);
+  });
+
   test("a second launcher for a slot whose window is open is refused without resetting it", async () => {
     const env = new Env();
     env.allAlive = false;

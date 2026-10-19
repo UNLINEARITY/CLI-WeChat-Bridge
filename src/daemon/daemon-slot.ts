@@ -36,6 +36,12 @@ export type DaemonSlot = {
   knownThreadId?: string;
   /** The slot ends when its visible window closes (launcher or ephemeral daemon). */
   boundToWindow: boolean;
+  /** When the slot was created (ms). */
+  createdAtMs: number;
+  /** A window has been seen connected for this slot. */
+  windowSeen?: boolean;
+  /** Consecutive window checks that found no connected window. */
+  windowMissingChecks?: number;
   runtime: BridgeAdapter;
   controller: BridgeController;
   outputBatcher: OutputBatcher;

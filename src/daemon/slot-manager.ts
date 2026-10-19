@@ -70,6 +70,9 @@ export type SlotManagerHost = {
   daemonLog: (message: string) => void;
 };
 
+/** How long a window-bound slot waits for its window to connect. */
+const WINDOW_STARTUP_GRACE_MS = 60_000;
+
 function slotKey(cwd: string, adapter: DaemonAdapterKind, instance = 1): string {
   return `${workspaceKeyOf(cwd)}\n${adapter}\n${instance}`;
 }
@@ -500,6 +503,7 @@ export class SlotManager {
       cwd,
       instance: 1,
       boundToWindow: options.boundToWindow,
+      createdAtMs: Date.now(),
       runtime,
       controller,
       outputBatcher: new OutputBatcher(async (text) => {
@@ -563,6 +567,37 @@ export class SlotManager {
       return null;
     }
     return this.getSlot(cwd, this.activeAdapter) ?? null;
+  }
+
+  /**
+   * Release window-bound slots whose window is gone. Adapters do not all
+   * report a closed window (Codex keeps its app-server in the daemon), so the
+   * daemon checks the companion itself: a window seen once and then missing
+   * on two checks in a row, or never seen within the startup grace, ends the
+   * slot.
+   */
+  releaseClosedWindows(nowMs = Date.now()): void {
+    for (const slot of this.allSlots()) {
+      if (!slot.boundToWindow) {
+        continue;
+      }
+      if (this.host.isVisibleClientAlive(slot.cwd, slot.adapter)) {
+        slot.windowSeen = true;
+        slot.windowMissingChecks = 0;
+        continue;
+      }
+      if (!slot.windowSeen) {
+        if (nowMs - slot.createdAtMs >= WINDOW_STARTUP_GRACE_MS) {
+          this.host.daemonLog(`window_never_connected: adapter=${slot.adapter} cwd=${slot.cwd}`);
+          this.releaseSlot(slot);
+        }
+        continue;
+      }
+      slot.windowMissingChecks = (slot.windowMissingChecks ?? 0) + 1;
+      if (slot.windowMissingChecks >= 2) {
+        this.releaseSlot(slot);
+      }
+    }
   }
 
   /** Remove every slot (shutdown); returns the removed slots. */

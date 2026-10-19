@@ -115,6 +115,8 @@ export {
 
 /** How long an ephemeral daemon waits for its launcher's first slot. */
 const EPHEMERAL_STARTUP_IDLE_MS = 60_000;
+/** How often window-bound slots are checked for a closed window. */
+const WINDOW_CHECK_INTERVAL_MS = 3_000;
 
 export type WechatDaemonDeps = {
   localeSettingsFile?: string;
@@ -338,6 +340,15 @@ export class WechatDaemon {
     this.slotManager.setHome(cwd);
     this.daemonLog(`promoted: cwd=${cwd} was_ephemeral=${wasEphemeral}`);
     return { pid: process.pid, wasEphemeral };
+  }
+
+  /** Periodically release window-bound slots whose window closed. */
+  startWindowWatch(intervalMs = WINDOW_CHECK_INTERVAL_MS): void {
+    setInterval(() => {
+      if (!this.shutdownPromise) {
+        this.slotManager.releaseClosedWindows();
+      }
+    }, intervalMs).unref?.();
   }
 
   /** An ephemeral daemon nobody joined within `ms` exits. */
@@ -855,6 +866,7 @@ export async function runDaemon(
     daemon.takenOverAdapter = cleanupResult.lock.adapter;
   }
   await daemon.startIpcServer();
+  daemon.startWindowWatch();
   if (options.ephemeral) {
     daemon.startIdleWatch();
   }
