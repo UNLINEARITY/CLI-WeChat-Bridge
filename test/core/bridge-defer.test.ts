@@ -11,85 +11,12 @@ import {
   canDrainDeferredCodexInboundQueue,
   formatDeferredCodexInboundQueueMessage,
   isRetryableDeferredCodexDrainError,
-  parseCliArgs,
   shouldDeferCodexInboundMessage,
-  shouldWatchParentProcess,
-} from "../../src/bridge/wechat-bridge.ts";
+} from "../../src/core/bridge-defer.ts";
 
 beforeEach(() => setLocale("en"));
 
-describe("wechat-bridge cli helpers", () => {
-  test("parseCliArgs keeps persistent lifecycle by default", () => {
-    const options = parseCliArgs(["--adapter", "codex"]);
-
-    expect(options.lifecycle).toBe("persistent");
-    expect(options.sessionStartMode).toBe("restore");
-  });
-
-  test("parseCliArgs accepts --lifecycle companion_bound", () => {
-    const options = parseCliArgs([
-      "--adapter",
-      "codex",
-      "--lifecycle",
-      "companion_bound",
-    ]);
-
-    expect(options.lifecycle).toBe("companion_bound");
-  });
-
-  test("parseCliArgs accepts internal new session startup mode", () => {
-    const options = parseCliArgs([
-      "--adapter",
-      "claude",
-      "--session-start-mode",
-      "new",
-    ]);
-
-    expect(options.sessionStartMode).toBe("new");
-  });
-
-  test("parseCliArgs selects the WeCom channel without changing adapter arguments", () => {
-    const options = parseCliArgs([
-      "--adapter",
-      "codex",
-      "--channel",
-      "wecom",
-    ]);
-
-    expect(options.channelId).toBe("wecom");
-    expect(options.adapter).toBe("codex");
-  });
-
-  test("shouldWatchParentProcess watches attached terminal bridges", () => {
-    expect(
-      shouldWatchParentProcess({
-        startupParentPid: 123,
-        attachedToTerminal: true,
-        lifecycle: "persistent",
-      }),
-    ).toBe(true);
-  });
-
-  test("shouldWatchParentProcess watches detached companion-bound bridges", () => {
-    expect(
-      shouldWatchParentProcess({
-        startupParentPid: 123,
-        attachedToTerminal: false,
-        lifecycle: "companion_bound",
-      }),
-    ).toBe(true);
-  });
-
-  test("shouldWatchParentProcess ignores detached persistent bridges", () => {
-    expect(
-      shouldWatchParentProcess({
-        startupParentPid: 123,
-        attachedToTerminal: false,
-        lifecycle: "persistent",
-      }),
-    ).toBe(false);
-  });
-
+describe("deferred Codex inbound queue", () => {
   test("defers inbound WeChat text when Codex is busy with a local turn", () => {
     expect(
       shouldDeferCodexInboundMessage({

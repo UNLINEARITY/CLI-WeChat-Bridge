@@ -29,16 +29,12 @@ bun install
 | 企业微信配对初始化 | `node --no-warnings --experimental-strip-types src/channels/wecom/setup-cli.ts` |
 | 启动 daemon | `npm run daemon` |
 | 启动企业微信 daemon | `npm run daemon -- --channel wecom` |
-| Codex bridge | `npm run bridge:codex` |
 | Codex companion | `npm run codex:panel` |
 | Codex 单命令启动器 | `npm run codex:start` |
-| Claude bridge | `npm run bridge:claude` |
 | Claude companion | `npm run claude:companion` |
 | Claude 单命令启动器 | `npm run claude:start` |
-| OpenCode bridge | `npm run bridge:opencode` |
 | OpenCode companion | `npm run opencode:panel` |
 | OpenCode 单命令启动器 | `npm run opencode:start` |
-| Pi bridge | `npm run bridge:pi` |
 | Pi companion | `npm run pi:companion` |
 | Pi 单命令启动器 | `npm run pi:start` |
 
@@ -47,7 +43,7 @@ bun install
 ```bash
 npm run daemon -- --adapter codex
 npm run daemon -- --channel wecom --adapter claude
-npm run bridge:claude -- --cwd D:\work\my-project
+npm run claude:start -- --cwd D:\work\my-project
 npm run opencode:start -- --cwd D:\work\my-project
 npm run pi:start -- --cwd D:\work\my-project --model openai/gpt-5.6-sol
 ```
@@ -58,7 +54,7 @@ npm run pi:start -- --cwd D:\work\my-project --model openai/gpt-5.6-sol
 node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --channel wecom --adapter claude
 ```
 
-`bridge:*` 与 `*:companion` 是维护者源码调试入口，不会发布为 `wechat-bridge*` 全局命令。普通用户应直接运行 `wechat-*`、`wecom-*` 或对应的 daemon 命令。
+`*:start` 是直接启动器的源码镜像：在当前终端运行 CLI，加入运行中的 daemon，没有时拉起临时 daemon。`*:companion` 与 `*:panel` 是维护者调试入口。普通用户应直接运行 `wechat-*`、`wecom-*` 或对应的 daemon 命令。
 
 ## Pi 原生 TUI 接管说明
 
@@ -192,8 +188,10 @@ npm run e2e -- --adapter claude --no-mirror
 
 | 文件 | 作用 |
 | --- | --- |
-| `src/bridge/wechat-bridge.ts` | bridge 主事件循环 |
-| `src/daemon/wechat-daemon.ts` | 常驻 WeChat/WeCom daemon 与多 CLI slot 管理 |
+| `src/daemon/wechat-daemon.ts` | daemon 装配、主循环、关闭与 IPC 请求分发（单桥接与多 CLI 模式共用） |
+| `src/daemon/slot-manager.ts` | 按目录与 CLI 管理 slot、当前目录、主目录与窗口生命周期 |
+| `src/daemon/inbound-router.ts` | 入站消息、切换指令、`/cd` 与排队 |
+| `src/companion/local-companion-start.ts` | 直接启动器：加入或拉起 daemon，在当前终端运行 CLI |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |
 | `src/core/bridge-message-router.ts` | 统一处理授权、命令、approval、user input、defer 与 busy 顺序 |
 | `src/core/bridge-defer.ts` | Codex 本地回合期间的输入延迟判断、队列提示与排空条件 |

@@ -56,10 +56,10 @@
 
 | 项目 | 已确认决策 | 兼容策略 |
 | --- | --- | --- |
-| 四个直接命令 | `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 成为智能启动器 | 无 daemon 时创建内部 runtime；有 daemon 时委托 |
+| 四个直接命令 | `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` 成为智能启动器 | 在当前终端运行 CLI；有 daemon 时加入，无 daemon 时拉起临时 daemon |
 | 四个 `*-start` | 1.1.5 已删除 | 使用对应的 `wechat-codex`、`wechat-claude`、`wechat-opencode`、`wechat-pi` |
-| 全部 `wechat-bridge*` | 从 npm bin 和 `bin/` 立即删除 | 内部 `wechat-bridge.ts` runtime 继续存在 |
-| 手动双终端用户流程 | 删除 | 维护者仍可使用源码 `bridge:*` 与 companion scripts 调试 |
+| 全部 `wechat-bridge*` | 从 npm bin 和 `bin/` 立即删除 | 内部 `wechat-bridge.ts` runtime 已在阶段 4c 并入 daemon 并删除 |
+| 手动双终端用户流程 | 删除 | 维护者可使用源码 `npm run daemon`、`*:start` 与 companion scripts 调试 |
 | Shell adapter | 完整删除 | 旧 shell lock/endpoint 只保留 legacy 读取和清理 |
 | 默认会话 | 全部 adapter 默认 new；Codex 0.155+ 惰性落盘使预建线程 resume 崩溃，改由可见 TUI 新建后跟随；显式 `--session-start-mode restore` 与微信 `/resume` 仍可恢复已落盘会话 | 与 1.1.8 Codex 兼容修复同步 |
 | CLI 兼容基线 | Codex 验证范围为 0.149.x–0.157.x；OpenCode 同时支持 1.18.x 与 2.0.x，并分别使用对应的 server API、事件协议和可见 TUI 插件 | 只调用 `PATH` 中可直接执行的独立 CLI，不探测桌面 App 内部二进制 |
@@ -82,7 +82,7 @@
 
 | 命令 | 删除原因 | 内部替代 |
 | --- | --- | --- |
-| `wechat-bridge` | 通用公开入口增加认知成本，用户不应手动选择内部 adapter runtime | `npm run bridge -- --adapter ...` 仅供维护者 |
+| `wechat-bridge` | 通用公开入口增加认知成本，用户不应手动选择内部 adapter runtime | daemon slot（直接启动器或 `npm run daemon`） |
 | `wechat-bridge-codex` | 手动双终端流程被智能 `wechat-codex` 替代 | 内部 transient bridge |
 | `wechat-bridge-claude` | 同上 | 内部 transient bridge |
 | `wechat-bridge-opencode` | 同上 | 内部 transient bridge |
@@ -95,8 +95,8 @@
 | 模型 | 用户入口 | 内部行为 |
 | --- | --- | --- |
 | 常驻 daemon | `wechat-daemon` | 一个微信连接管理四个 adapter slot，并自动打开或复用可见 CLI |
-| 直接启动 | 四个 `wechat-*` | 优先委托同 cwd daemon；否则启动 companion-bound transient bridge，再打开可见 CLI |
-| 维护者调试 | `npm run bridge:*` 与 companion scripts | 直接观察 bridge/companion IPC，不属于发布的用户命令 |
+| 直接启动 | 四个 `wechat-*` | 加入运行中的 daemon，否则拉起临时 daemon（最后一个窗口关闭后退出）；在当前终端运行 CLI |
+| 维护者调试 | `npm run daemon`、`npm run *:start` 与 companion scripts | 直接观察 daemon/companion IPC，不属于发布的用户命令 |
 
 `bin/_run-entry.mjs` 仍是所有发布命令共用的 Node wrapper，不是用户指令。
 
@@ -131,18 +131,7 @@
 
 ### 6.3 内部 bridge 参数
 
-公开 `wechat-bridge*` bins 已删除，但维护者仍可通过 npm scripts 启动内部 runtime。
-
-| 参数 | 行为 | 公开程度 |
-| --- | --- | --- |
-| `--adapter <codex\|claude\|opencode\|pi>` | 选择内部 adapter runtime | 维护者内部 |
-| `--cmd <executable>` | 覆盖 adapter 默认命令 | 维护者内部 |
-| `--cwd <path>` | 指定工作区 | 维护者内部 |
-| `--profile <name-or-path>` | 传递 profile | 维护者内部 |
-| `--lifecycle <persistent\|companion_bound>` | 控制可见端退出后的 runtime 生命周期 | 维护者内部 |
-| `--session-start-mode <restore\|new>` | 选择恢复或新会话 | 维护者内部 |
-| `--shutdown-on-parent-exit` | legacy internal alias for companion-bound | 候选后续清理 |
-| `--doctor` | 内部 bridge doctor | 维护者内部 |
+独立的内部 bridge runtime（`wechat-bridge.ts`）已在阶段 4c 并入 daemon 并删除。直接启动器通过 daemon IPC `ensure_slot` 申请 slot；临时 daemon 由启动器以内部参数 `--ephemeral` 启动，不对用户公开。
 
 ### 6.4 Internal visible client 参数
 
@@ -301,21 +290,15 @@ standalone 模式按以下顺序处理：
 | `setup` | 源码运行 WeChat 登录 | `wechat-setup` 的开发镜像 | 开发保留 |
 | `start` | 启动源码 MCP server | 没有同名全局 bin；不是 daemon/bridge 主流程 | 待确认整组废弃或重命名为 `mcp:start` |
 | `check` | MCP transport 状态检查 | `start --check` 的快捷别名 | 待确认；建议至少重命名为 `mcp:check` |
-| `bridge` | 通用内部 bridge，仍要求传 `--adapter` | 无公开 bin，仅供维护者 | 高级开发保留 |
 | `daemon` | 源码 daemon | `wechat-daemon` 的开发镜像 | 开发保留 |
-| `bridge:codex` | Codex 源码 bridge | 智能 launcher 使用的内部 runtime | 开发保留 |
 | `codex:panel` | Codex remote client | daemon/launcher 内部 visible client 的源码入口 | 候选重命名为 `codex:companion` 或 `codex:client` |
 | `codex:start` | Codex smart launcher | `wechat-codex` 的源码镜像 | 开发保留 |
-| `bridge:claude` | Claude 源码 bridge | 智能 launcher 使用的内部 runtime | 开发保留 |
 | `claude:companion` | Claude visible companion | daemon/launcher 内部调试入口 | 开发保留 |
 | `claude:start` | Claude smart launcher | `wechat-claude` 的源码镜像 | 开发保留 |
-| `bridge:opencode` | OpenCode 源码 bridge | 智能 launcher 使用的内部 runtime | 开发保留 |
 | `opencode:panel` | OpenCode local companion | 名称与 `claude:companion`、`pi:companion` 不一致 | 候选重命名为 `opencode:companion` |
 | `opencode:start` | OpenCode smart launcher | `wechat-opencode` 的源码镜像 | 开发保留 |
-| `bridge:pi` | Pi 源码 bridge | 智能 launcher 使用的内部 runtime | 开发保留 |
 | `pi:companion` | Pi visible companion/native TUI | daemon/launcher 内部调试入口 | 开发保留 |
 | `pi:start` | Pi smart launcher | `wechat-pi` 的源码镜像 | 开发保留 |
-| `bridge:bun` | Bun 直接运行通用 bridge | 与 Node 源码 `bridge` 重复 | 候选废弃 |
 
 ## 10. MCP tools 审计
 

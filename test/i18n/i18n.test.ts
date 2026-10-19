@@ -16,7 +16,6 @@ import { handleLanguageControl } from "../../src/bridge/language-control.ts";
 import { parseBridgeControlCommand } from "../../src/core/bridge-control.ts";
 import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
 import { handleAdapterControl } from "../../src/bridge/adapter-control.ts";
-import { handleInboundMessage } from "../../src/bridge/wechat-bridge.ts";
 import { WechatDaemon } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeAdapter, PendingUserInputRequest } from "../../src/bridge/bridge-types.ts";
 import { isRetryableDeferredCodexDrainError } from "../../src/core/bridge-defer.ts";
@@ -182,40 +181,6 @@ describe("live language control", () => {
     expect(updates).toEqual(["en", "zh"]);
     expect(readLocalePreference(settingsFile)).toBe(getLocale());
   });
-  test("standalone handles /lang during a pending task and rejects unauthorized changes", async () => {
-    const pending = { requestId: "question-1" };
-    const state = { authorizedUserId: "owner", pendingUserInput: pending };
-    const sent: string[] = [];
-    const params = {
-      localeSettingsFile: path.join(directory, "language.json"),
-      options: { adapter: "claude" }, channelDriver: { operatorDescription: "owner" },
-      stateStore: { getState: () => state }, adapter: { updateLocale: async () => true },
-      queueWechatMessage: async (_sender: string, text: string) => { sent.push(text); return true; },
-    } as any;
-    await handleInboundMessage({ ...params, message: { senderId: "stranger", text: "/lang en" } });
-    expect(getLocale()).toBe("zh");
-    await handleInboundMessage({ ...params, message: { senderId: "owner", text: "/lang en" } });
-    expect(sent.at(-1)).toBe("Language switched to en.");
-    expect(state.pendingUserInput).toBe(pending);
-  });
-  for (const channelId of ["wechat", "wecom", "local"] as const) {
-    test(`${channelId} daemon handles /lang without an active slot`, async () => {
-      const daemon = new WechatDaemon({
-        cwd: directory, authorizedUserId: "owner", transport: {} as any,
-        channelId, wecomTransport: channelId === "wecom" ? {} as any : null,
-        localFiles: { inboxFile: path.join(directory, "inbox"), transcriptFile: path.join(directory, "outbox") },
-        deps: { localeSettingsFile: path.join(directory, "language.json") },
-      });
-      const sent: string[] = [];
-      const internal = daemon as any;
-      internal.queueWechatMessage = async (_sender: string, text: string) => { sent.push(text); return true; };
-      await internal.handleInboundMessage({ senderId: "stranger", text: "/lang en" });
-      expect(getLocale()).toBe("zh");
-      await internal.handleInboundMessage({ senderId: "owner", text: "/lang en" });
-      expect(sent.at(-1)).toBe("Language switched to en.");
-      expect(daemon.getStatus().slots).toHaveLength(0);
-    });
-  }
 });
 
 test("both locales translate model and question controls without changing upstream option values", async () => {

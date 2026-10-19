@@ -17,7 +17,7 @@ describe("direct module entry detection", () => {
   });
 
   test("falls back to argv on Node versions without import.meta.main", () => {
-    const entryPath = path.resolve("dist/bridge/wechat-bridge.js");
+    const entryPath = path.resolve("dist/daemon/wechat-daemon.js");
     const entryUrl = pathToFileURL(entryPath).href;
     expect(isDirectModuleRun(entryUrl, ["node", entryPath], undefined)).toBe(true);
     expect(

@@ -11,7 +11,6 @@ import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
 import { buildClaudeUserInputRequest, getClaudePermissionAutoResponse } from "../../src/bridge/claude-hooks.ts";
 import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
-import { handleInboundMessage, wireAdapterEvents } from "../../src/bridge/wechat-bridge.ts";
 import type { ClaudeHookPayload } from "../../src/bridge/claude-hooks.ts";
 
 beforeEach(() => setLocale("en"));
@@ -219,31 +218,4 @@ describe("Claude question companion and routing", () => {
     expect(await adapter.submitUserInput({ q1: ["Yes"] }, "first")).toBe(false);
   });
 
-  test("standalone answers preserve the parent turn and cannot revive a delayed expired question", async () => {
-    const { adapter, ask } = claude();
-    const sent: string[] = [];
-    const tasks: Promise<void>[] = [];
-    const state: any = { authorizedUserId: "owner", pendingUserInput: null };
-    const parent = { startedAt: 1, inputPreview: "parent", target: { conversationId: "original" } };
-    const stateStore = { getState: () => ({ ...state }), setPendingUserInput: (request: any) => { state.pendingUserInput = request; }, clearPendingUserInput: () => { state.pendingUserInput = null; }, appendLog() {} };
-    const options = { adapter: "claude", channelId: "wechat" };
-    const channelDriver = { id: "wechat", capabilities: {}, directConversation: (id: string) => ({ channelId: "wechat", conversationId: id, recipientId: id }) };
-    const queueWechatMessage = async (_id: string, text: string) => { sent.push(text); return true; };
-    const outputBatcher = { flushNow: async () => undefined };
-    wireAdapterEvents({ adapter, options, channelDriver, stateStore, outputBatcher, queueWechatMessage, trackWechatForwardTask: (task: Promise<void>) => tasks.push(task), getActiveTask: () => parent,
-      syncSharedSessionState() {}, syncLocalClientEndpoint() {}, maybeDrainDeferredInboundMessages: async () => undefined } as any);
-    const drain = async () => { await new Promise((resolve) => setTimeout(resolve, 0)); await Promise.all(tasks); };
-    const single = { ...payload, tool_input: { questions: [payload.tool_input.questions[0]] } };
-    ask("expired", single); ask("first", single);
-    adapter.handleClosedClaudeHookUserInput("expired");
-    await drain();
-    expect(state.pendingUserInput.requestId).toBe("first");
-    expect(sent.filter((text) => text.includes("options:"))).toHaveLength(1);
-    ask("second", single);
-    const result = await handleInboundMessage({ adapter, options, channelDriver, stateStore, outputBatcher, queueWechatMessage, message: { senderId: "owner", text: "/answer 1" } } as any);
-    expect(result).toBeNull();
-    await drain();
-    expect(state.pendingUserInput.requestId).toBe("second");
-    expect(parent.inputPreview).toBe("parent");
-  });
 });

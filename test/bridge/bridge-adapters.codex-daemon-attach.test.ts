@@ -15,7 +15,6 @@ import {
   resolveCodexDaemonControlSocketPath,
   selectCodexDaemonAttachCandidates,
 } from "../../src/bridge/bridge-adapters.codex.ts";
-import { parseCliArgs as parseBridgeCliArgs } from "../../src/bridge/wechat-bridge.ts";
 import { parseCliArgs as parseStartCliArgs } from "../../src/companion/local-companion-start.ts";
 
 beforeEach(() => setLocale("en"));
@@ -133,24 +132,6 @@ describe("resolveCodexDaemonControlSocketPath", () => {
 });
 
 describe("daemon-attach CLI parsing", () => {
-  test("wechat-bridge parses attach flags", () => {
-    const options = parseBridgeCliArgs([
-      "--adapter",
-      "codex",
-      "--codex-attach-daemon",
-      "--codex-thread-id",
-      "thread-1",
-    ]);
-    expect(options.codexAttachDaemon).toBe(true);
-    expect(options.codexAttachThreadId).toBe("thread-1");
-  });
-
-  test("wechat-bridge rejects attach for non-codex adapters", () => {
-    expect(() =>
-      parseBridgeCliArgs(["--adapter", "claude", "--codex-attach-daemon"]),
-    ).toThrow(/requires --adapter codex/);
-  });
-
   test("wechat-codex launcher parses attach flags", () => {
     const options = parseStartCliArgs([
       "--adapter",

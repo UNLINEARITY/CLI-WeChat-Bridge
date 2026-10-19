@@ -90,9 +90,6 @@ bun install
 ```bash
 npm run setup
 npm run daemon -- --adapter codex
-npm run bridge:codex
-npm run bridge:claude
-npm run bridge:opencode
 npm run codex:start
 npm run claude:start
 npm run opencode:start

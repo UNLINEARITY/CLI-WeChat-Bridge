@@ -21,6 +21,8 @@ import {
   WechatDaemon,
   type WechatDaemonDeps,
 } from "../../src/daemon/wechat-daemon.ts";
+import type { ChannelConversationRef } from "../../src/core/channel-types.ts";
+import type { TelegramTransport } from "../../src/channels/telegram/telegram-transport.ts";
 import type { PendingWechatMessageStore } from "../../src/channels/wechat/wechat-outbound-queue.ts";
 import type {
   InboundWechatMessage,
@@ -820,6 +822,62 @@ describe("Codex attach through the daemon", () => {
 
     expect(claim.alreadyRunning).toBe(true);
     expect(env.created).toHaveLength(1);
+  });
+});
+
+class FakeTelegramTransport {
+  readonly texts: { conversationId: string; text: string }[] = [];
+  readonly attachments: { conversationId: string; path: string }[] = [];
+
+  async sendText(target: ChannelConversationRef, text: string): Promise<boolean> {
+    this.texts.push({ conversationId: target.conversationId, text });
+    return true;
+  }
+
+  async sendAttachment(target: ChannelConversationRef, attachment: { path: string }): Promise<void> {
+    this.attachments.push({ conversationId: target.conversationId, path: attachment.path });
+  }
+
+  async beginTyping(): Promise<void> {}
+  async endTyping(): Promise<void> {}
+  endAllTyping(): void {}
+  async stop(): Promise<void> {}
+}
+
+describe("Telegram final replies through the daemon", () => {
+  test("text and attachments go to the conversation that started the turn", async () => {
+    const env = new Env();
+    const telegram = new FakeTelegramTransport();
+    const daemon = new WechatDaemon({
+      cwd: TEST_CWD,
+      authorizedUserId: OPERATOR_ID,
+      transport: null,
+      channelId: "telegram",
+      telegramTransport: telegram as unknown as TelegramTransport,
+      deps: env.deps,
+    });
+    const forward = (adapter: DaemonAdapterKind, conversationId: string, text: string) =>
+      daemon.handleDaemonRequest({
+        command: "forward_input",
+        adapter,
+        senderId: OPERATOR_ID,
+        conversationId,
+        recipientId: conversationId,
+        text,
+      });
+    await forward("codex", "chat-1", "write the report");
+
+    env.runtimeIn(TEST_CWD, "codex").emit(event("final_reply", {
+      text: ["Report ready.", "```wechat-attachments", "file /tmp/report.pdf", "```"].join("\n"),
+    }));
+    // Another conversation talks to another CLI before the reply is delivered.
+    await forward("claude", "chat-2", "unrelated question");
+    await tick(30);
+
+    expect(telegram.texts.filter((entry) => entry.text.includes("Report ready."))).toEqual([
+      { conversationId: "chat-1", text: "[codex]\nReport ready." },
+    ]);
+    expect(telegram.attachments).toEqual([{ conversationId: "chat-1", path: "/tmp/report.pdf" }]);
   });
 });
 

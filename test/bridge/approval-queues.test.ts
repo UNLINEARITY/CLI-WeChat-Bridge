@@ -13,7 +13,6 @@ import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.cor
 import { buildClaudeHookSettings } from "../../src/bridge/claude-hooks.ts";
 import { normalizeOpenCodeV2Event } from "../../src/bridge/opencode-v2-compat.ts";
 import type { BridgeEvent } from "../../src/bridge/bridge-types.ts";
-import { handleInboundMessage, wireAdapterEvents } from "../../src/bridge/wechat-bridge.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -339,60 +338,5 @@ describe("approval queues", () => {
     const adapter = createBridgeAdapter({ kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion" });
     expect(await adapter.resolveApproval("confirm", "missing")).toBe(false);
     expect(await adapter.resolveAllApprovals("deny")).toBe(0);
-  });
-});
-
-describe("standalone approval routing", () => {
-  function bridge() {
-    const { adapter, ask } = opencode();
-    const sent: string[] = [];
-    const tasks: Promise<void>[] = [];
-    const state: any = { authorizedUserId: "owner", pendingConfirmation: null };
-    const stateStore = {
-      getState: () => ({ ...state }),
-      setPendingConfirmation: (request: unknown) => { state.pendingConfirmation = request; },
-      clearPendingConfirmation: () => { state.pendingConfirmation = null; },
-      appendLog() {},
-    };
-    const options = { adapter: "opencode", channelId: "wechat" };
-    const channelDriver = { id: "wechat", capabilities: {}, directConversation: (id: string) => ({ channelId: "wechat", conversationId: id, recipientId: id }) };
-    const queueWechatMessage = async (_id: string, text: string) => { sent.push(text); return true; };
-    const outputBatcher = { flushNow: async () => undefined };
-    wireAdapterEvents({ adapter, options, channelDriver, stateStore, outputBatcher, queueWechatMessage,
-      trackWechatForwardTask: (task: Promise<void>) => tasks.push(task), getActiveTask: () => null,
-      syncSharedSessionState() {}, syncLocalClientEndpoint() {}, maybeDrainDeferredInboundMessages: async () => undefined,
-    } as any);
-    const drain = async () => { await new Promise((resolve) => setTimeout(resolve, 0)); await Promise.all(tasks); };
-    const command = async (text: string) => await handleInboundMessage({ adapter, options, channelDriver, stateStore,
-      outputBatcher, queueWechatMessage, message: { senderId: "owner", text },
-    } as any);
-    return { adapter, ask, sent, state, drain, command };
-  }
-
-  test("/confirm and /deny resolve only the displayed head and keep the following prompt", async () => {
-    const { adapter, ask, sent, state, drain, command } = bridge();
-    ask("first"); ask("second");
-    await drain();
-    expect(state.pendingConfirmation.requestId).toBe("first");
-    expect(await command("/confirm")).toBeNull();
-    await drain();
-    expect(state.pendingConfirmation.requestId).toBe("second");
-    expect(adapter.getState().pendingApprovals).toHaveLength(1);
-    expect(sent.filter((text) => text.includes("/confirm"))).toHaveLength(2);
-    await command("/deny");
-    await drain();
-    expect(state.pendingConfirmation).toBeNull();
-    expect(adapter.getState().pendingApprovals).toEqual([]);
-  });
-
-  test("local settlement before a delayed popup is forwarded cannot restore the old prompt", async () => {
-    const { adapter, ask, state, drain, command } = bridge();
-    ask("first"); ask("second");
-    adapter.handleSseEvent({ type: "permission.replied", properties: { sessionID: "parent", requestID: "first" } });
-    expect(await command("/confirm")).toBeNull();
-    expect(adapter.getState().pendingApproval.requestId).toBe("second");
-    await drain();
-    expect(state.pendingConfirmation.requestId).toBe("second");
-    expect(adapter.getState().pendingApprovals).toHaveLength(1);
   });
 });

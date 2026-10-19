@@ -3,10 +3,10 @@
 ## Project Mental Model
 CLI WeChat Bridge lets one WeChat iLink account or one WeCom smart-bot account drive local CLI agents from a normal project directory. The user-facing npm package is `cli-wechat-bridge`; `@unlinearity/cli-wechat-bridge` is kept as a compatibility mirror for existing users.
 
-There are two runtime shapes:
-- `wechat-daemon`: the preferred long-lived mode. It owns one WeChat connection for one startup working directory, keeps Codex, Claude Code, OpenCode, and Pi slots alive, and switches from WeChat with `/codex`, `/claude`, `/opencode`, and `/pi`. Switching reuses an already connected visible CLI, or opens a new visible CLI when needed.
+One daemon engine (`src/daemon`) runs every bridge; there is no separate standalone bridge runtime. It has two user-facing modes:
+- `wechat-daemon` (multi-CLI mode): the preferred long-lived mode. It owns the channel connection, keeps Codex, Claude Code, OpenCode, and Pi slots for several workspaces, and switches from WeChat with `/codex`, `/claude`, `/opencode`, `/pi`, and `/cd`. Remote switches open a new visible CLI only in the home workspace (the daemon's startup directory).
 - `wecom-daemon`: the equivalent long-lived mode for the official WeCom smart-bot WebSocket channel; it uses the same adapter slots and command grammar with WeCom-specific credentials and conversation state.
-- Direct launchers: `wechat-codex`, `wechat-claude`, `wechat-opencode`, `wechat-pi` and their `wecom-*` counterparts delegate to a same-cwd daemon when available; otherwise they create an internal companion-bound bridge runtime and open the visible CLI. Public `wechat-bridge-*` commands no longer exist.
+- Direct launchers (single-bridge mode): `wechat-codex`, `wechat-claude`, `wechat-opencode`, `wechat-pi` and their `wecom-*`/`telegram-*` counterparts run the CLI in the current terminal. They join the channel's running daemon, or start an ephemeral one (`--ephemeral`) whose slots follow their windows and which exits after the last window closes; a second launcher simply joins it. Running `wechat-daemon` while a daemon is up promotes it instead of replacing it. Public `wechat-bridge-*` commands no longer exist.
 
 Runtime data now lives under `~/.cli-bridge` by default. Legacy data is copy-migrated from `~/.claude/channels/wechat` and from `CLAUDE_WECHAT_CHANNEL_DATA_DIR` only as a migration source. Use `CLI_BRIDGE_DATA_DIR` for the active data directory.
 
@@ -42,9 +42,9 @@ Default active state is in `~/.cli-bridge`:
 - `account.json`, `sync_buf.txt`, `context_tokens.json`: WeChat login and sync state.
 - `wecom/account.json`: WeCom Bot credentials and paired operator identity.
 - `bridge.log`: combined bridge and daemon runtime log.
-- `bridge.lock.json`: single-bridge ownership lock.
+- `bridge.lock.json`: lock of the removed standalone bridge; read only to clean up after upgrades.
 - `daemon-endpoint.json`: daemon IPC endpoint.
-- `workspaces/<workspace-key>/bridge-state.json`: workspace-scoped bridge state.
+- `workspaces/<workspace-key>/slot-session-<adapter>.json`: session each slot last followed, for explicit restores (older `bridge-state.json` files are read as a fallback).
 - `workspaces/<workspace-key>/codex-panel-endpoint*.json`: adapter-scoped local companion endpoints.
 - `inbound-attachments/<date>/`: downloaded WeChat images and files.
 - `wecom/inbound-attachments/<date>/`: downloaded WeCom media files.
@@ -64,9 +64,6 @@ npm run setup
 npm run check
 npm run daemon -- --adapter codex
 npm run daemon -- --channel wecom --adapter claude
-npm run bridge:codex
-npm run bridge:claude
-npm run bridge:opencode
 npm run codex:start
 npm run claude:start
 npm run opencode:start
@@ -134,7 +131,7 @@ For release-facing changes, run `npm run quality` plus package/smoke checks. For
 
 Daemon startup should clean stale or still-running single-bridge state automatically when possible. Do not push cleanup work onto the user if the code can safely detect and clear stale locks, dead endpoints, peer bridge processes, or orphan OpenCode processes. When changing cleanup logic, update daemon tests and make logs explicit enough to diagnose what was cleaned.
 
-Internal transient bridges must refuse to start when a live daemon owns the workspace. If an endpoint is stale, clear it and continue using existing helper functions.
+Launchers must never replace a running daemon: they join it, or start an ephemeral daemon when none answers. If a daemon endpoint is stale, clear it and continue using existing helper functions.
 
 Visible CLI clients always start fresh sessions by default (`new`) in both daemon and direct-launch modes. Do not pre-create shared sessions for visible clients: Codex 0.155 persists app-server threads lazily, and resuming a fresh, not-yet-persisted thread id crashes the visible TUI with "no rollout found". Restores of already persisted threads remain available through explicit `--session-start-mode restore`, WeChat `/resume`, and reuse of an already connected visible window.
 
@@ -217,8 +214,8 @@ Before committing, inspect `git status --short --ignored`. Do not commit ignored
 When behavior is unclear, inspect real state before changing code:
 - `~/.cli-bridge/bridge.log` for bridge/daemon runtime events;
 - `~/.cli-bridge/daemon-endpoint.json` for daemon ownership;
-- `~/.cli-bridge/bridge.lock.json` for single-bridge ownership;
-- `~/.cli-bridge/workspaces/<workspace-key>/bridge-state.json` for active adapter/session state;
+- `inbound_command:` lines in `bridge.log` for the control commands the operator sent;
+- `~/.cli-bridge/workspaces/<workspace-key>/slot-session-<adapter>.json` for the session a slot follows;
 - adapter-scoped companion endpoint files under the workspace state directory.
 
 Missing WeChat replies usually reduce to one of these questions: did the active adapter emit `final_reply`; was the active turn WeChat-owned; did transport send fail; did stale context-token handling clear the right recipient token; or did daemon switching target a different cwd.
