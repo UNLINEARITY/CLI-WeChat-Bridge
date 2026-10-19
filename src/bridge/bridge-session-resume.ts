@@ -64,7 +64,7 @@ function adapterSessionNoun(adapter: BridgeAdapterKind): string {
   return t(adapter === "codex" ? "session.thread" : "session.noun");
 }
 
-export function isWechatResumeEnabled(adapter: BridgeAdapterKind): boolean {
+export function isRemoteResumeEnabled(adapter: BridgeAdapterKind): boolean {
   return (
     adapter === "codex" ||
     adapter === "claude" ||

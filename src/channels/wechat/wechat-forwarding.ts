@@ -12,11 +12,11 @@ import {
   isWechatContextTokenStaleError,
 } from "../../wechat/wechat-transport.ts";
 
-import type { WechatSendContext } from "../../core/channel-types.ts";
+import type { ChannelSendKind } from "../../core/channel-types.ts";
 
-export type { WechatSendContext };
+export type { ChannelSendKind };
 
-export const WECHAT_SEND_CONTEXTS = [
+export const CHANNEL_SEND_KINDS = [
   "final_reply",
   "message",
   "notice",
@@ -29,11 +29,11 @@ export const WECHAT_SEND_CONTEXTS = [
   "fatal_error",
   "inbound_error",
   "thinking",
-] as const satisfies readonly WechatSendContext[];
+] as const satisfies readonly ChannelSendKind[];
 
-export function isWechatSendContext(value: unknown): value is WechatSendContext {
+export function isChannelSendKind(value: unknown): value is ChannelSendKind {
   return typeof value === "string" &&
-    (WECHAT_SEND_CONTEXTS as readonly string[]).includes(value);
+    (CHANNEL_SEND_KINDS as readonly string[]).includes(value);
 }
 
 export const WECHAT_SEND_MAX_ATTEMPTS = 3;
@@ -45,7 +45,7 @@ export function formatUserFacingBridgeFatalError(message: string): string {
   return `Bridge error: ${message.replace(/\s+Recent app-server log:.*$/s, "").trim()}`;
 }
 
-export function shouldForwardBridgeEventToWechat(
+export function shouldForwardBridgeEvent(
   adapter: BridgeAdapterKind,
   eventType: BridgeEvent["type"],
   options: {
@@ -115,7 +115,7 @@ export function formatUserFacingInboundError(params: {
 }
 
 export function formatWechatSendFailureLogEntry(params: {
-  context: WechatSendContext;
+  context: ChannelSendKind;
   recipientId: string;
   error: unknown;
 }): string {
@@ -123,7 +123,7 @@ export function formatWechatSendFailureLogEntry(params: {
 }
 
 export function formatWechatContextTokenStaleLogEntry(params: {
-  context: WechatSendContext;
+  context: ChannelSendKind;
   recipientId: string;
   error: unknown;
 }): string {
@@ -131,7 +131,7 @@ export function formatWechatContextTokenStaleLogEntry(params: {
 }
 
 export function formatWechatSendRetryLogEntry(params: {
-  context: WechatSendContext;
+  context: ChannelSendKind;
   recipientId: string;
   attempt: number;
   delayMs: number;

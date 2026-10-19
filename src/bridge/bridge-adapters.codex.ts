@@ -245,7 +245,7 @@ const {
   normalizeCodexRpcError,
   reserveLocalPort,
   resolveSpawnTarget,
-  shouldAutoCompleteCodexWechatTurnAfterFinalReply,
+  shouldAutoCompleteCodexRemoteTurnAfterFinalReply,
   shouldIgnoreCodexSessionReplayEntry,
   shouldRecoverCodexStaleBusyState,
   waitForTcpPort,
@@ -2864,7 +2864,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
     if (cwd && normalizeComparablePath(cwd) !== normalizeComparablePath(this.options.cwd)) {
       trace?.(`paused thread=${threadId.slice(0, 12)} reason=workspace`);
-      this.interruptWechatTurnForLocalThreadSwitch(threadId);
+      this.interruptRemoteTurnForLocalThreadSwitch(threadId);
       this.clearPendingThreadAnnouncement();
       this.pendingThreadFollowId = null;
       if (this.visibleOutOfWorkspaceThreadId !== threadId) {
@@ -2940,7 +2940,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    this.interruptWechatTurnForLocalThreadSwitch(threadId);
+    this.interruptRemoteTurnForLocalThreadSwitch(threadId);
 
     if (!this.isNativePanelMode()) {
       const threadChanged = this.sharedThreadId !== threadId;
@@ -2994,7 +2994,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.schedulePendingThreadAnnouncement();
   }
 
-  private interruptWechatTurnForLocalThreadSwitch(nextThreadId: string): void {
+  private interruptRemoteTurnForLocalThreadSwitch(nextThreadId: string): void {
     const activeTurn = this.activeTurn;
     if (
       !activeTurn ||
@@ -4134,12 +4134,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.clearFinalReplyCompletionTimer();
     this.finalReplyCompletionTurnId = turnId;
     this.finalReplyCompletionTimer = setTimeout(() => {
-      this.autoCompleteWechatTurnAfterFinalReply(turnId);
+      this.autoCompleteRemoteTurnAfterFinalReply(turnId);
     }, CODEX_FINAL_REPLY_SETTLE_DELAY_MS);
     this.finalReplyCompletionTimer.unref?.();
   }
 
-  private autoCompleteWechatTurnAfterFinalReply(turnId: string): void {
+  private autoCompleteRemoteTurnAfterFinalReply(turnId: string): void {
     this.clearFinalReplyCompletionTimerForTurn(turnId);
 
     const activeTurn = this.activeTurn;
@@ -4149,7 +4149,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const pendingUserInput = Boolean(this.pendingUserInputRequest || this.state.pendingUserInput);
     const nowMs = Date.now();
     if (
-      !shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      !shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: turnId,
         activeTurnId: activeTurn?.turnId,
         activeTurnOrigin: activeTurn?.origin,
@@ -4176,7 +4176,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         if (remainingMs > 0) {
           this.finalReplyCompletionTurnId = turnId;
           this.finalReplyCompletionTimer = setTimeout(() => {
-            this.autoCompleteWechatTurnAfterFinalReply(turnId);
+            this.autoCompleteRemoteTurnAfterFinalReply(turnId);
           }, remainingMs);
           this.finalReplyCompletionTimer.unref?.();
         }

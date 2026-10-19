@@ -8,29 +8,29 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-import { getWorkspaceChannelPaths } from "../../wechat/channel-config.ts";
-import { writeJsonFileAtomic } from "../../utils/atomic-file.ts";
-import type { WechatSendContext } from "./wechat-forwarding.ts";
+import { getWorkspaceChannelPaths } from "../wechat/channel-config.ts";
+import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import type {
   BridgeChannelId,
   ChannelConversationRef,
-} from "../../core/channel-types.ts";
+  ChannelSendKind,
+} from "./channel-types.ts";
 
-export type PendingWechatMessage = {
+export type PendingMessage = {
   id: string;
   recipientId: string;
   text: string;
-  context: WechatSendContext;
+  context: ChannelSendKind;
   queuedAt: string;
   target?: ChannelConversationRef;
 };
 
-type PendingWechatMessageFile = {
+type PendingMessageFile = {
   messages?: unknown;
 };
 
 /** Contexts worth redelivering after the channel recovers. */
-const PENDING_WORTHY_CONTEXTS = new Set<WechatSendContext>([
+const PENDING_WORTHY_CONTEXTS = new Set<ChannelSendKind>([
   "final_reply",
   "approval_required",
   "user_input_required",
@@ -43,16 +43,12 @@ const PENDING_MAX_AGE_MS = 30 * 60 * 1000;
 /** Cap the backlog so one recovery never floods the chat. */
 const PENDING_MAX_MESSAGES = 10;
 
-function isExpired(message: PendingWechatMessage, now = Date.now()): boolean {
+function isExpired(message: PendingMessage, now = Date.now()): boolean {
   const queuedAtMs = Date.parse(message.queuedAt);
   if (!Number.isFinite(queuedAtMs)) {
     return true;
   }
   return now - queuedAtMs > PENDING_MAX_AGE_MS;
-}
-
-export function getPendingWechatMessagesFile(cwd: string): string {
-  return getPendingChannelMessagesFile(cwd, "wechat");
 }
 
 export function getPendingChannelMessagesFile(
@@ -65,24 +61,24 @@ export function getPendingChannelMessagesFile(
   );
 }
 
-function readPendingMessages(filePath: string): PendingWechatMessage[] {
+function readPendingMessages(filePath: string): PendingMessage[] {
   try {
     if (!fs.existsSync(filePath)) {
       return [];
     }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as PendingWechatMessageFile;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as PendingMessageFile;
     if (!Array.isArray(parsed.messages)) {
       return [];
     }
-    return parsed.messages.filter((message): message is PendingWechatMessage => {
+    return parsed.messages.filter((message): message is PendingMessage => {
       return (
         Boolean(message) &&
         typeof message === "object" &&
-        typeof (message as PendingWechatMessage).id === "string" &&
-        typeof (message as PendingWechatMessage).recipientId === "string" &&
-        typeof (message as PendingWechatMessage).text === "string" &&
-        typeof (message as PendingWechatMessage).context === "string" &&
-        typeof (message as PendingWechatMessage).queuedAt === "string"
+        typeof (message as PendingMessage).id === "string" &&
+        typeof (message as PendingMessage).recipientId === "string" &&
+        typeof (message as PendingMessage).text === "string" &&
+        typeof (message as PendingMessage).context === "string" &&
+        typeof (message as PendingMessage).queuedAt === "string"
       );
     });
   } catch {
@@ -90,9 +86,9 @@ function readPendingMessages(filePath: string): PendingWechatMessage[] {
   }
 }
 
-export class PendingWechatMessageStore {
+export class PendingMessageStore {
   private readonly filePath: string;
-  private messages: PendingWechatMessage[];
+  private messages: PendingMessage[];
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -100,7 +96,7 @@ export class PendingWechatMessageStore {
     this.messages = readPendingMessages(filePath);
   }
 
-  list(): PendingWechatMessage[] {
+  list(): PendingMessage[] {
     this.compact();
     return this.messages.map((message) => ({
       ...message,
@@ -111,9 +107,9 @@ export class PendingWechatMessageStore {
   enqueue(
     recipientId: string,
     text: string,
-    context: WechatSendContext,
+    context: ChannelSendKind,
     target?: ChannelConversationRef,
-  ): PendingWechatMessage | null {
+  ): PendingMessage | null {
     const normalizedRecipientId = recipientId.trim();
     const normalizedText = text.trim();
     if (!normalizedRecipientId || !normalizedText) {
@@ -123,7 +119,7 @@ export class PendingWechatMessageStore {
       return null;
     }
 
-    const message: PendingWechatMessage = {
+    const message: PendingMessage = {
       id: crypto.randomUUID(),
       recipientId: normalizedRecipientId,
       text: normalizedText,

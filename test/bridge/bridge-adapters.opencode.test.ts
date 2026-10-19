@@ -3737,7 +3737,7 @@ describe("OpenCode working notice", () => {
       pendingPermission: unknown;
       currentPreview: string;
       workingNoticeDelayMs: number;
-      armWechatWorkingNotice(): void;
+      armRemoteWorkingNotice(): void;
     };
 
     internal.workingNoticeDelayMs = 5;
@@ -3748,7 +3748,7 @@ describe("OpenCode working notice", () => {
     internal.pendingPermission = null;
 
     // The working notice is armed by sendInput(), simulate it directly.
-    internal.armWechatWorkingNotice();
+    internal.armRemoteWorkingNotice();
 
     await wait(20);
 

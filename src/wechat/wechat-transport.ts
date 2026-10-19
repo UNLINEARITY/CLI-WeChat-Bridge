@@ -4,6 +4,11 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import type {
+  BridgeInboundAttachment,
+  BridgeInboundAttachmentKind,
+  BridgeInboundMessage,
+} from "../core/channel-types.ts";
 import crypto from "node:crypto";
 import { createCipheriv, createDecipheriv } from "node:crypto";
 import fs from "node:fs";
@@ -131,25 +136,10 @@ export function isWechatSyncSessionTimeout(response: {
   );
 }
 
-export type InboundWechatMessage = {
-  senderId: string;
-  sender: string;
-  sessionId: string;
-  text: string;
-  attachments: InboundWechatAttachment[];
-  contextToken?: string;
-  createdAt: string;
-  createdAtMs?: number;
-};
-
-export type InboundWechatAttachmentKind = "image" | "file";
-
-export type InboundWechatAttachment = {
-  kind: InboundWechatAttachmentKind;
-  path: string;
-  fileName: string;
-  sizeBytes: number;
-};
+/** The WeChat transport delivers the channel-neutral inbound message shape. */
+export type InboundWechatMessage = BridgeInboundMessage;
+export type InboundWechatAttachmentKind = BridgeInboundAttachmentKind;
+export type InboundWechatAttachment = BridgeInboundAttachment;
 
 export type InboundWechatAttachmentDescriptor = {
   kind: InboundWechatAttachmentKind;

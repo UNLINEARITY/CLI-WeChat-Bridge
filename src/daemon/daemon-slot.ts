@@ -17,7 +17,7 @@ import type {
 } from "../bridge/bridge-types.ts";
 import { buildOneTimeCode, nowIso, OutputBatcher } from "../bridge/bridge-utils.ts";
 import { ResumeSessionCoordinator } from "../bridge/bridge-session-resume.ts";
-import type { InboundWechatMessage } from "../wechat/wechat-transport.ts";
+import type { BridgeInboundMessage } from "../core/channel-types.ts";
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
 import type { ChannelConversationRef } from "../core/channel-types.ts";
 import type { DaemonAdapterKind } from "./daemon-link.ts";
@@ -63,7 +63,7 @@ export type DaemonSlot = {
 };
 
 export type DeferredDaemonInput = {
-  message: InboundWechatMessage;
+  message: BridgeInboundMessage;
   conversation?: ChannelConversationRef;
 };
 
@@ -97,7 +97,7 @@ export function prefixSourceMessage(source: string, text: string): string {
   return trimmed ? `[${source}]\n${trimmed}` : `[${source}]`;
 }
 
-export function formatInboundMessagePreview(message: InboundWechatMessage): string {
+export function formatInboundMessagePreview(message: BridgeInboundMessage): string {
   if (message.text.trim()) {
     return message.text;
   }

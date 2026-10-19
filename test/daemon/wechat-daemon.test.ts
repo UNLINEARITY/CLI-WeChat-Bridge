@@ -27,7 +27,7 @@ import {
   waitForCodexVisibleThread,
   waitForVisibleClientConnection,
   openVisibleClient,
-  WechatDaemon,
+  BridgeDaemon,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
 import type {
@@ -134,7 +134,7 @@ describe("wechat-daemon helpers", () => {
   });
 
   test("a local daemon runs without any channel transport", () => {
-    const daemon = new WechatDaemon({
+    const daemon = new BridgeDaemon({
       cwd: path.join(os.tmpdir(), "local-daemon-workspace"),
       authorizedUserId: "local-operator",
       transport: null,

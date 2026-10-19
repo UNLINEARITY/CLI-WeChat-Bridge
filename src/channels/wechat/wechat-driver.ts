@@ -13,7 +13,7 @@ import type {
   ChannelDriver,
   ChannelSendResult,
 } from "../../core/channel-driver.ts";
-import type { WechatSendContext } from "../../core/channel-types.ts";
+import type { ChannelSendKind } from "../../core/channel-types.ts";
 import {
   WECHAT_SEND_MAX_ATTEMPTS,
   computeWechatSendRetryDelayMs,
@@ -161,7 +161,7 @@ export class WechatChannelDriver implements ChannelDriver {
   async sendText(params: {
     target: ChannelConversationRef;
     text: string;
-    context: WechatSendContext;
+    context: ChannelSendKind;
     log: (entry: string) => void;
   }): Promise<ChannelSendResult> {
     const { target, text, context, log } = params;

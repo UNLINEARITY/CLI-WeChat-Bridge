@@ -22,10 +22,10 @@ import {
   truncatePreview,
 } from "../bridge/bridge-utils.ts";
 import {
-  WECHAT_SEND_CONTEXTS,
+  CHANNEL_SEND_KINDS,
   formatUserFacingInboundError,
-  isWechatSendContext,
-  type WechatSendContext,
+  isChannelSendKind,
+  type ChannelSendKind,
 } from "../channels/wechat/wechat-forwarding.ts";
 import { formatBindingsListMessage, listBindings, loadEmojiBindings } from "./emoji-bindings.ts";
 import {
@@ -33,9 +33,9 @@ import {
   DEFAULT_LONG_POLL_TIMEOUT_MS,
   describeWechatTransportError,
   type WeChatTransport,
-  type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
-import { PendingWechatMessageStore } from "../channels/wechat/wechat-outbound-queue.ts";
+import type { BridgeInboundMessage } from "../core/channel-types.ts";
+import { PendingMessageStore } from "../core/pending-message-store.ts";
 import { OutboundDispatcher } from "../core/outbound-dispatcher.ts";
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import { InboundConversationContext } from "../core/conversation-routing.ts";
@@ -119,13 +119,13 @@ const EPHEMERAL_STARTUP_IDLE_MS = 60_000;
 /** How often window-bound slots are checked for a closed window. */
 const WINDOW_CHECK_INTERVAL_MS = 3_000;
 
-export type WechatDaemonDeps = {
+export type BridgeDaemonDeps = {
   localeSettingsFile?: string;
   createRuntime?: typeof createRuntimeHost;
   openVisibleClient?: typeof openVisibleClient;
   isVisibleClientAlive?: typeof isVisibleClientAlive;
   daemonLog?: (message: string) => void;
-  pendingWechatMessages?: PendingWechatMessageStore;
+  pendingMessages?: PendingMessageStore;
   visibleClientConnectTimeoutMs?: number;
   fatalNoticeGraceMs?: number;
   /** Where slots save their sessions; tests keep them in memory. */
@@ -143,9 +143,9 @@ function computePollRetryDelayMs(consecutiveFailures: number): number {
   return Math.min(POLL_RETRY_MAX_MS, POLL_RETRY_BASE_MS * 2 ** exponent);
 }
 
-function toLegacyInboundWechatMessage(
+function toBridgeInboundMessage(
   message: ChannelInboundMessage,
-): InboundWechatMessage {
+): BridgeInboundMessage {
   return {
     senderId: message.senderId,
     sender: message.senderId,
@@ -163,7 +163,7 @@ function toLegacyInboundWechatMessage(
   };
 }
 
-export class WechatDaemon {
+export class BridgeDaemon {
   private readonly cwd: string;
   private readonly profile?: string;
   private readonly authorizedUserId: string;
@@ -181,7 +181,7 @@ export class WechatDaemon {
   private readonly controls: DaemonControlCommands;
   private readonly slotManager: SlotManager;
   private readonly inbound: InboundRouter;
-  private readonly deps: WechatDaemonDeps;
+  private readonly deps: BridgeDaemonDeps;
   private shutdownPromise: Promise<void> | null = null;
   /** Started by a launcher; exits after the last window closes. */
   private ephemeral = false;
@@ -190,7 +190,7 @@ export class WechatDaemon {
   constructor(params: {
     cwd: string;
     profile?: string;
-    deps?: WechatDaemonDeps;
+    deps?: BridgeDaemonDeps;
   } & (
     | { setup: ChannelSetup }
     | {
@@ -222,7 +222,7 @@ export class WechatDaemon {
     this.channelId = setup.channelId;
     this.deps = params.deps ?? {};
     this.channel = createChannelRuntime(setup, {
-      buildWechatInboundPrompt: buildChannelInboundPrompt,
+      buildAttachmentInboundPrompt: buildChannelInboundPrompt,
       log: (message) => this.daemonLog(message),
       logError,
     });
@@ -231,8 +231,8 @@ export class WechatDaemon {
       ?? this.channelDriver.directConversation(this.authorizedUserId);
     this.outbound = new OutboundDispatcher({
       driver: this.channelDriver,
-      pending: this.deps.pendingWechatMessages ??
-        new PendingWechatMessageStore(this.channel.pendingMessagesFile(this.cwd)),
+      pending: this.deps.pendingMessages ??
+        new PendingMessageStore(this.channel.pendingMessagesFile(this.cwd)),
       resolveSendTarget: (senderId, override) => {
         const activeSlot = this.slotManager.getActiveSlot();
         return resolveDaemonOutboundTarget({
@@ -268,7 +268,7 @@ export class WechatDaemon {
       fallbackConversation: this.fallbackConversation,
       outbound: this.outbound,
       queueMessage: (senderId, text, context, targetOverride) =>
-        this.queueWechatMessage(senderId, text, context, targetOverride),
+        this.queueMessage(senderId, text, context, targetOverride),
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       maybeDrainDeferredInputs: (slot) => this.inbound.maybeDrainDeferredInputs(slot),
       disposeDeadSlot: (slot) => this.slotManager.disposeDeadSlot(slot),
@@ -289,7 +289,7 @@ export class WechatDaemon {
       isVisibleClientAlive: (cwd, adapter) => this.isVisibleClientAlive(cwd, adapter),
       openVisibleClient: (options) => this.openVisibleClient(options),
       queueMessage: (senderId, text, context, targetOverride) =>
-        this.queueWechatMessage(senderId, text, context, targetOverride),
+        this.queueMessage(senderId, text, context, targetOverride),
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
       isEphemeral: () => this.ephemeral,
@@ -302,7 +302,7 @@ export class WechatDaemon {
       localeSettingsFile: this.deps.localeSettingsFile,
       slotManager: this.slotManager,
       queueMessage: (senderId, text, context, targetOverride) =>
-        this.queueWechatMessage(senderId, text, context, targetOverride),
+        this.queueMessage(senderId, text, context, targetOverride),
       getStatus: () => this.getStatus(),
       ensureSlot: (adapter, options) => this.slotManager.ensureSlot(adapter, options),
       dispatchInboundText: (message, slot) => this.inbound.dispatchInboundText(message, slot),
@@ -318,7 +318,7 @@ export class WechatDaemon {
       slotManager: this.slotManager,
       controls: this.controls,
       queueMessage: (senderId, text, context, targetOverride) =>
-        this.queueWechatMessage(senderId, text, context, targetOverride),
+        this.queueMessage(senderId, text, context, targetOverride),
       shutdown: () => this.shutdown(),
       daemonLog: (message) => this.daemonLog(message),
     });
@@ -450,7 +450,7 @@ export class WechatDaemon {
                 await this.outbound.flushPending();
               }
               await this.inbound.handleInboundMessage(
-                toLegacyInboundWechatMessage(channelMessage),
+                toBridgeInboundMessage(channelMessage),
               );
             },
           );
@@ -498,7 +498,7 @@ export class WechatDaemon {
       adapter: activeSlot?.adapter ?? "none",
       bindings: formatBindingsListMessage(listBindings()),
     });
-    await this.queueWechatMessage(this.authorizedUserId, welcomeText);
+    await this.queueMessage(this.authorizedUserId, welcomeText);
 
     if (this.channelDriver.capabilities.pushInbound) {
       while (!this.shutdownPromise) {
@@ -556,7 +556,7 @@ export class WechatDaemon {
         this.daemonLog(`ignored_startup_backlog: count=${pollResult.ignoredBacklogCount}`);
         if (!this.backlogNoticeSent) {
           this.backlogNoticeSent = true;
-          await this.queueWechatMessage(
+          await this.queueMessage(
             this.authorizedUserId,
             t("bridge.backlogIgnored", {
               count: pollResult.ignoredBacklogCount,
@@ -574,7 +574,7 @@ export class WechatDaemon {
           const errorText = error instanceof Error ? error.message : String(error);
           logError(errorText);
           this.daemonLog(`inbound_error: ${errorText}`);
-          await this.queueWechatMessage(
+          await this.queueMessage(
             message.senderId,
             formatUserFacingInboundError({
               adapter: this.slotManager.activeAdapter ?? "codex",
@@ -670,9 +670,9 @@ export class WechatDaemon {
       throw new Error(`${this.channelId}-daemon cannot send to ${request.channel}.`);
     }
     const context = request.context ?? "message";
-    if (!isWechatSendContext(context)) {
+    if (!isChannelSendKind(context)) {
       throw new Error(
-        `Invalid send_text context: ${JSON.stringify(request.context)}. Valid contexts: ${WECHAT_SEND_CONTEXTS.join(", ")}.`,
+        `Invalid send_text context: ${JSON.stringify(request.context)}. Valid contexts: ${CHANNEL_SEND_KINDS.join(", ")}.`,
       );
     }
     const target = this.channelDriver.capabilities.multiConversation
@@ -684,7 +684,7 @@ export class WechatDaemon {
           ...(request.metadata ? { metadata: request.metadata } : {}),
         }
       : undefined;
-    const sent = await this.queueWechatMessage(
+    const sent = await this.queueMessage(
       request.recipientId,
       request.text,
       context,
@@ -746,7 +746,7 @@ export class WechatDaemon {
     if (!activate && result.created) {
       const label = slots.workspaceLabel(request.cwd);
       this.daemonLog(`workspace_slot_started: cwd=${request.cwd} adapter=${request.adapter} new_workspace=${!known}`);
-      await this.queueWechatMessage(
+      await this.queueMessage(
         this.authorizedUserId,
         t("daemon.workspace.connected", { label, adapter: request.adapter }),
       );
@@ -779,14 +779,14 @@ export class WechatDaemon {
   }
 
   /** Entry point for one inbound channel message; also driven directly by tests. */
-  handleInboundMessage(message: InboundWechatMessage): Promise<void> {
+  handleInboundMessage(message: BridgeInboundMessage): Promise<void> {
     return this.inbound.handleInboundMessage(message);
   }
 
-  private queueWechatMessage(
+  private queueMessage(
     senderId: string,
     text: string,
-    context: WechatSendContext = "message",
+    context: ChannelSendKind = "message",
     targetOverride?: ChannelConversationRef,
   ): Promise<boolean> {
     return this.outbound.queueMessage(senderId, text, context, targetOverride);
@@ -866,7 +866,7 @@ export async function runDaemon(
     logError,
   });
 
-  const daemon = new WechatDaemon({
+  const daemon = new BridgeDaemon({
     cwd: options.cwd,
     profile: options.profile,
     setup,

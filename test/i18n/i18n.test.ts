@@ -16,7 +16,7 @@ import { handleLanguageControl } from "../../src/bridge/language-control.ts";
 import { parseBridgeControlCommand } from "../../src/core/bridge-control.ts";
 import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
 import { handleAdapterControl } from "../../src/bridge/adapter-control.ts";
-import { WechatDaemon } from "../../src/daemon/wechat-daemon.ts";
+import { BridgeDaemon } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeAdapter, PendingUserInputRequest } from "../../src/bridge/bridge-types.ts";
 import { isRetryableDeferredCodexDrainError } from "../../src/core/bridge-defer.ts";
 import { CodexPtyAdapter } from "../../src/bridge/bridge-adapters.codex.ts";
@@ -69,12 +69,12 @@ describe("live language control", () => {
     const code = `
       import fs from "node:fs";
       import assert from "node:assert/strict";
-      import { WechatDaemon } from "./src/daemon/wechat-daemon.ts";
+      import { BridgeDaemon } from "./src/daemon/wechat-daemon.ts";
       import { getLocalChannelFiles } from "./src/channels/local/local-driver.ts";
       import { LANGUAGE_FILE } from "./src/wechat/channel-config.ts";
       const cwd = process.env.CLI_BRIDGE_DATA_DIR;
       const localFiles = getLocalChannelFiles(cwd);
-      const daemon = new WechatDaemon({ cwd, authorizedUserId: "local-operator", transport: null, channelId: "local", localFiles });
+      const daemon = new BridgeDaemon({ cwd, authorizedUserId: "local-operator", transport: null, channelId: "local", localFiles });
       const outbound = () => fs.existsSync(localFiles.transcriptFile)
         ? fs.readFileSync(localFiles.transcriptFile, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse).filter(line => line.direction === "outbound")
         : [];

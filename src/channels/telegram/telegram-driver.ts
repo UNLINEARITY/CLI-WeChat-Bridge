@@ -19,7 +19,7 @@ import {
   toTelegramOutputKind,
 } from "./telegram-message.ts";
 import { truncatePreview } from "../../core/text-utils.ts";
-import type { WechatSendContext } from "../../core/channel-types.ts";
+import type { ChannelSendKind } from "../../core/channel-types.ts";
 import type { TelegramTransport } from "./telegram-transport.ts";
 
 export type TelegramChannelDriverOptions = {
@@ -100,7 +100,7 @@ export class TelegramChannelDriver implements ChannelDriver {
   async sendText(params: {
     target: ChannelConversationRef;
     text: string;
-    context: WechatSendContext;
+    context: ChannelSendKind;
     log: (entry: string) => void;
   }): Promise<ChannelSendResult> {
     const { target, text, context, log } = params;

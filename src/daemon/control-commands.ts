@@ -11,11 +11,11 @@ import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import {
   nowIso,
   parsePendingUserInputAnswerCommand,
-  parseWechatControlCommand,
+  parseControlCommand,
   truncatePreview,
 } from "../bridge/bridge-utils.ts";
-import { isWechatResumeEnabled } from "../bridge/bridge-session-resume.ts";
-import type { WechatSendContext } from "../channels/wechat/wechat-forwarding.ts";
+import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
+import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 import {
   formatBindingsListMessage,
   listBindings,
@@ -23,7 +23,7 @@ import {
   setBinding,
   type EmojiBindingsCommand,
 } from "./emoji-bindings.ts";
-import type { InboundWechatMessage } from "../wechat/wechat-transport.ts";
+import type { BridgeInboundMessage } from "../core/channel-types.ts";
 import { handleAdapterControl } from "../bridge/adapter-control.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { ChannelConversationRef } from "../core/channel-types.ts";
@@ -50,12 +50,12 @@ export type ControlCommandHost = {
   queueMessage: (
     senderId: string,
     text: string,
-    context?: WechatSendContext,
+    context?: ChannelSendKind,
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   getStatus: () => DaemonStatus;
   ensureSlot: (adapter: DaemonAdapterKind, options?: EnsureSlotOptions) => Promise<EnsureSlotResult>;
-  dispatchInboundText: (message: InboundWechatMessage, slot: DaemonSlot) => Promise<unknown>;
+  dispatchInboundText: (message: BridgeInboundMessage, slot: DaemonSlot) => Promise<unknown>;
   daemonLog: (message: string) => void;
 };
 
@@ -98,9 +98,9 @@ export class DaemonControlCommands {
   }
 
   async handleSystemCommand(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
-    command: NonNullable<ReturnType<typeof parseWechatControlCommand>>,
+    command: NonNullable<ReturnType<typeof parseControlCommand>>,
   ): Promise<void> {
     switch (command.type) {
       case "language":
@@ -135,7 +135,7 @@ export class DaemonControlCommands {
         await this.host.queueMessage(message.senderId, await handleAdapterControl(activeSlot.runtime, message.senderId, command));
         return;
       case "resume": {
-        if (!isWechatResumeEnabled(activeSlot.adapter)) {
+        if (!isRemoteResumeEnabled(activeSlot.adapter)) {
           await this.host.queueMessage(
             message.senderId,
             t("daemon.resume.disabled", { channel: this.host.driver.displayName, adapter: activeSlot.adapter }),
@@ -331,7 +331,7 @@ export class DaemonControlCommands {
   }
 
   async confirmPendingApproval(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     index?: number,
   ): Promise<void> {
@@ -339,7 +339,7 @@ export class DaemonControlCommands {
   }
 
   async denyPendingApproval(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     index?: number,
   ): Promise<void> {
@@ -348,7 +348,7 @@ export class DaemonControlCommands {
 
   private async resolveApproval(
     action: "confirm" | "deny",
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     index: number | undefined,
   ): Promise<void> {
@@ -395,7 +395,7 @@ export class DaemonControlCommands {
    * a bare `/answer` lists every waiting question.
    */
   async answerPendingUserInput(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     raw: string,
   ): Promise<void> {
@@ -480,7 +480,7 @@ export class DaemonControlCommands {
 
   /** `/all` broadcasts to the slots of the current workspace only. */
   private async handleBroadcastCommand(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     text: string,
   ): Promise<void> {
     const cwd = this.host.slotManager.activeCwd;
@@ -504,7 +504,7 @@ export class DaemonControlCommands {
       return;
     }
 
-    const broadcastMessage: InboundWechatMessage = { ...message, text };
+    const broadcastMessage: BridgeInboundMessage = { ...message, text };
     const dispatched: string[] = [];
     const skipped: string[] = [];
     for (const adapter of DAEMON_ADAPTERS) {

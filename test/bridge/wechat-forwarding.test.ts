@@ -16,7 +16,7 @@ import {
   formatWechatSendRetryLogEntry,
   isWechatContextUnavailableError,
   isRetryableWechatSendError,
-  shouldForwardBridgeEventToWechat,
+  shouldForwardBridgeEvent,
   shouldSuppressCodexLocalThreadNotice,
 } from "../../src/bridge/wechat-forwarding.ts";
 import { WechatApiResponseError } from "../../src/wechat/wechat-transport.ts";
@@ -134,33 +134,33 @@ describe("wechat forwarding helpers", () => {
   });
 
   test("suppresses noisy OpenCode bridge events from WeChat replies", () => {
-    expect(shouldForwardBridgeEventToWechat("opencode", "stdout")).toBe(false);
-    expect(shouldForwardBridgeEventToWechat("opencode", "stderr")).toBe(false);
-    expect(shouldForwardBridgeEventToWechat("opencode", "notice")).toBe(false);
+    expect(shouldForwardBridgeEvent("opencode", "stdout")).toBe(false);
+    expect(shouldForwardBridgeEvent("opencode", "stderr")).toBe(false);
+    expect(shouldForwardBridgeEvent("opencode", "notice")).toBe(false);
     expect(
-      shouldForwardBridgeEventToWechat("opencode", "notice", {
+      shouldForwardBridgeEvent("opencode", "notice", {
         text: "OpenCode is still working on:\nReview the bridge",
       }),
     ).toBe(false);
     expect(
-      shouldForwardBridgeEventToWechat("opencode", "notice", {
+      shouldForwardBridgeEvent("opencode", "notice", {
         text: "OpenCode local draft:\nReview the bridge",
       }),
     ).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("opencode", "mirrored_user_input")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("opencode", "session_switched")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("opencode", "thread_switched")).toBe(false);
-    expect(shouldForwardBridgeEventToWechat("opencode", "final_reply")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("opencode", "approval_required")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("opencode", "fatal_error")).toBe(true);
+    expect(shouldForwardBridgeEvent("opencode", "mirrored_user_input")).toBe(true);
+    expect(shouldForwardBridgeEvent("opencode", "session_switched")).toBe(true);
+    expect(shouldForwardBridgeEvent("opencode", "thread_switched")).toBe(false);
+    expect(shouldForwardBridgeEvent("opencode", "final_reply")).toBe(true);
+    expect(shouldForwardBridgeEvent("opencode", "approval_required")).toBe(true);
+    expect(shouldForwardBridgeEvent("opencode", "fatal_error")).toBe(true);
   });
 
   test("suppresses Pi terminal streams while forwarding structured notices", () => {
-    expect(shouldForwardBridgeEventToWechat("pi", "stdout")).toBe(false);
-    expect(shouldForwardBridgeEventToWechat("pi", "stderr")).toBe(false);
-    expect(shouldForwardBridgeEventToWechat("pi", "notice")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("pi", "mirrored_user_input")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("pi", "final_reply")).toBe(true);
+    expect(shouldForwardBridgeEvent("pi", "stdout")).toBe(false);
+    expect(shouldForwardBridgeEvent("pi", "stderr")).toBe(false);
+    expect(shouldForwardBridgeEvent("pi", "notice")).toBe(true);
+    expect(shouldForwardBridgeEvent("pi", "mirrored_user_input")).toBe(true);
+    expect(shouldForwardBridgeEvent("pi", "final_reply")).toBe(true);
   });
 
   test("suppresses only recently completed Codex local thread notices", () => {
@@ -197,7 +197,7 @@ describe("wechat forwarding helpers", () => {
   });
 
   test("keeps non-OpenCode adapters forwarding bridge events", () => {
-    expect(shouldForwardBridgeEventToWechat("codex", "stdout")).toBe(true);
-    expect(shouldForwardBridgeEventToWechat("claude", "notice")).toBe(true);
+    expect(shouldForwardBridgeEvent("codex", "stdout")).toBe(true);
+    expect(shouldForwardBridgeEvent("claude", "notice")).toBe(true);
   });
 });

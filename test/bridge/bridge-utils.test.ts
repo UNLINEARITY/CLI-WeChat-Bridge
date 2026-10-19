@@ -15,7 +15,7 @@ import type {
   PendingUserInputRequest,
 } from "../../src/bridge/bridge-types.ts";
 import {
-  buildWechatInboundPrompt,
+  buildAttachmentInboundPrompt,
   buildOneTimeCode,
   containsWechatOutboundAttachmentPath,
   extractInlineWechatAttachments,
@@ -40,7 +40,7 @@ import {
   parsePendingUserInputAnswerCommand,
   parseWechatFinalReply,
   parseSystemCommand,
-  parseWechatControlCommand,
+  parseControlCommand,
   shouldDropStartupBacklogMessage,
   WECHAT_TEXT_CHUNK_MAX_CHARS,
 } from "../../src/bridge/bridge-utils.ts";
@@ -133,45 +133,45 @@ describe("parseSystemCommand", () => {
   });
 });
 
-describe("parseWechatControlCommand", () => {
+describe("parseControlCommand", () => {
   test("adds Claude-only approval shortcuts while keeping slash commands intact", () => {
     expect(
-      parseWechatControlCommand("confirm", {
+      parseControlCommand("confirm", {
         adapter: "claude",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
-      parseWechatControlCommand("yes", {
+      parseControlCommand("yes", {
         adapter: "claude",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
-      parseWechatControlCommand("deny", {
+      parseControlCommand("deny", {
         adapter: "claude",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "deny" });
     expect(
-      parseWechatControlCommand("no", {
+      parseControlCommand("no", {
         adapter: "claude",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "deny" });
     expect(
-      parseWechatControlCommand("/confirm", {
+      parseControlCommand("/confirm", {
         adapter: "claude",
         hasPendingConfirmation: false,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
-      parseWechatControlCommand("/confirm LEGACY", {
+      parseControlCommand("/confirm LEGACY", {
         adapter: "claude",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
@@ -181,14 +181,14 @@ describe("parseWechatControlCommand", () => {
 
   test("does not reinterpret bare approval words without pending approvals", () => {
     expect(
-      parseWechatControlCommand("yes", {
+      parseControlCommand("yes", {
         adapter: "claude",
         hasPendingConfirmation: false,
         hasPendingUserInput: false,
       }),
     ).toBeNull();
     expect(
-      parseWechatControlCommand("confirm", {
+      parseControlCommand("confirm", {
         adapter: "codex",
         hasPendingConfirmation: false,
         hasPendingUserInput: false,
@@ -198,14 +198,14 @@ describe("parseWechatControlCommand", () => {
 
   test("bare approval words work for all adapters when pending", () => {
     expect(
-      parseWechatControlCommand("confirm", {
+      parseControlCommand("confirm", {
         adapter: "codex",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
       }),
     ).toEqual({ type: "confirm" });
     expect(
-      parseWechatControlCommand("yes", {
+      parseControlCommand("yes", {
         adapter: "codex",
         hasPendingConfirmation: true,
         hasPendingUserInput: false,
@@ -256,7 +256,7 @@ describe("detectCliApproval", () => {
 
 describe("wechat inbound prompt injection", () => {
   test("injects attachment guidance for explicit send-to-WeChat requests", () => {
-    const prompt = buildWechatInboundPrompt("把桌面的pdf发给我，发送微信");
+    const prompt = buildAttachmentInboundPrompt("把桌面的pdf发给我，发送微信");
 
     expect(shouldInjectWechatAttachmentPrompt("把桌面的pdf发给我，发送微信")).toBe(true);
     expect(prompt).toContain("[WeChat bridge note]");
@@ -265,7 +265,7 @@ describe("wechat inbound prompt injection", () => {
   });
 
   test("tells agents to reference source paths instead of staging outbound files", () => {
-    const prompt = buildWechatInboundPrompt("Please send any document from Desktop to WeChat.");
+    const prompt = buildAttachmentInboundPrompt("Please send any document from Desktop to WeChat.");
 
     expect(prompt).toContain("reference that path directly in the attachment block");
     expect(prompt).toContain("Do not create, copy, move, or write files");
@@ -307,7 +307,7 @@ describe("wechat inbound prompt injection", () => {
   test("injects attachment guidance for short follow-up send commands", () => {
     expect(shouldInjectWechatAttachmentPrompt("发送微信")).toBe(true);
     expect(shouldInjectWechatAttachmentPrompt("发呀")).toBe(true);
-    expect(buildWechatInboundPrompt("直接发给我")).toContain("```wechat-attachments");
+    expect(buildAttachmentInboundPrompt("直接发给我")).toContain("```wechat-attachments");
   });
 
   test("injects attachment guidance for common Chinese send-file phrasing", () => {
@@ -319,7 +319,7 @@ describe("wechat inbound prompt injection", () => {
 
     for (const request of requests) {
       expect(shouldInjectWechatAttachmentPrompt(request)).toBe(true);
-      expect(buildWechatInboundPrompt(request)).toContain("```wechat-attachments");
+      expect(buildAttachmentInboundPrompt(request)).toContain("```wechat-attachments");
     }
   });
 
@@ -335,12 +335,12 @@ describe("wechat inbound prompt injection", () => {
 
     expect(shouldInjectWechatAttachmentPrompt(ordinary)).toBe(false);
     expect(shouldInjectWechatAttachmentPrompt(nonSendWithChineseFa)).toBe(false);
-    expect(buildWechatInboundPrompt(ordinary)).toBe(ordinary);
-    expect(buildWechatInboundPrompt(explicitProtocol)).toBe(explicitProtocol);
+    expect(buildAttachmentInboundPrompt(ordinary)).toBe(ordinary);
+    expect(buildAttachmentInboundPrompt(explicitProtocol)).toBe(explicitProtocol);
   });
 
   test("adds saved inbound attachment paths to the prompt", () => {
-    const prompt = buildWechatInboundPrompt("Please summarize this file.", [
+    const prompt = buildAttachmentInboundPrompt("Please summarize this file.", [
       {
         kind: "file",
         path: "C:\\Users\\unlin\\.cli-bridge\\inbound-attachments\\2026-05-22\\report.pdf",
@@ -355,7 +355,7 @@ describe("wechat inbound prompt injection", () => {
   });
 
   test("creates a usable prompt for attachment-only messages", () => {
-    const prompt = buildWechatInboundPrompt("", [
+    const prompt = buildAttachmentInboundPrompt("", [
       {
         kind: "image",
         path: "C:\\Users\\unlin\\.cli-bridge\\inbound-attachments\\2026-05-22\\photo.jpg",

@@ -12,7 +12,7 @@ import type {
   ChannelAttachment,
   ChannelConversationRef,
   ChannelInboundMessage,
-  WechatSendContext,
+  ChannelSendKind,
 } from "../../core/channel-types.ts";
 import type {
   ChannelDriver,
@@ -131,7 +131,7 @@ export class LocalChannelDriver implements ChannelDriver {
   async sendText(params: {
     target: ChannelConversationRef;
     text: string;
-    context: WechatSendContext;
+    context: ChannelSendKind;
     log: (entry: string) => void;
   }): Promise<ChannelSendResult> {
     const { target, text, context, log } = params;

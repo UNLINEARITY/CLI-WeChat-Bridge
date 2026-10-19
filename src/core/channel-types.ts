@@ -61,13 +61,8 @@ export type ChannelInboundMessage = {
   metadata?: Record<string, unknown>;
 };
 
-/**
- * Why an outbound message is being sent. The name is historical; the values
- * are channel-neutral and live here so the core stays free of channel-layer
- * imports. `channels/wechat/wechat-forwarding.ts` re-exports it for existing
- * callers until the Phase 4 rename.
- */
-export type WechatSendContext =
+/** Why an outbound message is being sent; channel drivers map it to their own kinds. */
+export type ChannelSendKind =
   | "final_reply"
   | "message"
   | "notice"
@@ -106,3 +101,24 @@ export interface BridgeChannelPort {
   readonly channelId: string;
   send(output: ChannelOutput): Promise<boolean>;
 }
+
+export type BridgeInboundAttachmentKind = "image" | "file";
+
+export type BridgeInboundAttachment = {
+  kind: BridgeInboundAttachmentKind;
+  path: string;
+  fileName: string;
+  sizeBytes: number;
+};
+
+/** One inbound text message as the daemon routes it, whatever the channel. */
+export type BridgeInboundMessage = {
+  senderId: string;
+  sender: string;
+  sessionId: string;
+  text: string;
+  attachments: BridgeInboundAttachment[];
+  contextToken?: string;
+  createdAt: string;
+  createdAtMs?: number;
+};

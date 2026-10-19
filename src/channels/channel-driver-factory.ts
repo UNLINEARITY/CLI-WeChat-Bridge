@@ -26,7 +26,7 @@ export type CreateChannelDriverInput = {
    * Injected by the caller so the channel layer stays free of bridge-layer
    * imports (same boundary as the daemon's previous inline construction).
    */
-  buildWechatInboundPrompt: (text: string, attachments: ChannelAttachment[]) => string;
+  buildAttachmentInboundPrompt: (text: string, attachments: ChannelAttachment[]) => string;
   log: (message: string) => void;
   logError: (message: string) => void;
 };
@@ -80,6 +80,6 @@ export function createChannelDriver(input: CreateChannelDriverInput): ChannelDri
   return new WechatChannelDriver({
     transport: input.wechatTransport,
     logError: input.logError,
-    buildInboundPrompt: input.buildWechatInboundPrompt,
+    buildInboundPrompt: input.buildAttachmentInboundPrompt,
   });
 }

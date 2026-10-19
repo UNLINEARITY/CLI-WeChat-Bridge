@@ -20,10 +20,10 @@ import {
   formatWecomVisibleText,
 } from "./wecom-message.ts";
 import { truncatePreview } from "../../core/text-utils.ts";
-import type { WechatSendContext } from "../../core/channel-types.ts";
+import type { ChannelSendKind } from "../../core/channel-types.ts";
 import type { WecomTransport } from "./wecom-transport.ts";
 
-export function toWecomOutputKind(context: WechatSendContext): ChannelOutputKind {
+export function toWecomOutputKind(context: ChannelSendKind): ChannelOutputKind {
   const known = new Set<ChannelOutputKind>([
     "status",
     "notice",
@@ -118,7 +118,7 @@ export class WecomChannelDriver implements ChannelDriver {
   async sendText(params: {
     target: ChannelConversationRef;
     text: string;
-    context: WechatSendContext;
+    context: ChannelSendKind;
     log: (entry: string) => void;
   }): Promise<ChannelSendResult> {
     const { target, text, context, log } = params;

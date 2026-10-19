@@ -638,13 +638,13 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "wechat";
     this.pendingCliApprovalHints = null;
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.setStatus("busy");
     this.writeToPty(this.buildRemoteInputPayload(text));
     await delay(CLAUDE_REMOTE_ENTER_DELAY_MS);
     this.writeToPty("\r");
     this.armRemoteSubmitRetry(normalizedText);
-    this.armWechatWorkingNotice();
+    this.armRemoteWorkingNotice();
   }
 
   override async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
@@ -775,7 +775,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return false;
     }
 
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
@@ -802,7 +802,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   override async reset(): Promise<void> {
     if (this.terminalControl.active) throw new Error(t("adapter.claude.sessionControlActive"));
     this.rejectPendingResume(new Error("Claude was reset during session switching."));
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.runtimeSessionId = null;
     this.resumeConversationId = null;
@@ -824,7 +824,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (id && this.pendingHookApprovals.has(id)) {
       const handled = await this.respondToClaudeHookApproval(id, action);
       if (handled) {
-        this.clearWechatWorkingNotice();
+        this.clearRemoteWorkingNotice();
         this.syncPendingHookApprovals();
       }
       return handled;
@@ -858,7 +858,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.terminalControl.cancel("Claude is shutting down.");
     this.rejectPendingResume(new Error("Claude is shutting down during session switching."));
     this.detachLocalTerminal();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.rejectInteractiveReadiness(new Error("Claude is shutting down."));
     this.pendingCliApprovalHints = null;
@@ -938,7 +938,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     const approval = detectCliApproval(text);
     if (approval) {
-      this.clearWechatWorkingNotice();
+      this.clearRemoteWorkingNotice();
       if (this.pendingApproval) {
         this.pendingApproval = {
           ...this.pendingApproval,
@@ -980,7 +980,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   protected override handleExit(exitCode: number | undefined): void {
     this.terminalControl.cancel("Claude exited during the control operation.");
     this.detachLocalTerminal();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.rejectPendingResume(
@@ -1228,8 +1228,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
   }
 
-  private armWechatWorkingNotice(): void {
-    this.clearWechatWorkingNotice();
+  private armRemoteWorkingNotice(): void {
+    this.clearRemoteWorkingNotice();
     if (
       this.workingNoticeSent ||
       !this.hasAcceptedInput ||
@@ -1258,7 +1258,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.workingNoticeTimer.unref?.();
   }
 
-  private clearWechatWorkingNotice(resetSent = false): void {
+  private clearRemoteWorkingNotice(resetSent = false): void {
     if (this.workingNoticeTimer) {
       clearTimeout(this.workingNoticeTimer);
       this.workingNoticeTimer = null;
@@ -1486,7 +1486,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.clearCompletionTimer();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
@@ -1534,7 +1534,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       this.hasAcceptedInput;
     const completedPreview = this.currentPreview;
     this.clearCompletionTimer();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
@@ -1809,7 +1809,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "local";
     this.pendingCliApprovalHints = null;
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.setStatus("busy");
     this.emit({
       type: "mirrored_user_input",
@@ -1825,7 +1825,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
 
     this.recoveringInvalidResume = true;
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
@@ -1868,7 +1868,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     payload: ClaudeHookPayload,
     socket: net.Socket,
   ): void {
-    this.clearWechatWorkingNotice();
+    this.clearRemoteWorkingNotice();
     if (payload.tool_name === "AskUserQuestion") {
       this.handleClaudeUserInputRequest(requestId, { ...payload, hook_event_name: "PermissionRequest" }, socket);
       return;
@@ -1983,7 +1983,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
     this.clearRemoteSubmitRetry();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
@@ -2088,7 +2088,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
     if (this.pendingHookUserInputs.has(requestId)) return;
-    this.clearWechatWorkingNotice();
+    this.clearRemoteWorkingNotice();
     this.pendingHookUserInputs.set(requestId, { socket, payload, request, origin: this.state.activeTurnOrigin });
     this.syncPendingHookUserInputs();
   }

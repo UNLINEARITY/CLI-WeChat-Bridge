@@ -271,7 +271,7 @@ type VisibleReplyPart = {
   text: string;
 };
 
-type PendingWechatPromptMirrorSuppression = {
+type PendingRemotePromptMirrorSuppression = {
   sessionId: string;
   text: string;
   createdAtMs: number;
@@ -346,8 +346,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private readonly observedOpenCodeMessages = new Map<string, ObservedOpenCodeMessage>();
   private readonly observedUserTextByPartId = new Map<string, string>();
   private readonly observedUserMessagePartIds = new Map<string, Set<string>>();
-  private readonly pendingWechatPromptMirrorSuppressions: PendingWechatPromptMirrorSuppression[] = [];
-  private readonly recentWechatPromptMirrorSuppressions: PendingWechatPromptMirrorSuppression[] = [];
+  private readonly pendingRemotePromptMirrorSuppressions: PendingRemotePromptMirrorSuppression[] = [];
+  private readonly recentRemotePromptMirrorSuppressions: PendingRemotePromptMirrorSuppression[] = [];
   private readonly recentSdkEventObservations = new Map<
     string,
     { streamName: SdkEventStreamName; observedAtMs: number }
@@ -635,7 +635,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       syncVisible: true,
       forceVisibleSync: true,
     });
-    this.recordPendingWechatPromptMirrorSuppression(session.id, normalized);
+    this.recordPendingRemotePromptMirrorSuppression(session.id, normalized);
     this.beginTrackedTurn(normalized, "wechat");
 
     try {
@@ -809,7 +809,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return false;
     }
 
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
 
     if (this.pendingQuestion) {
       await this.rejectPendingQuestion(this.pendingQuestion);
@@ -830,7 +830,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   async reset(): Promise<void> {
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
     this.pendingLocalSessionCreateFollowUntilMs = 0;
@@ -874,7 +874,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       }
       this.rememberSettledPermission(pending.permissionId);
       this.pendingPermissions.delete(pending.permissionId);
-      this.clearWechatWorkingNotice();
+      this.clearRemoteWorkingNotice();
       this.syncPendingPermissions();
       return true;
     } catch (err) {
@@ -936,7 +936,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.childSessionIds.clear();
     this.childSessionParents.clear();
     this.settledPermissionIds.clear();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
     this.pendingLocalSessionCreateFollowUntilMs = 0;
@@ -1976,7 +1976,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         return;
       }
 
-      this.clearWechatWorkingNotice(true);
+      this.clearRemoteWorkingNotice(true);
       this.pendingLocalPrompt = "";
       this.clearPendingPermissionState();
       this.clearPendingQuestionState();
@@ -2083,7 +2083,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    this.clearWechatWorkingNotice();
+    this.clearRemoteWorkingNotice();
     const denyMessage = this.getWechatOutboundAttachmentPermissionDenyMessage(
       properties,
       pendingPermission,
@@ -2231,7 +2231,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     };
     this.state.pendingUserInput = request;
     this.state.pendingUserInputOrigin = this.state.activeTurnOrigin;
-    this.clearWechatWorkingNotice();
+    this.clearRemoteWorkingNotice();
     this.setStatus(this.pendingPermissions.size ? "awaiting_approval" : "awaiting_input", "OpenCode is waiting for user input.");
     this.emit({
       type: "user_input_required",
@@ -2629,7 +2629,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
     if (
-      this.matchesRecentWechatPromptMirror(part.sessionID, observedText || partText || delta || text, {
+      this.matchesRecentRemotePromptMirror(part.sessionID, observedText || partText || delta || text, {
         allowPrefix: true,
       })
     ) {
@@ -2721,7 +2721,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
     if (
-      this.matchesRecentWechatPromptMirror(sessionId, observedText || delta || text, {
+      this.matchesRecentRemotePromptMirror(sessionId, observedText || delta || text, {
         allowPrefix: true,
       })
     ) {
@@ -3162,8 +3162,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     observed.emitted = true;
     if (
-      this.shouldSuppressWechatMirroredPrompt(observed.sessionId, text) ||
-      this.matchesRecentWechatPromptMirror(observed.sessionId, text)
+      this.shouldSuppressRemoteMirroredPrompt(observed.sessionId, text) ||
+      this.matchesRecentRemotePromptMirror(observed.sessionId, text)
     ) {
       this.cleanupObservedOpenCodeMessage(messageId);
       return;
@@ -3182,33 +3182,33 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.cleanupObservedOpenCodeMessage(messageId);
   }
 
-  private recordPendingWechatPromptMirrorSuppression(sessionId: string, text: string): void {
+  private recordPendingRemotePromptMirrorSuppression(sessionId: string, text: string): void {
     const normalizedText = normalizeOutput(text).trim();
     if (!sessionId || !normalizedText) {
       return;
     }
 
-    this.pruneWechatPromptMirrorSuppressions();
+    this.pruneRemotePromptMirrorSuppressions();
     const suppression = {
       sessionId,
       text: normalizedText,
       createdAtMs: Date.now(),
     };
-    this.pendingWechatPromptMirrorSuppressions.push(suppression);
-    this.recentWechatPromptMirrorSuppressions.push(suppression);
+    this.pendingRemotePromptMirrorSuppressions.push(suppression);
+    this.recentRemotePromptMirrorSuppressions.push(suppression);
   }
 
-  private shouldSuppressWechatMirroredPrompt(sessionId: string, text: string): boolean {
+  private shouldSuppressRemoteMirroredPrompt(sessionId: string, text: string): boolean {
     const normalizedText = normalizeOutput(text).trim();
     if (!sessionId || !normalizedText) {
       return false;
     }
 
-    this.pruneWechatPromptMirrorSuppressions();
-    for (let index = this.pendingWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
-      const pending = this.pendingWechatPromptMirrorSuppressions[index]!;
+    this.pruneRemotePromptMirrorSuppressions();
+    for (let index = this.pendingRemotePromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
+      const pending = this.pendingRemotePromptMirrorSuppressions[index]!;
       if (pending.sessionId === sessionId && pending.text === normalizedText) {
-        this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
+        this.pendingRemotePromptMirrorSuppressions.splice(index, 1);
         return true;
       }
     }
@@ -3216,7 +3216,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return false;
   }
 
-  private matchesRecentWechatPromptMirror(
+  private matchesRecentRemotePromptMirror(
     sessionId: string | undefined,
     text: string | undefined,
     options: { allowPrefix?: boolean } = {},
@@ -3226,8 +3226,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return false;
     }
 
-    this.pruneWechatPromptMirrorSuppressions();
-    return this.recentWechatPromptMirrorSuppressions.some((pending) => {
+    this.pruneRemotePromptMirrorSuppressions();
+    return this.recentRemotePromptMirrorSuppressions.some((pending) => {
       if (pending.sessionId !== sessionId) {
         return false;
       }
@@ -3238,16 +3238,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     });
   }
 
-  private pruneWechatPromptMirrorSuppressions(): void {
+  private pruneRemotePromptMirrorSuppressions(): void {
     const cutoff = Date.now() - OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS;
-    for (let index = this.pendingWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
-      if (this.pendingWechatPromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
-        this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
+    for (let index = this.pendingRemotePromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
+      if (this.pendingRemotePromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
+        this.pendingRemotePromptMirrorSuppressions.splice(index, 1);
       }
     }
-    for (let index = this.recentWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
-      if (this.recentWechatPromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
-        this.recentWechatPromptMirrorSuppressions.splice(index, 1);
+    for (let index = this.recentRemotePromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
+      if (this.recentRemotePromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
+        this.recentRemotePromptMirrorSuppressions.splice(index, 1);
       }
     }
   }
@@ -3329,7 +3329,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = origin;
     this.lastBusyAtMs = Date.now();
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.setStatus("busy", options.busyMessage);
 
     if (options.emitMirroredUserInput && origin === "local") {
@@ -3346,7 +3346,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     if (origin === "wechat") {
-      this.armWechatWorkingNotice();
+      this.armRemoteWorkingNotice();
     }
   }
 
@@ -3364,7 +3364,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   private settleTurnState(): void {
-    this.clearWechatWorkingNotice(true);
+    this.clearRemoteWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
     this.clearPendingPermissionState();
@@ -3380,8 +3380,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.observedOpenCodeMessages.clear();
     this.observedUserTextByPartId.clear();
     this.observedUserMessagePartIds.clear();
-    this.pendingWechatPromptMirrorSuppressions.length = 0;
-    this.recentWechatPromptMirrorSuppressions.length = 0;
+    this.pendingRemotePromptMirrorSuppressions.length = 0;
+    this.recentRemotePromptMirrorSuppressions.length = 0;
     this.lastMirroredLocalPrompt = null;
   }
 
@@ -3431,8 +3431,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   /* ---- Working notice ---- */
 
-  private armWechatWorkingNotice(): void {
-    this.clearWechatWorkingNotice();
+  private armRemoteWorkingNotice(): void {
+    this.clearRemoteWorkingNotice();
     if (
       this.workingNoticeSent ||
       !this.hasAcceptedInput ||
@@ -3466,7 +3466,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.workingNoticeTimer.unref?.();
   }
 
-  private clearWechatWorkingNotice(resetSent = false): void {
+  private clearRemoteWorkingNotice(resetSent = false): void {
     if (this.workingNoticeTimer) {
       clearTimeout(this.workingNoticeTimer);
       this.workingNoticeTimer = null;
@@ -3760,11 +3760,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const previousSessionId = this.activeSessionId;
-    const interruptedWechatTurn =
+    const interruptedRemoteTurn =
       Boolean(previousSessionId) &&
       this.state.activeTurnOrigin === "wechat" &&
       this.hasTrackedTurnState();
-    if (interruptedWechatTurn && previousSessionId) {
+    if (interruptedRemoteTurn && previousSessionId) {
       try {
         const result = await this.client.session.abort({
           sessionID: previousSessionId,

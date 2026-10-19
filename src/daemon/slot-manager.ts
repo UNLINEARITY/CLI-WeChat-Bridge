@@ -16,7 +16,7 @@ import { BridgeController } from "../bridge/bridge-controller.ts";
 import type { BridgeAdapter, BridgeSessionStartMode, BridgeEvent } from "../bridge/bridge-types.ts";
 import { formatDuration, OutputBatcher, truncatePreview } from "../bridge/bridge-utils.ts";
 import { ResumeSessionCoordinator } from "../bridge/bridge-session-resume.ts";
-import type { WechatSendContext } from "../channels/wechat/wechat-forwarding.ts";
+import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
@@ -63,7 +63,7 @@ export type SlotManagerHost = {
   queueMessage: (
     senderId: string,
     text: string,
-    context?: WechatSendContext,
+    context?: ChannelSendKind,
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;

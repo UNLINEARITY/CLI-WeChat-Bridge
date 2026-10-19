@@ -27,7 +27,7 @@ import { ensureTelegramAccount } from "./telegram/setup.ts";
 import { TelegramChannelPort } from "./telegram/telegram-channel-port.ts";
 import { TelegramTransport } from "./telegram/telegram-transport.ts";
 import { WechatChannelPort } from "./wechat/wechat-channel-port.ts";
-import { getPendingChannelMessagesFile } from "./wechat/wechat-outbound-queue.ts";
+import { getPendingChannelMessagesFile } from "../core/pending-message-store.ts";
 import { ensureWecomAccount } from "./wecom/setup.ts";
 import { WecomChannelPort } from "./wecom/wecom-channel-port.ts";
 import { WecomTransport } from "./wecom/wecom-transport.ts";
@@ -90,7 +90,7 @@ export type ChannelSetupContext = {
 };
 
 export type ChannelRuntimeContext = {
-  buildWechatInboundPrompt: (text: string, attachments: ChannelAttachment[]) => string;
+  buildAttachmentInboundPrompt: (text: string, attachments: ChannelAttachment[]) => string;
   log: (message: string) => void;
   logError: (message: string) => void;
 };
@@ -278,7 +278,7 @@ export function createChannelRuntime(
     wecomTransport: transports.wecom,
     telegramTransport: transports.telegram,
     localFiles: transports.localFiles,
-    buildWechatInboundPrompt: context.buildWechatInboundPrompt,
+    buildAttachmentInboundPrompt: context.buildAttachmentInboundPrompt,
     log: context.log,
     logError: context.logError,
   });

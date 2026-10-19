@@ -817,7 +817,7 @@ export function shouldRecoverCodexStaleBusyState(params: {
   );
 }
 
-export function shouldAutoCompleteCodexWechatTurnAfterFinalReply(params: {
+export function shouldAutoCompleteCodexRemoteTurnAfterFinalReply(params: {
   candidateTurnId: string | null;
   activeTurnId?: string;
   activeTurnOrigin?: BridgeTurnOrigin;

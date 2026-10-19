@@ -4,14 +4,14 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import type { PendingWechatMessageStore } from "../channels/wechat/wechat-outbound-queue.ts";
+import type { PendingMessageStore } from "./pending-message-store.ts";
 import type { ChannelDriver, ChannelSendResult } from "./channel-driver.ts";
-import type { ChannelConversationRef, WechatSendContext } from "./channel-types.ts";
+import type { ChannelConversationRef, ChannelSendKind } from "./channel-types.ts";
 import { truncatePreview } from "./text-utils.ts";
 
 export type OutboundDispatcherOptions = {
   driver: ChannelDriver;
-  pending: PendingWechatMessageStore;
+  pending: PendingMessageStore;
   /** Resolve the final send target; receives the target captured at queue time. */
   resolveSendTarget: (senderId: string, override?: ChannelConversationRef) => ChannelConversationRef;
   /** Capture the target when a message is queued, before earlier sends finish. */
@@ -65,7 +65,7 @@ export class OutboundDispatcher {
   sendNow(
     senderId: string,
     text: string,
-    context: WechatSendContext = "message",
+    context: ChannelSendKind = "message",
     targetOverride?: ChannelConversationRef,
   ): Promise<ChannelSendResult> {
     return this.options.driver.sendText({
@@ -79,7 +79,7 @@ export class OutboundDispatcher {
   queueMessage(
     senderId: string,
     text: string,
-    context: WechatSendContext = "message",
+    context: ChannelSendKind = "message",
     targetOverride?: ChannelConversationRef,
   ): Promise<boolean> {
     const queuedTarget = this.options.resolveQueuedTarget(senderId, targetOverride);

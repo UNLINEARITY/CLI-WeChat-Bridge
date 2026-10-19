@@ -26,13 +26,13 @@ import type {
   DaemonSendTextResult,
 } from "../../src/daemon/daemon-link.ts";
 import {
-  WechatDaemon,
-  type WechatDaemonDeps,
+  BridgeDaemon,
+  type BridgeDaemonDeps,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { WecomTransport } from "../../src/channels/wecom/wecom-transport.ts";
 import type { WeChatTransport } from "../../src/wechat/wechat-transport.ts";
-import type { PendingWechatMessageStore } from "../../src/channels/wechat/wechat-outbound-queue.ts";
-import type { WechatSendContext } from "../../src/channels/wechat/wechat-forwarding.ts";
+import type { PendingMessageStore } from "../../src/core/pending-message-store.ts";
+import type { ChannelSendKind } from "../../src/channels/wechat/wechat-forwarding.ts";
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
 
 beforeEach(() => setLocale("en"));
@@ -259,7 +259,7 @@ class FakeDaemonEnvironment {
   /** Hold the very first input submitted to the created runtime. */
   holdFirstInput = false;
 
-  readonly deps: WechatDaemonDeps = {
+  readonly deps: BridgeDaemonDeps = {
     createRuntime: (params) => {
       const runtime = new FakeBridgeRuntime(
         params.kind,
@@ -281,15 +281,15 @@ class FakeDaemonEnvironment {
     daemonLog: (message) => {
       this.logs.push(message);
     },
-    pendingWechatMessages:
-      new FakePendingStore() as unknown as PendingWechatMessageStore,
+    pendingMessages:
+      new FakePendingStore() as unknown as PendingMessageStore,
     visibleClientConnectTimeoutMs: 50,
     fatalNoticeGraceMs: 0,
     slotSessions: new MemorySessionStore(),
   };
 
-  buildDaemon(channelId: "wecom" | "wechat" = "wecom"): WechatDaemon {
-    return new WechatDaemon({
+  buildDaemon(channelId: "wecom" | "wechat" = "wecom"): BridgeDaemon {
+    return new BridgeDaemon({
       cwd: TEST_CWD,
       authorizedUserId: OPERATOR_ID,
       transport: this.wechat as unknown as WeChatTransport,
@@ -312,7 +312,7 @@ class FakeDaemonEnvironment {
 
   /** Wait for a slot's runtime to be created by an in-flight request. */
   async awaitRuntime(
-    daemon: WechatDaemon,
+    daemon: BridgeDaemon,
     adapter: DaemonAdapterKind,
   ): Promise<FakeBridgeRuntime> {
     while (this.runtimes.size === 0 || !this.runtimes.has(adapter)) {
@@ -341,7 +341,7 @@ function forwardInputRequest(params: {
 }
 
 async function forwardInput(
-  daemon: WechatDaemon,
+  daemon: BridgeDaemon,
   params: { adapter?: DaemonAdapterKind; text: string; conversationId: string },
 ): Promise<DaemonForwardInputResult> {
   return (await daemon.handleDaemonRequest(
@@ -350,7 +350,7 @@ async function forwardInput(
 }
 
 async function sendText(
-  daemon: WechatDaemon,
+  daemon: BridgeDaemon,
   request: Extract<DaemonRequest, { command: "send_text" }>,
 ): Promise<DaemonSendTextResult> {
   return (await daemon.handleDaemonRequest(request)) as DaemonSendTextResult;
@@ -531,7 +531,7 @@ describe("wechat-daemon handlers: /all broadcast", () => {
     sessionId?: string;
   };
 
-  function inboundMessage(params: InboundMessageParams): InboundWechatMessage {
+  function inboundMessage(params: InboundMessageParams): BridgeInboundMessage {
     return {
       senderId: params.senderId ?? OPERATOR_ID,
       sender: params.senderId ?? OPERATOR_ID,
@@ -544,11 +544,11 @@ describe("wechat-daemon handlers: /all broadcast", () => {
   }
 
   async function sendInbound(
-    daemon: WechatDaemon,
+    daemon: BridgeDaemon,
     params: InboundMessageParams,
   ): Promise<void> {
     await (daemon as unknown as {
-      handleInboundMessage(message: InboundWechatMessage): Promise<void>;
+      handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
     }).handleInboundMessage(inboundMessage(params));
   }
 
@@ -697,7 +697,7 @@ describe("wechat-daemon handlers: send_text", () => {
         recipientId: OPERATOR_ID,
         conversationId: "conv-1",
         text: "hello",
-        context: "bogus" as WechatSendContext,
+        context: "bogus" as ChannelSendKind,
       }),
     );
 

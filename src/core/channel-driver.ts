@@ -9,7 +9,7 @@ import type {
   ChannelConversationRef,
   ChannelInboundMessage,
 } from "./channel-types.ts";
-import type { WechatSendContext } from "./channel-types.ts";
+import type { ChannelSendKind } from "./channel-types.ts";
 
 /**
  * Why a channel send could not complete, mapped to orchestration behavior:
@@ -89,7 +89,7 @@ export interface ChannelDriver {
   sendText(params: {
     target: ChannelConversationRef;
     text: string;
-    context: WechatSendContext;
+    context: ChannelSendKind;
     log: (entry: string) => void;
   }): Promise<ChannelSendResult>;
 

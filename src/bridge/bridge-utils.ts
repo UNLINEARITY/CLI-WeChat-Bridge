@@ -168,7 +168,7 @@ export type WechatReplyAttachment = {
   path: string;
 };
 
-export type WechatInboundPromptAttachment = {
+export type InboundPromptAttachment = {
   kind: "image" | "file";
   path: string;
   fileName?: string;
@@ -200,7 +200,7 @@ export function parseSystemCommand(text: string): SystemCommand | null {
   return parseBridgeControlCommand(text);
 }
 
-export function parseWechatControlCommand(
+export function parseControlCommand(
   text: string,
   options: {
     adapter: BridgeAdapterKind;
@@ -330,7 +330,7 @@ function formatPromptByteSize(bytes: number | undefined): string | null {
 }
 
 function formatWechatInboundAttachmentPrompt(
-  attachments: WechatInboundPromptAttachment[],
+  attachments: InboundPromptAttachment[],
 ): string {
   const lines = [
     "[WeChat inbound attachments — ACTION REQUIRED]",
@@ -353,9 +353,9 @@ function formatWechatInboundAttachmentPrompt(
   return lines.join("\n");
 }
 
-export function buildWechatInboundPrompt(
+export function buildAttachmentInboundPrompt(
   text: string,
-  attachments: WechatInboundPromptAttachment[] = [],
+  attachments: InboundPromptAttachment[] = [],
 ): string {
   const trimmedAttachments = attachments.filter((attachment) => attachment.path.trim());
 
@@ -388,9 +388,9 @@ export function buildChannelInboundPrompt(
   text: string,
   attachments: ChannelAttachment[],
 ): string {
-  return buildWechatInboundPrompt(
+  return buildAttachmentInboundPrompt(
     text,
-    attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
+    attachments.filter((attachment): attachment is InboundPromptAttachment =>
       attachment.kind === "image" || attachment.kind === "file"),
   );
 }

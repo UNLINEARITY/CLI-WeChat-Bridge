@@ -10,9 +10,9 @@ import os from "node:os";
 import path from "node:path";
 
 import {
-  PendingWechatMessageStore,
-  getPendingWechatMessagesFile,
-} from "../../src/bridge/wechat-outbound-queue.ts";
+  PendingMessageStore,
+  getPendingChannelMessagesFile,
+} from "../../src/core/pending-message-store.ts";
 
 describe("pending WeChat outbound messages", () => {
   test("persists queued messages and removes them after delivery", () => {
@@ -20,7 +20,7 @@ describe("pending WeChat outbound messages", () => {
     const filePath = path.join(directory, "pending.json");
 
     try {
-      const store = new PendingWechatMessageStore(filePath);
+      const store = new PendingMessageStore(filePath);
       const queued = store.enqueue(" owner@im.wechat ", " reply text ", "final_reply");
 
       expect(queued).toMatchObject({
@@ -28,10 +28,10 @@ describe("pending WeChat outbound messages", () => {
         text: "reply text",
         context: "final_reply",
       });
-      expect(new PendingWechatMessageStore(filePath).list()).toEqual([queued]);
+      expect(new PendingMessageStore(filePath).list()).toEqual([queued]);
 
       expect(store.remove(queued!.id)).toBe(true);
-      expect(new PendingWechatMessageStore(filePath).list()).toEqual([]);
+      expect(new PendingMessageStore(filePath).list()).toEqual([]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
@@ -40,8 +40,8 @@ describe("pending WeChat outbound messages", () => {
   test("uses a workspace-scoped queue file", () => {
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-workspace-"));
     try {
-      expect(getPendingWechatMessagesFile(cwd)).toContain("pending-wechat-messages.json");
-      expect(getPendingWechatMessagesFile(cwd)).toContain(path.basename(cwd));
+      expect(getPendingChannelMessagesFile(cwd, "wechat")).toContain("pending-wechat-messages.json");
+      expect(getPendingChannelMessagesFile(cwd, "wechat")).toContain(path.basename(cwd));
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true });
     }
@@ -51,7 +51,7 @@ describe("pending WeChat outbound messages", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wecom-outbound-"));
     const filePath = path.join(directory, "pending.json");
     try {
-      const store = new PendingWechatMessageStore(filePath);
+      const store = new PendingMessageStore(filePath);
       store.enqueue("operator", "final", "final_reply", {
         channelId: "wecom",
         accountId: "bot-1",
@@ -60,7 +60,7 @@ describe("pending WeChat outbound messages", () => {
         metadata: { chatType: "group" },
       });
 
-      expect(new PendingWechatMessageStore(filePath).list()[0]?.target).toEqual({
+      expect(new PendingMessageStore(filePath).list()[0]?.target).toEqual({
         channelId: "wecom",
         accountId: "bot-1",
         conversationId: "group-1",
@@ -77,7 +77,7 @@ describe("pending WeChat outbound queue hygiene", () => {
   function tempStore() {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "wechat-outbound-"));
     const filePath = path.join(directory, "pending.json");
-    return { directory, store: new PendingWechatMessageStore(filePath), filePath };
+    return { directory, store: new PendingMessageStore(filePath), filePath };
   }
 
   test("drops low-value contexts instead of queuing them", () => {
@@ -117,7 +117,7 @@ describe("pending WeChat outbound queue hygiene", () => {
       aged.messages[0].queuedAt = new Date(Date.now() - 31 * 60 * 1000).toISOString();
       fs.writeFileSync(filePath, JSON.stringify(aged));
 
-      expect(new PendingWechatMessageStore(filePath).list()).toEqual([]);
+      expect(new PendingMessageStore(filePath).list()).toEqual([]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }

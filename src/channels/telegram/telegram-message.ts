@@ -5,9 +5,9 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import type { ChannelOutputKind } from "../../core/channel-types.ts";
-import type { WechatSendContext } from "../../core/channel-types.ts";
+import type { ChannelSendKind } from "../../core/channel-types.ts";
 
-export function toTelegramOutputKind(context: WechatSendContext): ChannelOutputKind {
+export function toTelegramOutputKind(context: ChannelSendKind): ChannelOutputKind {
   const known = new Set<ChannelOutputKind>([
     "status",
     "notice",

@@ -9,12 +9,12 @@ import { parseBridgeControlCommand } from "../core/bridge-control.ts";
 import {
   formatPendingApprovalReminder,
   formatPendingUserInputReminder,
-  parseWechatControlCommand,
+  parseControlCommand,
   truncatePreview,
 } from "../bridge/bridge-utils.ts";
 import {
   formatUserFacingInboundError,
-  type WechatSendContext,
+  type ChannelSendKind,
 } from "../channels/wechat/wechat-forwarding.ts";
 import {
   formatBindCommandUsage,
@@ -22,7 +22,7 @@ import {
   parseEmojiBindingsCommand,
   resolveEmojiCommand,
 } from "./emoji-bindings.ts";
-import type { InboundWechatMessage } from "../wechat/wechat-transport.ts";
+import type { BridgeInboundMessage } from "../core/channel-types.ts";
 import { toChannelInboundMessage } from "../channels/wechat/channel-message.ts";
 import { routeBridgeMessage } from "../core/bridge-message-router.ts";
 import {
@@ -65,7 +65,7 @@ export type InboundRouterHost = {
   queueMessage: (
     senderId: string,
     text: string,
-    context?: WechatSendContext,
+    context?: ChannelSendKind,
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   shutdown: () => Promise<void>;
@@ -82,7 +82,7 @@ export class InboundRouter {
 
   async routeDaemonInput(
     slot: DaemonSlot,
-    inboundMessage: InboundWechatMessage,
+    inboundMessage: BridgeInboundMessage,
     conversation: ChannelConversationRef,
   ): Promise<{
     kind: "dispatched" | "deferred" | "handled";
@@ -99,7 +99,7 @@ export class InboundRouter {
     let routeMessage: string | undefined;
     let queued = false;
     let queuePosition: number | undefined;
-    const sendReminder = (text: string, context: WechatSendContext) =>
+    const sendReminder = (text: string, context: ChannelSendKind) =>
       this.host.queueMessage(inboundMessage.senderId, text, context, conversation);
 
     const routeResult = await routeBridgeMessage({
@@ -176,7 +176,7 @@ export class InboundRouter {
    */
   private async deferInput(
     slot: DaemonSlot,
-    inboundMessage: InboundWechatMessage,
+    inboundMessage: BridgeInboundMessage,
     conversation: ChannelConversationRef | undefined,
   ): Promise<{ text: string; position?: number }> {
     if (slot.deferredInputs.length >= MAX_DAEMON_DEFERRED_INPUTS) {
@@ -294,7 +294,7 @@ export class InboundRouter {
     });
   }
 
-  async handleInboundMessage(message: InboundWechatMessage): Promise<void> {
+  async handleInboundMessage(message: BridgeInboundMessage): Promise<void> {
     if (message.senderId !== this.host.operatorId) {
       await this.host.queueMessage(
         message.senderId,
@@ -410,7 +410,7 @@ export class InboundRouter {
 
     const routeCurrentMessage = async (
       currentSlot: DaemonSlot,
-      command: ReturnType<typeof parseWechatControlCommand>,
+      command: ReturnType<typeof parseControlCommand>,
     ): Promise<void> => {
       const previousTask = currentSlot.turns.activeTask;
       await routeBridgeMessage({
@@ -486,7 +486,7 @@ export class InboundRouter {
       }
     };
 
-    const command = parseWechatControlCommand(message.text, {
+    const command = parseControlCommand(message.text, {
       adapter: slot.adapter,
       hasPendingConfirmation: slot.pendingConfirmations.length > 0,
       hasPendingUserInput: Boolean(slot.pendingUserInput),
@@ -521,7 +521,7 @@ export class InboundRouter {
   }
 
   async dispatchInboundText(
-    message: InboundWechatMessage,
+    message: BridgeInboundMessage,
     slot: DaemonSlot,
     conversationOverride?: ChannelConversationRef,
   ): Promise<TurnDispatchResult<ActiveTask>> {
@@ -610,7 +610,7 @@ export class InboundRouter {
       throw new Error(`Adapter slot ${adapter} is not available.`);
     }
 
-    const inboundMessage: InboundWechatMessage = {
+    const inboundMessage: BridgeInboundMessage = {
       senderId,
       sender: senderId,
       sessionId: conversationId,

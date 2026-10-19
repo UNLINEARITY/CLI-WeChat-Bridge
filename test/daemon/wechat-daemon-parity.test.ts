@@ -18,14 +18,14 @@ import type {
 } from "../../src/bridge/bridge-types.ts";
 import type { DaemonAdapterKind } from "../../src/daemon/daemon-link.ts";
 import {
-  WechatDaemon,
-  type WechatDaemonDeps,
+  BridgeDaemon,
+  type BridgeDaemonDeps,
 } from "../../src/daemon/wechat-daemon.ts";
 import type { ChannelConversationRef } from "../../src/core/channel-types.ts";
 import type { TelegramTransport } from "../../src/channels/telegram/telegram-transport.ts";
-import type { PendingWechatMessageStore } from "../../src/channels/wechat/wechat-outbound-queue.ts";
+import type { PendingMessageStore } from "../../src/core/pending-message-store.ts";
 import type {
-  InboundWechatMessage,
+  BridgeInboundMessage,
   WeChatTransport,
 } from "../../src/wechat/wechat-transport.ts";
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
@@ -158,7 +158,7 @@ class Env {
   /** Treat every visible window as already running (the default). */
   allAlive = true;
 
-  readonly deps: WechatDaemonDeps = {
+  readonly deps: BridgeDaemonDeps = {
     createRuntime: (params) => {
       const runtime = new FakeRuntime(params.kind, params.cwd, params.command);
       runtime.lifecycle = params.lifecycle;
@@ -179,8 +179,8 @@ class Env {
     daemonLog: (message) => {
       this.logs.push(message);
     },
-    pendingWechatMessages:
-      new FakePendingStore() as unknown as PendingWechatMessageStore,
+    pendingMessages:
+      new FakePendingStore() as unknown as PendingMessageStore,
     visibleClientConnectTimeoutMs: 50,
     fatalNoticeGraceMs: 0,
     exitProcess: (code) => {
@@ -190,8 +190,8 @@ class Env {
   };
   readonly exitCodes: number[] = [];
 
-  buildDaemon(): WechatDaemon {
-    return new WechatDaemon({
+  buildDaemon(): BridgeDaemon {
+    return new BridgeDaemon({
       cwd: TEST_CWD,
       authorizedUserId: OPERATOR_ID,
       transport: this.wechat as unknown as WeChatTransport,
@@ -222,7 +222,7 @@ class Env {
   }
 }
 
-function inbound(text: string, senderId = OPERATOR_ID): InboundWechatMessage {
+function inbound(text: string, senderId = OPERATOR_ID): BridgeInboundMessage {
   return {
     senderId,
     sender: senderId,
@@ -234,9 +234,9 @@ function inbound(text: string, senderId = OPERATOR_ID): InboundWechatMessage {
   };
 }
 
-async function send(daemon: WechatDaemon, text: string, senderId?: string): Promise<void> {
+async function send(daemon: BridgeDaemon, text: string, senderId?: string): Promise<void> {
   await (daemon as unknown as {
-    handleInboundMessage(message: InboundWechatMessage): Promise<void>;
+    handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
   }).handleInboundMessage(inbound(text, senderId));
 }
 
@@ -316,7 +316,7 @@ describe("daemon behaviors kept after the standalone merge", () => {
 const OTHER_CWD = "/tmp/other-app";
 
 async function openWorkspaceSlot(
-  daemon: WechatDaemon,
+  daemon: BridgeDaemon,
   cwd: string,
   adapter: DaemonAdapterKind,
 ): Promise<void> {
@@ -625,7 +625,7 @@ describe("visibility fixes after the first field test", () => {
 });
 
 async function launcherSlot(
-  daemon: WechatDaemon,
+  daemon: BridgeDaemon,
   cwd: string,
   adapter: DaemonAdapterKind,
 ): Promise<Record<string, unknown>> {
@@ -780,7 +780,7 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
 });
 
 describe("Codex attach through the daemon", () => {
-  const attach = (daemon: WechatDaemon, threadId?: string) => daemon.handleDaemonRequest({
+  const attach = (daemon: BridgeDaemon, threadId?: string) => daemon.handleDaemonRequest({
     command: "ensure_slot",
     adapter: "codex",
     cwd: OTHER_CWD,
@@ -848,7 +848,7 @@ describe("Telegram final replies through the daemon", () => {
   test("text and attachments go to the conversation that started the turn", async () => {
     const env = new Env();
     const telegram = new FakeTelegramTransport();
-    const daemon = new WechatDaemon({
+    const daemon = new BridgeDaemon({
       cwd: TEST_CWD,
       authorizedUserId: OPERATOR_ID,
       transport: null,

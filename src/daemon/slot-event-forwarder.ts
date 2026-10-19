@@ -18,9 +18,9 @@ import {
 import { shouldForwardSessionSwitchEvent } from "../bridge/bridge-session-resume.ts";
 import {
   formatUserFacingBridgeFatalError,
-  shouldForwardBridgeEventToWechat,
+  shouldForwardBridgeEvent,
   shouldSuppressCodexLocalThreadNotice,
-  type WechatSendContext,
+  type ChannelSendKind,
 } from "../channels/wechat/wechat-forwarding.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import type { ChannelRuntime } from "../channels/channel-registry.ts";
@@ -40,7 +40,7 @@ import {
 
 const FATAL_NOTICE_GRACE_MS = 1_000;
 
-function toWechatSendContext(kind: ChannelOutputKind): WechatSendContext {
+function toChannelSendKind(kind: ChannelOutputKind): ChannelSendKind {
   if (kind === "mirrored_input") {
     return "mirrored_user_input";
   }
@@ -59,7 +59,7 @@ export type SlotEventHost = {
   queueMessage: (
     senderId: string,
     text: string,
-    context?: WechatSendContext,
+    context?: ChannelSendKind,
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;
@@ -84,11 +84,11 @@ function createSlotChannelPort(host: SlotEventHost, slot: DaemonSlot): BridgeCha
       host.queueMessage(
         host.operatorId,
         text,
-        toWechatSendContext(kind),
+        toChannelSendKind(kind),
         target,
       ),
     sendTextToRecipient: (recipientId, text, context) =>
-      host.queueMessage(recipientId, text, context as WechatSendContext),
+      host.queueMessage(recipientId, text, context as ChannelSendKind),
     queueAttachment: (action) => host.outbound.queueAttachment(action),
     prefixText: (_currentAdapter, text) => host.prefix(slot, text),
     onEmptyVisibleReply: (currentAdapter, rawText) => {
@@ -133,13 +133,13 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
     .then(() => forwardBridgeEvent(event, {
     stdout: (next) => {
       slot.lastOutputAt = Date.now();
-      if (shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+      if (shouldForwardBridgeEvent(slot.adapter, next.type)) {
         slot.outputBatcher.push(next.text);
       }
     },
     stderr: (next) => {
       slot.lastOutputAt = Date.now();
-      if (shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+      if (shouldForwardBridgeEvent(slot.adapter, next.type)) {
         slot.outputBatcher.push(next.text);
       }
     },
@@ -165,7 +165,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
     notice: (next) => {
       slot.lastOutputAt = Date.now();
       host.daemonLog(`${slot.adapter}_${next.level}_notice: ${truncatePreview(next.text)}`);
-      if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
+      if (shouldForwardBridgeEvent(slot.adapter, next.type, { text: next.text })) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await host.queueMessage(host.operatorId, host.prefix(slot, next.text), "notice", eventTarget);
         }));
@@ -198,7 +198,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
     },
     mirroredUserInput: (next) => {
       host.daemonLog(`mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
-      if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
+      if (shouldForwardBridgeEvent(slot.adapter, next.type, { text: next.text })) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await host.queueMessage(host.operatorId, host.prefix(slot, formatMirroredUserInputMessage(slot.adapter, next.text)), "mirrored_user_input", eventTarget);
         }));
@@ -207,7 +207,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
     sessionSwitched: (next) => {
       if (next.source === "local") slot.resumeCoordinator.clear();
       host.daemonLog(`session_switched: adapter=${slot.adapter} session=${next.sessionId} source=${next.source} reason=${next.reason}`);
-      if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+      if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEvent(slot.adapter, next.type)) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await host.queueMessage(host.operatorId, host.prefix(slot, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.sessionId, source: next.source, reason: next.reason })), "session_switched", eventTarget);
         }));
@@ -231,7 +231,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       ) {
         return;
       }
-      if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
+      if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEvent(slot.adapter, next.type)) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
           await host.queueMessage(host.operatorId, host.prefix(slot, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.threadId, source: next.source, reason: next.reason })), "thread_switched", eventTarget);
         }));

@@ -14,7 +14,7 @@ import {
 } from "../wechat/channel-config.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 import { isBridgeChannelId, type BridgeChannelId } from "../core/channel-types.ts";
-import type { WechatSendContext } from "../channels/wechat/wechat-forwarding.ts";
+import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode" | "pi";
@@ -100,7 +100,7 @@ export type DaemonRequest =
       recipientId: string;
       conversationId?: string;
       text: string;
-      context?: WechatSendContext;
+      context?: ChannelSendKind;
       metadata?: Record<string, string>;
     }
   | {

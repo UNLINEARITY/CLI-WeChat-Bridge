@@ -33,7 +33,7 @@ import {
   matchesCodexSessionMeta,
   resolveDefaultAdapterCommand,
   resolveSpawnTarget,
-  shouldAutoCompleteCodexWechatTurnAfterFinalReply,
+  shouldAutoCompleteCodexRemoteTurnAfterFinalReply,
   shouldIgnoreCodexSessionReplayEntry,
   shouldRecoverCodexStaleBusyState,
 } from "../../src/bridge/bridge-adapters.ts";
@@ -42,7 +42,7 @@ import {
   ensureClaudeWorkspaceTrustAccepted,
   normalizeClaudeProjectConfigKey,
 } from "../../src/bridge/bridge-adapters.claude.ts";
-import { buildWechatInboundPrompt } from "../../src/bridge/bridge-utils.ts";
+import { buildAttachmentInboundPrompt } from "../../src/bridge/bridge-utils.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -993,7 +993,7 @@ describe("Claude CLI compatibility", () => {
       kill() {},
     };
 
-    const prompt = buildWechatInboundPrompt(
+    const prompt = buildAttachmentInboundPrompt(
       "Please send any document from Desktop to WeChat.",
     );
 
@@ -1897,10 +1897,10 @@ describe("shouldRecoverCodexStaleBusyState", () => {
   });
 });
 
-describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
+describe("shouldAutoCompleteCodexRemoteTurnAfterFinalReply", () => {
   test("auto-completes a settled WeChat turn once final output is available", () => {
     expect(
-      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: "turn_123",
         activeTurnId: "turn_123",
         activeTurnOrigin: "wechat",
@@ -1918,7 +1918,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
 
   test("does not auto-complete local, incomplete, or still-active turns", () => {
     expect(
-      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: "turn_123",
         activeTurnId: "turn_123",
         activeTurnOrigin: "local",
@@ -1934,7 +1934,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
     ).toBe(false);
 
     expect(
-      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: "turn_123",
         activeTurnId: "turn_123",
         activeTurnOrigin: "wechat",
@@ -1950,7 +1950,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
     ).toBe(false);
 
     expect(
-      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: "turn_123",
         activeTurnId: "turn_123",
         activeTurnOrigin: "wechat",
@@ -1966,7 +1966,7 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
     ).toBe(false);
 
     expect(
-      shouldAutoCompleteCodexWechatTurnAfterFinalReply({
+      shouldAutoCompleteCodexRemoteTurnAfterFinalReply({
         candidateTurnId: "turn_123",
         activeTurnId: "turn_123",
         activeTurnOrigin: "wechat",

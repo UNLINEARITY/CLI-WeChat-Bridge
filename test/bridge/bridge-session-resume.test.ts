@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import {
   RESUME_SESSION_SNAPSHOT_TTL_MS,
   ResumeSessionCoordinator,
-  isWechatResumeEnabled,
+  isRemoteResumeEnabled,
   shouldForwardSessionSwitchEvent,
 } from "../../src/bridge/bridge-session-resume.ts";
 import type {
@@ -62,10 +62,10 @@ function buildRuntime(options: {
 
 describe("ResumeSessionCoordinator", () => {
   test("enables WeChat resume for every managed adapter", () => {
-    expect(isWechatResumeEnabled("opencode")).toBe(true);
-    expect(isWechatResumeEnabled("pi")).toBe(true);
-    expect(isWechatResumeEnabled("claude")).toBe(true);
-    expect(isWechatResumeEnabled("codex")).toBe(true);
+    expect(isRemoteResumeEnabled("opencode")).toBe(true);
+    expect(isRemoteResumeEnabled("pi")).toBe(true);
+    expect(isRemoteResumeEnabled("claude")).toBe(true);
+    expect(isRemoteResumeEnabled("codex")).toBe(true);
   });
 
   test("suppresses the adapter event for a WeChat-acknowledged switch", () => {
