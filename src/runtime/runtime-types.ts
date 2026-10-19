@@ -54,10 +54,6 @@ export interface VisibleClientSessionPreparer {
   prepareVisibleClientSession(): Promise<boolean>;
 }
 
-export interface RuntimeHost extends BridgeAdapter {
-  readonly runtimeKind: RuntimeKind;
-}
-
 export function hasLocalClientEndpointProvider(
   runtime: BridgeAdapter,
 ): runtime is BridgeAdapter & LocalClientEndpointProvider {

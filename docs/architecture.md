@@ -21,7 +21,7 @@
 | 企业微信 | 官方智能机器人 WebSocket 长连接 | WebSocket 文本、流式回复和媒体接口 | `wecom/account.json`、工作区状态和通道队列 | 每个 Bot 同时只能保持一个有效连接；当前支持内部单聊和内部群聊 |
 | Telegram | 官方 Bot API `getUpdates` 长轮询 | `sendMessage`、`sendPhoto`、`sendDocument` | `telegram/account.json`、附件与消息 claims | 每个 Bot Token 同时只运行一个轮询端；操作者通过私聊配对 |
 
-三种通道共享工作区锁、daemon endpoint 和适配器 slot，但凭据、入站媒体和消息去重目录相互隔离。通道选择在启动入口完成，bridge core 只处理通道无关的会话、审批、输入和输出事件。
+同一数据目录下同一时间只运行一个 daemon（不论通道），三种通道的凭据、入站媒体和消息去重目录相互隔离。通道选择在启动入口完成，通道差异集中在 `src/channels/channel-registry.ts` 登记的 driver 与 port 中；daemon 只处理通道无关的会话、审批、输入和输出事件。
 
 ## 架构总览
 
@@ -39,8 +39,8 @@
                          │ BridgeEvent
                          ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                   Bridge Controller                               │
-│           (路由、状态机、审批流、输出格式化)                          │
+│                   Bridge Daemon                                   │
+│      (slot 管理、路由、状态机、审批流、输出格式化)                    │
 └───────┬──────────────┬──────────────┬──────────────┬───────┘
         │              │              │              │
         ▼              ▼              ▼              ▼
@@ -51,9 +51,25 @@
    codex app-server   claude      opencode serve   pi 原生 TUI
 ```
 
-上图展示微信和企业微信路径；Telegram 通过 Bot API HTTPS 长轮询接入同一 Bridge Controller。下文适配器流程中的“微信”标签代表远程通道，各通道进入 bridge core 后复用相同的 BridgeEvent、控制命令、审批和会话事件。
+上图展示微信和企业微信路径；Telegram 通过 Bot API HTTPS 长轮询接入同一 Bridge Daemon。下文适配器流程中的“微信”标签代表远程通道，各通道进入 bridge core 后复用相同的 BridgeEvent、控制命令、审批和会话事件。
 
-<!-- PLACEHOLDER_SECTION_3 -->
+## 运行模型
+
+所有远程连接都由同一套 daemon 引擎（`src/daemon`）处理，没有独立的单桥接进程。对用户有两种模式：
+
+| 模式 | 入口 | 生命周期 |
+| --- | --- | --- |
+| 单桥接 | 直接启动器（`wechat-codex`、`wecom-claude`、`telegram-pi` 等） | 没有运行中的 daemon 时，启动器在后台拉起临时 daemon（`--ephemeral`）；所有窗口关闭后退出 |
+| 多 CLI | `wechat-daemon`、`wecom-daemon`、`telegram-daemon` | 常驻；窗口关闭后仍在线。已有 daemon 时再运行会把它转为常驻并登记当前目录，而不是替换它 |
+
+关键规则：
+
+- **slot**：按"工作目录 + CLI + 实例编号"区分（`SlotManager`），一个 daemon 可同时服务多个项目目录。远程用 `/cd` 切换当前目录，用 `/codex` 等切换当前 CLI；只能切换到本机已打开的目录。
+- **窗口**：直接启动器在当前终端运行 CLI，并向 daemon 申请一个跟随窗口的 slot；窗口关闭后 slot 释放（daemon 巡检 companion 存活，四种 CLI 行为一致）。远程切换只在主目录（`wechat-daemon` 的启动目录，或第一个启动器的目录）打开新窗口。
+- **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束。
+- **输出**：只有一个目录时消息前缀为 `[codex]`，有多个目录时为 `[目录/codex]`。审批和问题跨目录时用 `/confirm <编号>`、`/answer #<编号>` 指定。
+- **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`，供显式 `--session-start-mode restore` 恢复。
+- **出站**：`OutboundDispatcher`（`src/core`）串行发送文本与附件；目标会话失效时暂存到 `PendingMessageStore`，下一条入站消息到达后补发。
 
 ## Codex 适配器（WebSocket JSON-RPC）
 
@@ -119,8 +135,6 @@ rejoin 语义：对运行中的线程调用 `thread/resume` 会返回历史并�
 - `thread/resume` — 恢复已有会话
 - `turn/interrupt` — 中断当前执行
 
-<!-- PLACEHOLDER_SECTION_4 -->
-
 ## OpenCode 适配器（HTTP REST + SSE）
 
 ### CLI 原生支持
@@ -160,8 +174,6 @@ opencode serve --port <port> --hostname 127.0.0.1
 ### 为什么不需要 PTY
 
 OpenCode 的 server 模式提供了完整的结构化 API：输入通过 HTTP 发送，输出通过 SSE 接收，审批通过 HTTP 响应。整个通信链路不涉及终端模拟。
-
-<!-- PLACEHOLDER_SECTION_5 -->
 
 ## Pi 适配器（原生 TUI + extension TCP IPC）
 
@@ -294,8 +306,6 @@ Claude Code 确实提供了 `--print --output-format stream-json --input-format 
 - Claude CLI 检测到非 TTY 环境，可能切换到非交互行为
 - Bracketed paste 不被支持，多行输入可能被错误解析
 - Hook 系统本身仍然工作（通过 `--settings` 注册），但 CLI 的输入/输出行为可能不符合预期
-
-<!-- PLACEHOLDER_SECTION_6 -->
 
 ## 对比总结
 

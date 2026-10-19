@@ -8,7 +8,6 @@ import { setLocale } from "../../src/i18n/index.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { handleAdapterControl, invalidateModelSnapshot } from "../../src/bridge/adapter-control.ts";
 import type { BridgeAdapter, BridgeAdapterState } from "../../src/bridge/bridge-types.ts";
-import { LegacyAdapterRuntime } from "../../src/runtime/legacy-adapter-runtime.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -28,9 +27,9 @@ function fixture(kind: BridgeAdapterState["kind"] = "opencode") {
 
 describe("shared adapter model and plan commands", () => {
   for (const kind of ["codex", "claude", "opencode"] as const) {
-    test(`${kind} lists and selects through the runtime wrapper`, async () => {
+    test(`${kind} lists and selects models and toggles plan mode`, async () => {
       const f = fixture(kind);
-      const runtime = new LegacyAdapterRuntime(f.adapter);
+      const runtime = f.adapter;
       expect(await handleAdapterControl(runtime, "user", { type: "model" })).toContain("1. Model (provider)  (current)");
       expect(await handleAdapterControl(runtime, "user", { type: "model", target: "1" })).toContain("model switched");
       expect(f.selected).toEqual(["provider/model"]);

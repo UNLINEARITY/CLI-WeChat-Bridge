@@ -18,7 +18,7 @@ import {
   isRetryableWechatSendError,
   shouldForwardBridgeEvent,
   shouldSuppressCodexLocalThreadNotice,
-} from "../../src/bridge/wechat-forwarding.ts";
+} from "../../src/channels/wechat/wechat-forwarding.ts";
 import { WechatApiResponseError } from "../../src/wechat/wechat-transport.ts";
 
 describe("wechat forwarding helpers", () => {

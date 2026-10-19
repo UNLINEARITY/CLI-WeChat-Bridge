@@ -7,10 +7,13 @@
 import { createBridgeAdapter } from "../bridge/bridge-adapters.ts";
 import { CodexPtyAdapter } from "../bridge/bridge-adapters.codex.ts";
 import type { AdapterOptions } from "../bridge/bridge-adapters.shared.ts";
-import { LegacyAdapterRuntime } from "./legacy-adapter-runtime.ts";
-import type { RuntimeHost } from "./runtime-types.ts";
+import type { BridgeAdapter } from "../bridge/bridge-types.ts";
 
-export function createRuntimeHost(options: AdapterOptions): RuntimeHost {
+/**
+ * The runtime a daemon slot drives: Codex hosts its own app-server in the
+ * daemon; the other CLIs are reached through their visible companion.
+ */
+export function createRuntimeHost(options: AdapterOptions): BridgeAdapter {
   if (options.kind === "codex") {
     return new CodexPtyAdapter({
       ...options,
@@ -18,5 +21,5 @@ export function createRuntimeHost(options: AdapterOptions): RuntimeHost {
     });
   }
 
-  return new LegacyAdapterRuntime(createBridgeAdapter(options));
+  return createBridgeAdapter(options);
 }

@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import {
   OPENCODE_EMPTY_VISIBLE_REPLY_MESSAGE,
   forwardWechatFinalReply,
-} from "../../src/bridge/bridge-final-reply.ts";
+} from "../../src/channels/wechat/bridge-final-reply.ts";
 
 describe("forwardWechatFinalReply", () => {
   test("sends long visible replies as one unchunked message", async () => {

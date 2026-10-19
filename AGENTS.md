@@ -23,18 +23,21 @@ These rules are owner-imposed and override anything else in this file, including
 - `src/wechat`: iLink setup, channel config, long polling, message send, inbound media download/decryption, stale context-token handling, and transport logging.
 - `src/channels/wechat`: WeChat channel port, channel-neutral message conversion, and forwarding helpers on top of `src/wechat`.
 - `src/channels/wecom`: official smart-bot setup/pairing, WebSocket transport, message conversion, media transfer, and channel-specific reply formatting.
-- `src/core`: channel-neutral orchestration primitives — channel types and `BridgeChannelPort`, `routeBridgeMessage`, `InboundConversationContext`/`TurnCoordinator` turn ownership, bridge event forwarding, control-command parsing, inbound message claims, and shared text utilities. Keep orchestration logic channel-neutral here; channel specifics live under `src/channels/*` and `src/wechat`.
-- `src/bridge`: bridge lifecycle, adapter selection, controller orchestration, approvals, user-input requests, final-reply forwarding, locks, workspace state, process cleanup, and shared formatting.
+- `src/channels/telegram`: Telegram Bot API setup/pairing, long-poll transport, message conversion, and reply formatting.
+- `src/channels/local`: credential-free loopback channel (inbox/transcript files) used for smoke tests.
+- `src/channels/channel-registry.ts`: the single place that builds each channel's credentials, transports, driver, and outbound port; orchestration never branches on the channel id.
+- `src/core`: channel-neutral orchestration primitives — channel types and `BridgeChannelPort`, `routeBridgeMessage`, `InboundConversationContext`/`TurnCoordinator` turn ownership, bridge event forwarding, control-command parsing, inbound message claims, the `OutboundDispatcher` send pipeline, the `PendingMessageStore` for stale-target redelivery, and shared text utilities. Keep orchestration logic channel-neutral here; channel specifics live under `src/channels/*` and `src/wechat`.
+- `src/bridge`: adapters and their shared support — adapter selection, endpoint sync (`BridgeController`), approval detection, outbound attachments, message and user-input formatting, legacy lock reading, and process cleanup.
 - `src/bridge/bridge-adapters.*.ts`: adapter-specific Codex, Claude Code, OpenCode, and Pi behavior. Keep adapter conditionals here or in closely related companion modules.
 - `src/companion`: visible local CLI companion launchers, IPC endpoint files, daemon delegation, and local companion proxy support.
-- `src/daemon`: persistent WeChat/WeCom daemon, daemon IPC, multi-slot switching, visible terminal auto-open, and pre-start cleanup of stale single bridges.
-- `src/runtime`: bridge-owned runtime host creation, including the Codex runtime host and legacy adapter runtime wrapper.
+- `src/daemon`: the one bridge engine — `wechat-daemon.ts` wiring and main loop, `slot-manager.ts` (slots by workspace, CLI, and instance; home workspace; window-bound lifecycle), `inbound-router.ts`, `control-commands.ts`, `slot-event-forwarder.ts`, `visible-client-launcher.ts`, `daemon-ipc-server.ts`, `slot-session-store.ts`, and pre-start cleanup of stale state from older versions.
+- `src/runtime`: runtime creation for daemon slots (Codex runtime host, or the companion proxy adapter for the other CLIs) and the local client endpoint types.
 - `src/i18n`: localized user-facing strings.
-- `src/types` and `src/media`: shared type and attachment metadata definitions.
+- `src/types`: ambient type declarations for untyped dependencies.
 - `src/commands` and `src/utils`: global command helpers and update checking.
 - `bin/*.mjs`: published CLI wrappers. These are tracked source files, not generated output.
 - `scripts`: release and packaging helpers, especially `publish-dual.mjs`, `smoke-global-install.mjs`, and `smoke-cli-compatibility.mjs`.
-- `test/<area>` mirrors the runtime areas: `bridge`, `companion`, `core`, `daemon`, `wechat`, and `wecom`.
+- `test/<area>` mirrors the runtime areas: `bridge`, `companion`, `core`, `daemon`, `i18n`, `local`, `telegram`, `utils`, `wechat`, and `wecom`.
 - `docs/releases`: release notes and the release index. Keep English and Chinese notes aligned when preparing a release.
 
 ## Runtime State And Files
