@@ -284,7 +284,7 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 请优先重新运行对应的 `wechat-*` 或 `wecom-*` 直接命令，确保内部 runtime 与可见 CLI 来自同一安装版本。
 
-微信和企业微信侧的 `/resume` 均支持 Codex、Claude Code、OpenCode 和 Pi。命令只列出当前 daemon / bridge 启动目录内的最近会话；切换前需要当前适配器处于 idle，且没有待审批或待回答请求。
+微信和企业微信侧的 `/resume` 均支持 Codex、Claude Code、OpenCode 和 Pi。命令只列出当前目录（daemon 中为 `/cd` 选中的目录）内的最近会话；切换前需要当前适配器处于 idle，且没有待审批或待回答请求。
 
 Codex 会先校验目标 thread 的 cwd、root 和 active 状态，再执行 `thread/resume` 与可见客户端切换；Claude Code 会等待 `SessionEnd(reason=resume)` 和目标 `SessionStart(source=resume)`；OpenCode 与 Pi 会等待可见 TUI 的 session 切换确认。任何一步失败时，bridge 保留原会话，不提交新的 shared session。
 
@@ -312,6 +312,6 @@ Codex、Claude Code 等适配器会在 bridge 能识别的审批请求上同步�
 
 ## 已知限制
 
-- `wechat-daemon` 和 `wecom-daemon` v1 均绑定启动工作区，暂不支持从远程通道切换到另一个本地目录。
+- 一个 daemon 可以管理多个工作目录：在其他目录运行直接启动命令会加入已运行的 daemon，远程通道用 `/cd` 查看和切换；只能切换到本机已打开的目录，不能从远程通道打开新目录。
 - 微信和企业微信入站图片、文件及视频会保存为本地路径并转发给 CLI；bridge 本身不做 OCR，也不自动抽取 PDF / DOCX 正文。
 - 同一工作区同一通道不应同时运行 daemon 和独立 bridge；同目录启动器会优先委托已有 daemon。

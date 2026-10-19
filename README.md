@@ -260,7 +260,8 @@ daemon 启动后，后续切换都可以直接从对应远程通道发起；如�
 
 当前 daemon 行为如下：
 
-- daemon 绑定启动时的工作目录；暂不支持从远程通道切换工作目录；
+- 一个 daemon 可以同时管理多个工作目录：在另一个目录运行直接启动命令（例如 `wechat-claude`）时，会把该目录加入已运行的 daemon；在远程通道发送 `/cd` 查看目录列表，`/cd <编号>` 或 `/cd <目录名>` 切换；只能切换到本机已打开的目录；
+- 当前目录的输出带 `[codex]` 这类标签，其他目录的输出带 `[目录名/codex]` 标签；
 - 启动时会自动接管并清理旧的单 bridge 进程、失效 lock 和旧 endpoint；
 - 如果还没有对应 CLI，daemon 会自动打开一个新的可见终端；
 - Codex / Claude / OpenCode / Pi 的重要输出都会带上 `[codex]`、`[claude]`、`[opencode]`、`[pi]` 标签再发回对应远程通道；
@@ -397,7 +398,8 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/claude [prompt]` | daemon | 切换到 Claude Code；可选 prompt 在切换成功后转发 |
 | `/opencode [prompt]` | daemon | 切换到 OpenCode；可选 prompt 在切换成功后转发 |
 | `/pi [prompt]` | daemon | 切换到 Pi；可选 prompt 在切换成功后转发 |
-| `/all <prompt>` | daemon | 将同一段提示词同时下发给全部已启动的 CLI；未启动的列为跳过，任一 CLI 忙碌时整条取消 |
+| `/cd`、`/cd <编号或目录名>` | daemon | 列出 daemon 管理的工作目录，或切换当前目录；只能切换到本机已打开的目录 |
+| `/all <prompt>` | daemon | 将同一段提示词同时下发给当前目录全部已启动的 CLI；未启动的列为跳过，任一 CLI 忙碌时整条取消 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
 | `/lang`、`/lang zh`、`/lang en` | 直接启动、daemon | 查看或切换中文 / English 桥接提示；立即生效并保存偏好，`/language` 为别名 |
 | `/model`、`/model <编号>` | Codex、Claude Code、OpenCode、Pi | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |
@@ -406,11 +408,13 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/reset` | 直接启动、daemon | 重建当前本地会话 |
 | `/new`、`/new-session` | OpenCode、Pi | 创建新的 session |
 | `/resume`、`/resume <编号或 ID 前缀>` | Codex、Claude Code、OpenCode、Pi | 列出并恢复当前工作目录的最近 thread/session；列表编号 5 分钟内有效 |
-| `/confirm`、`/yes` | 直接启动、daemon | 有待审批时批准当前权限请求 |
+| `/confirm`、`/yes` | 直接启动、daemon | 有待审批时批准当前权限请求；当前终端没有而其他终端或目录有时，回复带编号的列表 |
+| `/confirm <编号>`、`/deny <编号>` | daemon | 处理列表中对应编号的审批请求 |
 | `/deny`、`/no` | 直接启动、daemon | 有待审批时拒绝当前权限请求 |
 | `confirm`、`yes` | 有待审批时 | `/confirm` 的文本别名 |
 | `deny`、`no` | 有待审批时 | `/deny` 的文本别名 |
 | `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、Claude、OpenCode 的结构化回答 |
+| `/answer`、`/answer #<编号> <回答>` | daemon | 列出所有待回答的问题，或回答列表中对应编号的问题 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信、Telegram 配置 | 在 `wecom-setup` 或 `telegram-setup` 提示后完成操作者配对 |
 
@@ -451,7 +455,7 @@ Telegram 任务运行期间也会保持原生的「正在输入」提示，较�
 | OpenCode | 列出当前 cwd 的 session 并恢复选定 session | 本地 picker、`/resume` 或新建 session 后，远程通道跟随新的 session |
 | Pi | 列出当前 cwd 的 session 并恢复选定 session | 本地 session 切换后，远程通道跟随新的 session；Pi turn 完成后发送一次最终回复 |
 
-所有适配器的 `/resume` 都只处理 daemon / bridge 启动目录内的最近 root thread/session，并等待当前任务进入 idle。有任务、审批或待回答问题时请先处理或使用 `/stop`；仍处于 active 状态的 Codex thread，以及仍在运行的 Claude background session，不允许从远程通道接管。OpenCode 和 Pi 的本地 session 切换会使之前的编号列表失效；如果切换发生在远程任务执行期间，bridge 会先中断旧任务。
+所有适配器的 `/resume` 都只处理当前目录（daemon 中为 `/cd` 选中的目录）内的最近 root thread/session，并等待当前任务进入 idle。有任务、审批或待回答问题时请先处理或使用 `/stop`；仍处于 active 状态的 Codex thread，以及仍在运行的 Claude background session，不允许从远程通道接管。OpenCode 和 Pi 的本地 session 切换会使之前的编号列表失效；如果切换发生在远程任务执行期间，bridge 会先中断旧任务。
 
 ### 5.3 daemon 表情绑定
 

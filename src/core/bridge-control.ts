@@ -11,12 +11,24 @@ export type BridgeControlCommand =
   | { type: "new_session" }
   | { type: "stop" }
   | { type: "reset" }
-  | { type: "confirm" }
-  | { type: "deny" }
+  | { type: "confirm"; index?: number }
+  | { type: "deny"; index?: number }
   | { type: "answer"; raw: string }
   | { type: "model"; target?: string }
   | { type: "plan"; enabled: boolean }
   | { type: "broadcast"; text: string };
+
+/**
+ * `/confirm 2` targets the second entry of the pending-approval list. Only
+ * one- or two-digit numbers count, so a legacy six-digit approval code
+ * (`/confirm 123456`) still confirms the current request.
+ */
+function withPendingIndex<T extends { type: "confirm" | "deny" }>(
+  command: T,
+  argument: string,
+): T & { index?: number } {
+  return /^[1-9]\d?$/.test(argument) ? { ...command, index: Number(argument) } : command;
+}
 
 /** Parse the canonical control command grammar shared by all channels. */
 export function parseBridgeControlCommand(
@@ -47,12 +59,13 @@ export function parseBridgeControlCommand(
       return { type: "reset" };
     case "/confirm":
     case "/yes":
-      return { type: "confirm" };
+      return withPendingIndex({ type: "confirm" }, argument);
     case "/deny":
     case "/no":
-      return { type: "deny" };
+      return withPendingIndex({ type: "deny" }, argument);
     case "/answer":
-      return argument ? { type: "answer", raw: argument } : null;
+      // A bare /answer lists the waiting questions.
+      return { type: "answer", raw: argument };
     case "/model":
       return { type: "model", target: argument || undefined };
     case "/plan":

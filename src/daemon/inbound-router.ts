@@ -45,12 +45,10 @@ import {
 import {
   type ActiveTask,
   type DaemonSlot,
-  prefixDaemonAdapterMessage,
   formatInboundMessagePreview,
 } from "./daemon-slot.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
 import { SlotManager } from "./slot-manager.ts";
-import { isSameWorkspaceCwd } from "./daemon-shared.ts";
 
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
 
@@ -120,16 +118,16 @@ export class InboundRouter {
       onUnauthorized: async () => undefined,
       handleCommand: async () => false,
       remindPendingApproval: async () => {
-        routeMessage = prefixDaemonAdapterMessage(
-          slot.adapter,
+        routeMessage = this.host.slotManager.prefix(
+          slot,
           formatPendingApprovalReminder(slot.pendingConfirmations[0]!, slot.runtime.getState()),
         );
         reason = "pending_approval";
         await sendReminder(routeMessage, "approval_required");
       },
       remindPendingUserInput: async () => {
-        routeMessage = prefixDaemonAdapterMessage(
-          slot.adapter,
+        routeMessage = this.host.slotManager.prefix(
+          slot,
           slot.pendingUserInput
             ? formatPendingUserInputReminder(slot.pendingUserInput)
             : t("bridge.input.waiting", { adapter: slot.adapter }),
@@ -138,35 +136,21 @@ export class InboundRouter {
         await sendReminder(routeMessage, "user_input_required");
       },
       remindBusy: async () => {
-        routeMessage = prefixDaemonAdapterMessage(
-          slot.adapter,
+        routeMessage = this.host.slotManager.prefix(
+          slot,
           t("bridge.busy.remote", { adapter: slot.adapter }),
         );
         reason = "busy";
         await sendReminder(routeMessage, "notice");
       },
       defer: async () => {
-        if (slot.deferredInputs.length >= MAX_DAEMON_DEFERRED_INPUTS) {
-          routeMessage = prefixDaemonAdapterMessage(
-            slot.adapter,
-            `The deferred input queue is full (${MAX_DAEMON_DEFERRED_INPUTS}). Wait for the current local turn to finish before retrying.`,
-          );
-          reason = "busy";
-          await sendReminder(routeMessage, "notice");
-          return;
+        const deferred = await this.deferInput(slot, inboundMessage, conversation);
+        routeMessage = deferred.text;
+        reason = deferred.position === undefined ? "busy" : "deferred";
+        if (deferred.position !== undefined) {
+          queued = true;
+          queuePosition = deferred.position;
         }
-        slot.deferredInputs.push({ message: inboundMessage, conversation });
-        queuePosition = slot.deferredInputs.length;
-        queued = true;
-        reason = "deferred";
-        routeMessage = prefixDaemonAdapterMessage(
-          slot.adapter,
-          formatDeferredCodexInboundQueueMessage(queuePosition),
-        );
-        await sendReminder(routeMessage, "notice");
-        this.host.daemonLog(
-          `deferred_inbound_input: adapter=${slot.adapter} position=${queuePosition} text=${truncatePreview(inboundMessage.text)}`,
-        );
       },
       dispatch: async () => {
         await this.dispatchInboundText(inboundMessage, slot, conversation);
@@ -182,6 +166,37 @@ export class InboundRouter {
       ...(queued ? { queued: true } : {}),
       ...(queuePosition !== undefined ? { queuePosition } : {}),
     };
+  }
+
+  /**
+   * Queue input that arrived during a local Codex turn; it is replayed once
+   * the turn settles. Returns the reply sent to the user and, when queued,
+   * the queue position.
+   */
+  private async deferInput(
+    slot: DaemonSlot,
+    inboundMessage: InboundWechatMessage,
+    conversation: ChannelConversationRef | undefined,
+  ): Promise<{ text: string; position?: number }> {
+    if (slot.deferredInputs.length >= MAX_DAEMON_DEFERRED_INPUTS) {
+      const text = this.host.slotManager.prefix(
+        slot,
+        `The deferred input queue is full (${MAX_DAEMON_DEFERRED_INPUTS}). Wait for the current local turn to finish before retrying.`,
+      );
+      await this.host.queueMessage(inboundMessage.senderId, text, "notice", conversation);
+      return { text };
+    }
+    slot.deferredInputs.push({ message: inboundMessage, conversation });
+    const position = slot.deferredInputs.length;
+    const text = this.host.slotManager.prefix(
+      slot,
+      formatDeferredCodexInboundQueueMessage(position),
+    );
+    await this.host.queueMessage(inboundMessage.senderId, text, "notice", conversation);
+    this.host.daemonLog(
+      `deferred_inbound_input: adapter=${slot.adapter} cwd=${slot.cwd} position=${position} text=${truncatePreview(inboundMessage.text)}`,
+    );
+    return { text, position };
   }
 
   async maybeDrainDeferredInputs(slot: DaemonSlot): Promise<void> {
@@ -323,8 +338,24 @@ export class InboundRouter {
       return;
     }
 
+    const workspaceCommand = message.text.trim().match(/^\/cd(?:\s+([\s\S]+))?$/i);
+    if (workspaceCommand) {
+      await this.host.controls.handleWorkspaceCommand(
+        message.senderId,
+        workspaceCommand[1]?.trim() ?? "",
+      );
+      return;
+    }
+
     let slot = this.host.slotManager.getActiveSlot();
     if (!slot) {
+      // Approvals and answers also work without a current terminal: the
+      // request may be waiting in another workspace.
+      const command = parseBridgeControlCommand(message.text);
+      if (command && ["confirm", "deny", "answer"].includes(command.type)) {
+        await this.host.controls.handleSystemCommand(message, null, command);
+        return;
+      }
       await this.host.queueMessage(message.senderId, formatNoActiveAdapterMessage());
       return;
     }
@@ -342,6 +373,13 @@ export class InboundRouter {
         adapterState: currentSlot.runtime.getState(),
         hasPendingApproval: currentSlot.pendingConfirmations.length > 0,
         hasPendingUserInput: Boolean(currentSlot.pendingUserInput),
+        shouldDefer: shouldDeferCodexInboundMessage({
+          adapter: currentSlot.adapter,
+          status: currentSlot.runtime.getState().status,
+          activeTurnOrigin: currentSlot.runtime.getState().activeTurnOrigin,
+          hasPendingConfirmation: currentSlot.pendingConfirmations.length > 0,
+          hasSystemCommand: Boolean(command),
+        }),
         onUnauthorized: async () => undefined,
         handleCommand: async (nextCommand) => {
           await this.host.controls.handleSystemCommand(message, currentSlot, nextCommand);
@@ -350,8 +388,8 @@ export class InboundRouter {
         remindPendingApproval: async () => {
           await this.host.queueMessage(
             message.senderId,
-            prefixDaemonAdapterMessage(
-              currentSlot.adapter,
+            this.host.slotManager.prefix(
+              currentSlot,
               formatPendingApprovalReminder(
                 currentSlot.pendingConfirmations[0]!,
                 currentSlot.runtime.getState(),
@@ -362,8 +400,8 @@ export class InboundRouter {
         remindPendingUserInput: async () => {
           await this.host.queueMessage(
             message.senderId,
-            prefixDaemonAdapterMessage(
-              currentSlot.adapter,
+            this.host.slotManager.prefix(
+              currentSlot,
               currentSlot.pendingUserInput
                 ? formatPendingUserInputReminder(currentSlot.pendingUserInput)
                 : t("bridge.input.waiting", { adapter: currentSlot.adapter }),
@@ -373,13 +411,19 @@ export class InboundRouter {
         remindBusy: async () => {
           await this.host.queueMessage(
             message.senderId,
-            prefixDaemonAdapterMessage(
-              currentSlot.adapter,
+            this.host.slotManager.prefix(
+              currentSlot,
               t("bridge.busy.remote", { adapter: currentSlot.adapter }),
             ),
           );
         },
-        defer: async () => undefined,
+        defer: async () => {
+          await this.deferInput(
+            currentSlot,
+            message,
+            this.host.inboundConversationContext.get() ?? undefined,
+          );
+        },
         dispatch: async () => {
           await this.dispatchInboundText(message, currentSlot);
         },
@@ -418,8 +462,8 @@ export class InboundRouter {
     if (!visibleResult.activated) {
       await this.host.queueMessage(
         message.senderId,
-        prefixDaemonAdapterMessage(
-          slot.adapter,
+        this.host.slotManager.prefix(
+          slot,
           formatDaemonSwitchResultDetail(visibleResult),
         ),
       );
@@ -449,8 +493,8 @@ export class InboundRouter {
       onBusy: async () => {
         await this.host.queueMessage(
           message.senderId,
-          prefixDaemonAdapterMessage(
-            slot.adapter,
+          this.host.slotManager.prefix(
+            slot,
             t("bridge.busy.remote", { adapter: slot.adapter }),
           ),
           "notice",
@@ -478,13 +522,12 @@ export class InboundRouter {
     if (!request.text.trim()) {
       throw new Error("forward_input requires non-empty text.");
     }
-    if (request.cwd && !isSameWorkspaceCwd(request.cwd, this.host.cwd)) {
-      throw new Error(
-        `${this.host.channelId}-daemon is bound to ${this.host.cwd}; requested cwd was ${request.cwd}.`,
-      );
-    }
-
-    const adapter = request.adapter ?? this.host.slotManager.activeAdapter;
+    const slots = this.host.slotManager;
+    const cwd = request.cwd ?? slots.activeCwd;
+    // Input for another workspace runs there without moving the channel's
+    // current workspace.
+    const activate = slots.isActiveWorkspace(cwd);
+    const adapter = request.adapter ?? (activate ? slots.activeAdapter : null);
     if (!adapter) {
       throw new Error("No active adapter slot is available.");
     }
@@ -498,8 +541,10 @@ export class InboundRouter {
       ...(request.metadata ? { metadata: request.metadata } : {}),
     };
 
-    const previousActiveAdapter = this.host.slotManager.activeAdapter;
-    const ensureResult = await this.host.slotManager.ensureSlot(adapter, {
+    const previousActiveAdapter = slots.activeAdapter;
+    const ensureResult = await slots.ensureSlot(adapter, {
+      cwd,
+      activate,
       openVisible: true,
       reuseExistingVisible: true,
     });
@@ -512,7 +557,7 @@ export class InboundRouter {
         message: formatDaemonSwitchResultDetail(ensureResult),
       };
     }
-    const slot = this.host.slotManager.slots.get(adapter);
+    const slot = slots.getSlot(cwd, adapter);
     if (!slot) {
       throw new Error(`Adapter slot ${adapter} is not available.`);
     }
@@ -529,17 +574,18 @@ export class InboundRouter {
     };
 
     try {
-      const routed = await this.host.slotManager.serializeSlotInput(slot, () =>
+      const routed = await slots.serializeSlotInput(slot, () =>
         this.host.inboundConversationContext.run(conversation, () =>
           this.routeDaemonInput(slot, inboundMessage, conversation),
         ));
       if (routed.kind === "dispatched") {
         return { forwarded: true, adapter, conversationId };
       }
-      this.host.slotManager.restoreActiveAdapterAfterRejectedInput(
+      slots.restoreActiveAdapterAfterRejectedInput(
         adapter,
         ensureResult.activationVersion,
         previousActiveAdapter,
+        ensureResult.previousActiveCwd,
       );
       return {
         forwarded: false,
@@ -551,10 +597,11 @@ export class InboundRouter {
         message: routed.message,
       };
     } catch (error) {
-      this.host.slotManager.restoreActiveAdapterAfterRejectedInput(
+      slots.restoreActiveAdapterAfterRejectedInput(
         adapter,
         ensureResult.activationVersion,
         previousActiveAdapter,
+        ensureResult.previousActiveCwd,
       );
       throw error;
     }

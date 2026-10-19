@@ -364,7 +364,7 @@ describe("local-companion-start helpers", () => {
     );
   });
 
-  test("tryDelegateToDaemon rejects daemon cwd mismatches", async () => {
+  test("tryDelegateToDaemon hands a launcher in another directory to the running daemon", async () => {
     const endpoint: DaemonEndpoint = {
       protocolVersion: 1,
       pid: 123,
@@ -373,22 +373,30 @@ describe("local-companion-start helpers", () => {
       cwd: "D:/work/project-a",
       startedAt: "2026-05-22T00:00:00.000Z",
     };
+    const requests: unknown[] = [];
 
-    await expect(
-      tryDelegateToDaemon(
-        {
-          adapter: "codex",
-          cwd: "D:/work/project-b",
-          timeoutMs: 15000,
-          sessionStartMode: "restore",
-          cliArgs: [],
+    const delegated = await tryDelegateToDaemon(
+      {
+        adapter: "codex",
+        cwd: "D:/work/project-b",
+        timeoutMs: 15000,
+        sessionStartMode: "restore",
+        cliArgs: [],
+      },
+      {
+        readEndpoint: () => endpoint,
+        isEndpointAlive: async () => true,
+        sendRequest: async (_endpoint, payload) => {
+          requests.push(payload);
+          return { ok: true, result: {} };
         },
-        {
-          readEndpoint: () => endpoint,
-          isEndpointAlive: async () => true,
-        },
-      ),
-    ).rejects.toThrow("v1 daemon switching is limited to its startup cwd");
+      },
+    );
+
+    expect(delegated).toBe(true);
+    expect(requests).toEqual([
+      expect.objectContaining({ command: "ensure_slot", adapter: "codex", cwd: "D:/work/project-b" }),
+    ]);
   });
 
   test("tryDelegateToDaemon rejects a live daemon owned by another channel", async () => {

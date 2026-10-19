@@ -410,7 +410,13 @@ describe("daemon sequential approvals", () => {
     runtime.emit({ type: "approval_required", request: first, timestamp: new Date().toISOString() });
     await tick(20);
     const message = { senderId: OPERATOR_ID };
+    // The current slot (claude) has nothing pending: list the request instead
+    // of approving another slot's command implicitly.
     await internal.controls.confirmPendingApproval(message, internal.slots.get("claude"));
+    expect(runtime.approvals).toEqual([]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("1. ");
+    expect(env.wecom.sent.at(-1)?.text).toContain("codex: first command");
+    await internal.controls.confirmPendingApproval(message, internal.slots.get("claude"), 1);
     await tick(20);
     expect(runtime.approvals).toEqual(["confirm"]);
     expect(runtime.state.pendingApprovals).toEqual([second]);
@@ -421,7 +427,7 @@ describe("daemon sequential approvals", () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.text).toContain("second command");
     expect(prompts[1]?.target.conversationId).toBe("parent-conversation");
-    await internal.controls.denyPendingApproval(message, internal.slots.get("claude"));
+    await internal.controls.denyPendingApproval(message, internal.slots.get("claude"), 1);
     expect(runtime.approvals).toEqual(["confirm", "deny"]);
     expect(slot.pendingConfirmations).toEqual([]);
     expect(slot.turns.activeTask).toBe(parentTask);
@@ -474,7 +480,8 @@ describe("daemon Claude questions", () => {
       runtime.emit({ type: "user_input_required", request: second, timestamp: new Date().toISOString() });
       return true;
     };
-    await internal.controls.answerPendingUserInput({ senderId: OPERATOR_ID }, internal.slots.get("codex"), "dev");
+    // The current slot (codex) has no question: answer claude's by number.
+    await internal.controls.answerPendingUserInput({ senderId: OPERATOR_ID }, internal.slots.get("codex"), "#1 dev");
     await tick(20);
     expect(answeredId).toBe("first");
     expect(runtime.userInput).toEqual([{ env: ["dev"] }]);
@@ -744,21 +751,22 @@ describe("wechat-daemon handlers: forward_input dispatch", () => {
     expect(error.message).toBe("forward_input requires non-empty text.");
   });
 
-  test("refuses to cross workspace boundaries", async () => {
+  test("runs input for another workspace there without switching the current one", async () => {
     const env = new FakeDaemonEnvironment();
     const daemon = env.buildDaemon("wecom");
 
-    const error = await expectRejection(
-      daemon.handleDaemonRequest({
-        command: "forward_input",
-        adapter: "codex",
-        cwd: "D:\\other-project",
-        text: "hello",
-      }),
-    );
+    const result = (await daemon.handleDaemonRequest({
+      command: "forward_input",
+      adapter: "codex",
+      cwd: "D:\\other-project",
+      text: "hello",
+    })) as DaemonForwardInputResult;
 
-    expect(error.message).toContain("is bound to");
-    expect(env.runtimes.size).toBe(0);
+    expect(result.forwarded).toBe(true);
+    expect(env.runtime("codex").state.cwd).toBe("D:\\other-project");
+    expect(env.runtime("codex").inputs.at(-1)).toContain("hello");
+    expect(daemon.getStatus().activeAdapter).toBeUndefined();
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
   });
 
   test("fails closed when the visible CLI never connects", async () => {

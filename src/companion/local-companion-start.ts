@@ -689,12 +689,6 @@ export async function tryDelegateToDaemon(
     );
   }
 
-  if (!isSameWorkspaceCwd(endpoint.cwd, options.cwd)) {
-    throw new Error(
-      `${requestedChannel}-daemon is running for ${endpoint.cwd}. This launcher requested ${options.cwd}; v1 daemon switching is limited to its startup cwd.`,
-    );
-  }
-
   const response: DaemonResponse = await sendRequest(
     endpoint,
     {

@@ -260,7 +260,8 @@ After starting the daemon, you can switch CLIs from the messaging channel. When 
 
 Daemon behavior:
 
-- It stays bound to its startup working directory; switching project directories from chat is not supported.
+- One daemon can manage several working directories: running a direct launcher (for example `wechat-claude`) in another directory adds that directory to the running daemon. Send `/cd` in the channel to list directories and `/cd <number>` or `/cd <name>` to switch. Only directories opened on this computer can be selected.
+- Output from the current directory is labeled like `[codex]`; output from other directories is labeled like `[directory/codex]`.
 - Startup takes over and cleans up old standalone bridge processes, stale locks, and old endpoints.
 - It opens a new visible terminal when the requested CLI is not already available.
 - Important output includes `[codex]`, `[claude]`, `[opencode]`, or `[pi]` labels before being sent back.
@@ -349,7 +350,7 @@ The deprecated `wechat-*-start` aliases were removed in 1.1.5. Use the entry poi
 | `--no-open` | Create a runtime slot without opening a visible CLI | `wechat-daemon --no-open` |
 | `--doctor` | Check Node.js, CLIs, locks, endpoints, and daemon state | `wechat-daemon --doctor` |
 
-WeCom and Telegram daemons accept the same options, for example `wecom-daemon --adapter claude --profile work` or `telegram-daemon --adapter claude --profile work`. The daemon remains bound to its startup directory. See the [channel commands](#5-channel-commands) below.
+WeCom and Telegram daemons accept the same options, for example `wecom-daemon --adapter claude --profile work` or `telegram-daemon --adapter claude --profile work`. Launchers in other directories join the same daemon. See the [channel commands](#5-channel-commands) below.
 
 ### 4.3 Direct adapter launchers
 
@@ -397,7 +398,8 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/claude [prompt]` | Daemon | Switch to Claude Code and optionally forward a prompt |
 | `/opencode [prompt]` | Daemon | Switch to OpenCode and optionally forward a prompt |
 | `/pi [prompt]` | Daemon | Switch to Pi and optionally forward a prompt |
-| `/all <prompt>` | Daemon | Send the same prompt to all started CLIs; unstarted slots are skipped, and the whole dispatch is canceled if any CLI is busy |
+| `/cd`, `/cd <number or name>` | Daemon | List the working directories the daemon manages, or switch the current one; only directories opened on this computer can be selected |
+| `/all <prompt>` | Daemon | Send the same prompt to all started CLIs in the current directory; unstarted slots are skipped, and the whole dispatch is canceled if any CLI is busy |
 | `/status` | Direct launch, daemon | Show bridge, daemon, adapter, and workspace state |
 | `/lang`, `/lang zh`, `/lang en` | Direct launch, daemon | View or switch Chinese/English bridge messages; applies immediately and saves the preference. `/language` is an alias |
 | `/model`, `/model <number>` | Codex, Claude Code, OpenCode, Pi | List and switch models for the current session; numbered lists expire after 5 minutes |
@@ -406,11 +408,13 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/reset` | Direct launch, daemon | Rebuild the local session |
 | `/new`, `/new-session` | OpenCode, Pi | Create a new session |
 | `/resume`, `/resume <number or ID prefix>` | Codex, Claude Code, OpenCode, Pi | List and restore recent threads/sessions in the current directory; numbered lists expire after 5 minutes |
-| `/confirm`, `/yes` | Direct launch, daemon | Approve the current pending permission request |
+| `/confirm`, `/yes` | Direct launch, daemon | Approve the current pending permission request; when only other terminals or directories have one, reply with a numbered list |
+| `/confirm <number>`, `/deny <number>` | Daemon | Resolve the approval with that number in the list |
 | `/deny`, `/no` | Direct launch, daemon | Reject the current pending permission request |
 | `confirm`, `yes` | Pending approval | Text aliases for `/confirm` |
 | `deny`, `no` | Pending approval | Text aliases for `/deny` |
 | `/answer <key>=<value>` | Pending question | Submit structured answers for Codex, Claude Code, or OpenCode |
+| `/answer`, `/answer #<number> <answer>` | Daemon | List every waiting question, or answer the one with that number |
 | `/daemon-stop` | Daemon | Stop the persistent daemon |
 | `/pair <code>` | WeCom / Telegram setup | Pair the operator after `wecom-setup` or `telegram-setup` prompts you |
 
@@ -451,7 +455,7 @@ Telegram tasks also keep the native typing indicator active, and long replies ar
 | OpenCode | List sessions in the current directory and restore the selected session | Local picker, `/resume`, or a new session updates the session followed by the channel |
 | Pi | List sessions in the current directory and restore the selected session | Local session changes are followed; each completed Pi turn sends one final reply |
 
-All adapters' `/resume` commands operate on recent root threads/sessions in the bridge or daemon's startup directory and wait for the current task to become idle. Resolve active tasks, approvals, or questions first, or use `/stop`. Active Codex threads and running Claude background sessions cannot be taken over remotely. Local OpenCode and Pi session changes invalidate earlier numbered lists. If a local switch happens during a remote task, the bridge interrupts the old task first.
+All adapters' `/resume` commands operate on recent root threads/sessions in the current directory (in the daemon, the one selected with `/cd`) and wait for the current task to become idle. Resolve active tasks, approvals, or questions first, or use `/stop`. Active Codex threads and running Claude background sessions cannot be taken over remotely. Local OpenCode and Pi session changes invalidate earlier numbered lists. If a local switch happens during a remote task, the bridge interrupts the old task first.
 
 ### 5.3 Daemon emoji bindings
 

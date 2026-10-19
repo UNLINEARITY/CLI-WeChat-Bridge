@@ -63,10 +63,21 @@ class FakePendingStore {
 class FakeRuntime implements BridgeAdapter {
   state: BridgeAdapterState;
   readonly inputs: string[] = [];
+  readonly approvals: Array<"confirm" | "deny"> = [];
+  readonly answers: Record<string, string[]>[] = [];
   private sink: ((event: BridgeEvent) => void) | null = null;
 
   constructor(adapter: DaemonAdapterKind, cwd: string, command: string) {
-    this.state = { kind: adapter, status: "idle", cwd, command };
+    this.state = {
+      kind: adapter,
+      status: "idle",
+      cwd,
+      command,
+      // A visible Codex client reports its thread, so ensureSlot does not wait.
+      ...(adapter === "codex"
+        ? { sharedThreadId: "thread-visible", lastThreadSwitchSource: "local" as const }
+        : {}),
+    };
   }
 
   emit(event: BridgeEvent): void {
@@ -95,7 +106,9 @@ class FakeRuntime implements BridgeAdapter {
 
   async reset(): Promise<void> {}
 
-  async resolveApproval(): Promise<boolean> {
+  async resolveApproval(action: "confirm" | "deny"): Promise<boolean> {
+    this.approvals.push(action);
+    this.state = { ...this.state, pendingApproval: null, status: "busy" };
     return true;
   }
 
@@ -103,7 +116,9 @@ class FakeRuntime implements BridgeAdapter {
     return 0;
   }
 
-  async submitUserInput(): Promise<boolean> {
+  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+    this.answers.push(answers);
+    this.state = { ...this.state, pendingUserInput: null, status: "busy" };
     return true;
   }
 
@@ -140,6 +155,15 @@ class Env {
       channelId: "wechat",
       deps: this.deps,
     });
+  }
+
+  runtimeIn(cwd: string, adapter: DaemonAdapterKind): FakeRuntime {
+    const runtime = this.created.find((entry) =>
+      entry.state.cwd === cwd && entry.state.kind === adapter);
+    if (!runtime) {
+      throw new Error(`no ${adapter} runtime in ${cwd}`);
+    }
+    return runtime;
   }
 
   latest(): FakeRuntime {
@@ -246,10 +270,223 @@ describe("daemon behaviors kept after the standalone merge", () => {
   });
 });
 
+const OTHER_CWD = "/tmp/other-app";
+
+async function openWorkspaceSlot(
+  daemon: WechatDaemon,
+  cwd: string,
+  adapter: DaemonAdapterKind,
+): Promise<void> {
+  await daemon.handleDaemonRequest({ command: "ensure_slot", adapter, cwd });
+}
+
+const approvalRequest = {
+  source: "cli" as const,
+  summary: "Delete the build directory?",
+  commandPreview: "rm -rf build",
+  requestId: "approval-1",
+};
+
+const questionRequest = {
+  requestId: "question-1",
+  summary: "Which environment?",
+  questions: [
+    { id: "env", header: "Environment", question: "Which environment?", isOther: true, isSecret: false },
+  ],
+};
+
+describe("multi-directory daemon", () => {
+  test("a launcher in another directory adds a slot there and announces it", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    env.wechat.sent.length = 0;
+
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+
+    expect(env.runtimeIn(OTHER_CWD, "codex")).toBeDefined();
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("claude");
+    expect(env.texts().at(-1)).toContain("other-app/codex");
+    expect(env.texts().at(-1)).toContain("/cd other-app");
+  });
+
+  test("/cd lists directories and switches by number or name", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    env.wechat.sent.length = 0;
+
+    await send(daemon, "/cd");
+    expect(env.texts().at(-1)).toContain("1. daemon-parity (claude) ← current");
+    expect(env.texts().at(-1)).toContain("2. other-app (codex)");
+
+    await send(daemon, "/cd 2");
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("codex");
+
+    await send(daemon, "/cd daemon-parity");
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("claude");
+  });
+
+  test("/cd refuses directories that are not open on this computer", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+
+    await send(daemon, "/cd /etc");
+
+    expect(env.texts().at(-1)).toContain("No directory matches /etc");
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    expect(env.created).toHaveLength(1);
+  });
+
+  test("/cd asks for a number when two directories share a name", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await openWorkspaceSlot(daemon, "/tmp/a/app", "claude");
+    await openWorkspaceSlot(daemon, "/tmp/b/app", "claude");
+
+    await send(daemon, "/cd app");
+
+    expect(env.texts().at(-1)).toContain("Several directories are named app");
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+  });
+
+  test("output from another directory is prefixed with [directory/adapter]", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    env.wechat.sent.length = 0;
+
+    env.runtimeIn(OTHER_CWD, "codex").emit(event("final_reply", { text: "Build finished." }));
+    env.runtimeIn(TEST_CWD, "claude").emit(event("final_reply", { text: "Tests pass." }));
+    await tick(20);
+
+    expect(env.texts()).toEqual(["[other-app/codex]\nBuild finished.", "[claude]\nTests pass."]);
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+  });
+
+  test("/confirm lists a request waiting in another directory and /confirm <n> resolves it", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    const codex = env.runtimeIn(OTHER_CWD, "codex");
+    codex.state = { ...codex.state, pendingApproval: approvalRequest, status: "awaiting_approval" };
+    codex.emit(event("approval_required", { request: approvalRequest }));
+    await tick(20);
+    env.wechat.sent.length = 0;
+
+    await send(daemon, "/confirm");
+    expect(codex.approvals).toEqual([]);
+    expect(env.texts().at(-1)).toContain("1. other-app/codex: rm -rf build");
+
+    await send(daemon, "/confirm 2");
+    expect(env.texts().at(-1)).toContain("no pending approval numbered 2");
+
+    await send(daemon, "/confirm 1");
+    expect(codex.approvals).toEqual(["confirm"]);
+    expect(env.texts().at(-1)).toContain("[other-app/codex]");
+  });
+
+  test("a legacy six-digit approval code still confirms the current request", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    const claude = env.latest();
+    claude.state = { ...claude.state, pendingApproval: approvalRequest, status: "awaiting_approval" };
+    claude.emit(event("approval_required", { request: approvalRequest }));
+    await tick(20);
+
+    await send(daemon, "/confirm 123456");
+
+    expect(claude.approvals).toEqual(["confirm"]);
+  });
+
+  test("/answer #<n> answers a question waiting in another directory", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/codex");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "claude");
+    const claude = env.runtimeIn(OTHER_CWD, "claude");
+    claude.state = { ...claude.state, pendingUserInput: questionRequest, status: "awaiting_input" };
+    claude.emit(event("user_input_required", { request: questionRequest }));
+    await tick(20);
+    env.wechat.sent.length = 0;
+
+    await send(daemon, "/answer staging");
+    expect(claude.answers).toEqual([]);
+    expect(env.texts().at(-1)).toContain("#1 other-app/claude: Which environment?");
+
+    await send(daemon, "/answer #1 staging");
+    expect(claude.answers).toEqual([{ env: ["staging"] }]);
+  });
+
+  test("approvals elsewhere can be resolved even with no current terminal", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    const codex = env.runtimeIn(OTHER_CWD, "codex");
+    codex.state = { ...codex.state, pendingApproval: approvalRequest, status: "awaiting_approval" };
+    codex.emit(event("approval_required", { request: approvalRequest }));
+    await tick(20);
+
+    await send(daemon, "/deny 1");
+
+    expect(codex.approvals).toEqual(["deny"]);
+  });
+
+  test("/all only reaches the current directory", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "claude");
+
+    await send(daemon, "/all compare the two plans");
+
+    expect(env.runtimeIn(TEST_CWD, "claude").inputs.at(-1)).toContain("compare the two plans");
+    expect(env.runtimeIn(OTHER_CWD, "claude").inputs).toHaveLength(0);
+  });
+
+  test("a directory disappears after its last slot dies and the current one falls back", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    await send(daemon, "/cd other-app");
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+
+    env.runtimeIn(OTHER_CWD, "codex").emit(event("fatal_error", { message: "codex exited" }));
+    await tick(20);
+
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    expect(daemon.getStatus().workspaces).toBeUndefined();
+  });
+
+  test("queues WeChat input during a local Codex turn and drains it afterwards", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/codex");
+    const codex = env.latest();
+    codex.state = { ...codex.state, status: "busy", activeTurnOrigin: "local", activeTurnId: "local-1" };
+    env.wechat.sent.length = 0;
+
+    await send(daemon, "also update the README");
+    expect(codex.inputs).toHaveLength(0);
+    expect(env.texts().at(-1)).toContain("[codex]");
+
+    codex.state = { ...codex.state, status: "idle", activeTurnOrigin: undefined, activeTurnId: undefined };
+    codex.emit(event("task_complete", {}));
+    await tick(20);
+
+    expect(codex.inputs.at(-1)).toContain("also update the README");
+  });
+});
+
 describe("daemon behaviors the standalone merge still has to change", () => {
-  test.todo("queues WeChat input during a local Codex turn and drains it afterwards");
   test.todo("persists per-slot session state so --session-start-mode restore resumes it");
   test.todo("disposes a companion-bound slot on shutdown_requested and exits an ephemeral daemon with no slots left");
-  test.todo("/confirm <n> and /deny <n> resolve a pending request outside the current directory");
-  test.todo("prefixes output from a non-current directory with [directory/adapter]");
 });

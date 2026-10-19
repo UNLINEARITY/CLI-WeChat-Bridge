@@ -22,7 +22,7 @@ import {
   readLocalCompanionEndpoint,
 } from "../companion/local-companion-link.ts";
 import type { DaemonAdapterKind } from "./daemon-link.ts";
-import { log } from "./daemon-shared.ts";
+import { DAEMON_ADAPTERS, log } from "./daemon-shared.ts";
 import { defaultDaemonSessionStartMode, resolveDaemonSessionStartMode } from "./daemon-commands.ts";
 import {
   VISIBLE_CLIENT_CONNECT_TIMEOUT_MS,
@@ -37,9 +37,12 @@ import {
 import {
   type ActiveTask,
   type DaemonSlot,
-  prefixDaemonAdapterMessage,
   type EnsureSlotOptions,
   type EnsureSlotResult,
+  isSameWorkspace,
+  prefixSourceMessage,
+  workspaceKeyOf,
+  workspaceLabels,
 } from "./daemon-slot.ts";
 
 export type SlotManagerHost = {
@@ -62,12 +65,23 @@ export type SlotManagerHost = {
   daemonLog: (message: string) => void;
 };
 
-/** Owns the daemon's adapter slots, the active adapter, and per-slot serialization. */
+function slotKey(cwd: string, adapter: DaemonAdapterKind): string {
+  return `${workspaceKeyOf(cwd)}\n${adapter}`;
+}
+
+/**
+ * Owns the daemon's adapter slots across workspaces, the current workspace
+ * and adapter, and per-slot serialization. Slots are keyed by workspace and
+ * adapter, so the same adapter can run in several project directories.
+ */
 export class SlotManager {
-  readonly slots = new Map<DaemonAdapterKind, DaemonSlot>();
-  // Per-adapter serialization chains for ensureSlot (see ensureSlot comment).
-  private readonly slotEnsureChains = new Map<DaemonAdapterKind, Promise<unknown>>();
-  private readonly slotInputChains = new Map<DaemonAdapterKind, Promise<unknown>>();
+  private readonly slotMap = new Map<string, DaemonSlot>();
+  // Per-slot serialization chains for ensureSlot (see ensureSlot comment).
+  private readonly slotEnsureChains = new Map<string, Promise<unknown>>();
+  private readonly slotInputChains = new Map<string, Promise<unknown>>();
+  /** Workspaces that stay listed even without slots (startup, wechat-daemon). */
+  private readonly registeredWorkspaces: string[] = [];
+  private currentCwd: string;
   activeAdapter: DaemonAdapterKind | null = null;
   private activeAdapterVersion = 0;
   takenOverAdapter?: DaemonAdapterKind;
@@ -75,6 +89,87 @@ export class SlotManager {
 
   constructor(host: SlotManagerHost) {
     this.host = host;
+    this.currentCwd = host.cwd;
+    this.registeredWorkspaces.push(host.cwd);
+  }
+
+  /** Current workspace; falls back to the startup workspace once it is gone. */
+  get activeCwd(): string {
+    if (!this.hasWorkspace(this.currentCwd)) {
+      this.currentCwd = this.host.cwd;
+      this.activeAdapter = null;
+    }
+    return this.currentCwd;
+  }
+
+  allSlots(): DaemonSlot[] {
+    return Array.from(this.slotMap.values());
+  }
+
+  getSlot(cwd: string, adapter: DaemonAdapterKind): DaemonSlot | undefined {
+    return this.slotMap.get(slotKey(cwd, adapter));
+  }
+
+  /** Slots of one workspace in canonical adapter order. */
+  slotsIn(cwd: string): DaemonSlot[] {
+    return DAEMON_ADAPTERS
+      .map((adapter) => this.getSlot(cwd, adapter))
+      .filter((slot): slot is DaemonSlot => Boolean(slot));
+  }
+
+  /** Listed workspaces: registered ones first, then any with a live slot. */
+  workspaces(): string[] {
+    const listed: string[] = [];
+    for (const cwd of [...this.registeredWorkspaces, ...this.allSlots().map((slot) => slot.cwd)]) {
+      if (!listed.some((existing) => isSameWorkspace(existing, cwd))) {
+        listed.push(cwd);
+      }
+    }
+    return listed;
+  }
+
+  hasWorkspace(cwd: string): boolean {
+    return this.workspaces().some((existing) => isSameWorkspace(existing, cwd));
+  }
+
+  registerWorkspace(cwd: string): void {
+    if (!this.registeredWorkspaces.some((existing) => isSameWorkspace(existing, cwd))) {
+      this.registeredWorkspaces.push(cwd);
+    }
+  }
+
+  isActiveWorkspace(cwd: string): boolean {
+    return isSameWorkspace(cwd, this.activeCwd);
+  }
+
+  workspaceLabel(cwd: string): string {
+    const listed = this.workspaces();
+    const match = listed.find((existing) => isSameWorkspace(existing, cwd));
+    return workspaceLabels(match ? listed : [...listed, cwd]).get(match ?? cwd) ?? cwd;
+  }
+
+  /** `[adapter]` for the current workspace, `[workspace/adapter]` otherwise. */
+  prefix(slot: DaemonSlot, text: string): string {
+    const source = this.isActiveWorkspace(slot.cwd)
+      ? slot.adapter
+      : `${this.workspaceLabel(slot.cwd)}/${slot.adapter}`;
+    return prefixSourceMessage(source, text);
+  }
+
+  /**
+   * Make another listed workspace current. Keeps the same adapter when that
+   * workspace runs it, otherwise picks its first running slot.
+   */
+  switchWorkspace(cwd: string): DaemonSlot | null {
+    const target = this.workspaces().find((existing) => isSameWorkspace(existing, cwd)) ?? cwd;
+    const previousSlot = this.getActiveSlot();
+    this.currentCwd = target;
+    const sameAdapter = this.activeAdapter ? this.getSlot(target, this.activeAdapter) : undefined;
+    const next = sameAdapter ?? this.slotsIn(target)[0] ?? null;
+    if (previousSlot && previousSlot !== next) invalidateModelSnapshot(previousSlot.runtime);
+    this.activeAdapter = next?.adapter ?? null;
+    this.activeAdapterVersion += 1;
+    return next;
   }
 
   /**
@@ -85,14 +180,15 @@ export class SlotManager {
    * the next switch directive (/codex etc.) rebuilds the adapter from scratch.
    */
   disposeDeadSlot(slot: DaemonSlot): void {
-    if (this.slots.get(slot.adapter) !== slot) {
+    const key = slotKey(slot.cwd, slot.adapter);
+    if (this.slotMap.get(key) !== slot) {
       return; // Already replaced by a newer ensureSlot run.
     }
-    this.slots.delete(slot.adapter);
-    if (this.activeAdapter === slot.adapter) {
+    this.slotMap.delete(key);
+    if (this.activeAdapter === slot.adapter && isSameWorkspace(slot.cwd, this.currentCwd)) {
       this.activeAdapter = null;
     }
-    this.host.daemonLog(`dead_slot_disposed: adapter=${slot.adapter}`);
+    this.host.daemonLog(`dead_slot_disposed: adapter=${slot.adapter} cwd=${slot.cwd}`);
     void (async () => {
       try {
         await slot.runtime.dispose();
@@ -107,17 +203,20 @@ export class SlotManager {
     adapter: DaemonAdapterKind,
     activationVersion: number,
     previousActiveAdapter: DaemonAdapterKind | null,
+    previousActiveCwd: string = this.currentCwd,
   ): void {
     if (this.activeAdapter === adapter && this.activeAdapterVersion === activationVersion) {
       this.activeAdapter = previousActiveAdapter;
+      this.currentCwd = previousActiveCwd;
       this.activeAdapterVersion += 1;
     }
   }
 
   serializeSlotInput<T>(slot: DaemonSlot, task: () => Promise<T>): Promise<T> {
-    const tail = this.slotInputChains.get(slot.adapter) ?? Promise.resolve();
+    const key = slotKey(slot.cwd, slot.adapter);
+    const tail = this.slotInputChains.get(key) ?? Promise.resolve();
     const run = tail.then(task, task);
-    this.slotInputChains.set(slot.adapter, run.then(() => undefined, () => undefined));
+    this.slotInputChains.set(key, run.then(() => undefined, () => undefined));
     return run;
   }
 
@@ -125,19 +224,21 @@ export class SlotManager {
     adapter: DaemonAdapterKind,
     options: EnsureSlotOptions = {},
   ): Promise<EnsureSlotResult> {
-    // Serialize per-adapter ensureSlot runs. The IPC handler, the WeChat poll
+    // Serialize ensureSlot runs per workspace and adapter. The IPC handler, the WeChat poll
     // loop, and startup can all call this concurrently; without serialization
     // two callers would both observe an empty slot map, create two runtimes,
     // and the second slots.set would orphan the first (duplicate PTY child,
     // double visible client, endpoint files overwriting each other).
-    const tail = this.slotEnsureChains.get(adapter) ?? Promise.resolve();
+    const cwd = options.cwd ?? this.activeCwd;
+    const key = slotKey(cwd, adapter);
+    const tail = this.slotEnsureChains.get(key) ?? Promise.resolve();
     const run = tail.then(
-      () => this.runEnsureSlot(adapter, options),
+      () => this.runEnsureSlot(adapter, cwd, options),
       // A rejected predecessor must not block this run — start fresh either way.
-      () => this.runEnsureSlot(adapter, options),
+      () => this.runEnsureSlot(adapter, cwd, options),
     );
     this.slotEnsureChains.set(
-      adapter,
+      key,
       run.then(
         () => undefined,
         () => undefined,
@@ -148,28 +249,31 @@ export class SlotManager {
 
   private async runEnsureSlot(
     adapter: DaemonAdapterKind,
+    cwd: string,
     options: EnsureSlotOptions = {},
   ): Promise<EnsureSlotResult> {
     const previousActiveAdapter = this.activeAdapter ?? undefined;
-    let slot = this.slots.get(adapter);
+    const previousActiveCwd = this.activeCwd;
+    let slot = this.getSlot(cwd, adapter);
     let created = false;
     if (!slot) {
+      const takenOver = adapter === this.takenOverAdapter && isSameWorkspace(cwd, this.host.cwd);
       const createSessionStartMode =
         options.sessionStartMode ??
-        (adapter === this.takenOverAdapter ? "restore" : defaultDaemonSessionStartMode(adapter));
-      if (adapter === this.takenOverAdapter) {
+        (takenOver ? "restore" : defaultDaemonSessionStartMode(adapter));
+      if (takenOver) {
         this.takenOverAdapter = undefined;
       }
-      slot = await this.createSlot(adapter, {
+      slot = await this.createSlot(adapter, cwd, {
         profile: options.profile ?? this.host.profile,
         sessionStartMode: createSessionStartMode,
       });
-      this.slots.set(adapter, slot);
+      this.slotMap.set(slotKey(cwd, adapter), slot);
       created = true;
     }
 
     let openedVisible = false;
-    const visibleEndpointBeforeProbe = readLocalCompanionEndpoint(this.host.cwd, {
+    const visibleEndpointBeforeProbe = readLocalCompanionEndpoint(cwd, {
       adapter,
     });
     const hadVisibleClient = Boolean(
@@ -178,7 +282,7 @@ export class SlotManager {
         visibleEndpointBeforeProbe?.sharedThreadId ||
         visibleEndpointBeforeProbe?.sharedSessionId,
     );
-    let visibleConnected = this.host.isVisibleClientAlive(this.host.cwd, adapter);
+    let visibleConnected = this.host.isVisibleClientAlive(cwd, adapter);
     if (
       shouldRestartDeadCodexVisibleRuntime({
         adapter,
@@ -189,7 +293,7 @@ export class SlotManager {
     ) {
       await this.startFreshSlotSession(slot);
       this.host.daemonLog(
-        `dead_visible_codex_runtime_restarted: cwd=${this.host.cwd}`,
+        `dead_visible_codex_runtime_restarted: cwd=${cwd}`,
       );
     }
     const sharedSessionBeforeVisible = getSharedSessionIdFromAdapterState(
@@ -221,7 +325,7 @@ export class SlotManager {
       slot.controller.syncLocalClientEndpoint();
       const launch = this.host.openVisibleClient({
         adapter,
-        cwd: this.host.cwd,
+        cwd: cwd,
         // A freshly prepared blank thread is semantically a new session, but
         // the visible client must resume its id from the endpoint instead of
         // creating a second thread of its own.
@@ -236,24 +340,24 @@ export class SlotManager {
       });
       openedVisible = true;
       this.host.daemonLog(
-        `visible_client_open_attempt: adapter=${adapter} cwd=${this.host.cwd} pid=${launch.pid ?? "unknown"} command=${truncatePreview(formatLaunchPreview(launch), 400)}`,
+        `visible_client_open_attempt: adapter=${adapter} cwd=${cwd} pid=${launch.pid ?? "unknown"} command=${truncatePreview(formatLaunchPreview(launch), 400)}`,
       );
       visibleConnected = await waitForVisibleClientConnection({
-        cwd: this.host.cwd,
+        cwd: cwd,
         adapter,
         timeoutMs: this.host.visibleClientConnectTimeoutMs,
       }, {
         isAlive: (cwd, adapter) => this.host.isVisibleClientAlive(cwd, adapter),
       });
       if (visibleConnected) {
-        this.host.daemonLog(`visible_client_connected: adapter=${adapter} cwd=${this.host.cwd}`);
+        this.host.daemonLog(`visible_client_connected: adapter=${adapter} cwd=${cwd}`);
       } else {
         log(
           `${adapter} visible CLI did not connect within ${formatDuration(visibleClientTimeoutMs)}. Check ${BRIDGE_LOG_FILE}.`,
         );
         const cleanedLauncher = cleanupVisibleClientLauncher(launch);
         this.host.daemonLog(
-          `visible_client_connect_timeout: adapter=${adapter} cwd=${this.host.cwd} timeout_ms=${visibleClientTimeoutMs} cleaned_launcher=${cleanedLauncher}`,
+          `visible_client_connect_timeout: adapter=${adapter} cwd=${cwd} timeout_ms=${visibleClientTimeoutMs} cleaned_launcher=${cleanedLauncher}`,
         );
       }
     }
@@ -272,28 +376,30 @@ export class SlotManager {
       visibleReady = Boolean(visibleThreadId);
       if (visibleThreadId) {
         this.host.daemonLog(
-          `visible_codex_thread_ready: thread=${visibleThreadId} cwd=${this.host.cwd}`,
+          `visible_codex_thread_ready: thread=${visibleThreadId} cwd=${cwd}`,
         );
       } else {
         this.host.daemonLog(
-          `visible_codex_thread_timeout: cwd=${this.host.cwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS}`,
+          `visible_codex_thread_timeout: cwd=${cwd} timeout_ms=${VISIBLE_CLIENT_CONNECT_TIMEOUT_MS}`,
         );
       }
     }
 
     const activated = options.openVisible === false || (visibleConnected && visibleReady);
-    if (activated) {
+    if (activated && options.activate !== false) {
       const previousSlot = this.getActiveSlot();
-      if (previousSlot && this.activeAdapter !== adapter) invalidateModelSnapshot(previousSlot.runtime);
+      if (previousSlot && previousSlot !== slot) invalidateModelSnapshot(previousSlot.runtime);
+      this.currentCwd = cwd;
       this.activeAdapter = adapter;
       this.activeAdapterVersion += 1;
     }
 
     this.host.daemonLog(
-      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} visible_ready=${visibleReady} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} session_start_mode=${sessionStartMode}`,
+      `switch_adapter: adapter=${adapter} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} visible_ready=${visibleReady} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} cwd=${cwd} session_start_mode=${sessionStartMode}`,
     );
     return {
       activeAdapter: adapter,
+      cwd,
       created,
       openedVisible,
       visibleConnected,
@@ -301,32 +407,35 @@ export class SlotManager {
       activated,
       activationVersion: this.activeAdapterVersion,
       previousActiveAdapter,
+      previousActiveCwd,
     };
   }
 
   private async createSlot(
     adapter: DaemonAdapterKind,
+    cwd: string,
     options: { profile?: string; sessionStartMode?: BridgeSessionStartMode },
   ): Promise<DaemonSlot> {
-    clearLocalCompanionEndpoint(this.host.cwd, undefined, { adapter });
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter });
     const runtime = this.host.createRuntime({
       kind: adapter,
       command: resolveDefaultAdapterCommand(adapter),
-      cwd: this.host.cwd,
+      cwd: cwd,
       profile: options.profile,
       lifecycle: "persistent",
       sessionStartMode: options.sessionStartMode,
       companionLaunchMode: "daemon_auto",
     });
-    const controller = new BridgeController(runtime, this.host.cwd);
+    const controller = new BridgeController(runtime, cwd);
     const slot: DaemonSlot = {
       adapter,
+      cwd,
       runtime,
       controller,
       outputBatcher: new OutputBatcher(async (text) => {
         await this.host.queueMessage(
           this.host.operatorId,
-          prefixDaemonAdapterMessage(adapter, text),
+          this.prefix(slot, text),
           "message",
           this.host.resolveSlotOutputTarget(slot),
         );
@@ -353,7 +462,7 @@ export class SlotManager {
     await runtime.start();
     controller.syncLocalClientEndpoint();
     this.host.daemonLog(
-      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${this.host.cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
+      `slot_started: adapter=${adapter} command=${resolveDefaultAdapterCommand(adapter)} cwd=${cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
     return slot;
   }
@@ -378,9 +487,17 @@ export class SlotManager {
   }
 
   getActiveSlot(): DaemonSlot | null {
+    const cwd = this.activeCwd;
     if (!this.activeAdapter) {
       return null;
     }
-    return this.slots.get(this.activeAdapter) ?? null;
+    return this.getSlot(cwd, this.activeAdapter) ?? null;
+  }
+
+  /** Remove every slot (shutdown); returns the removed slots. */
+  clear(): DaemonSlot[] {
+    const removed = this.allSlots();
+    this.slotMap.clear();
+    return removed;
   }
 }

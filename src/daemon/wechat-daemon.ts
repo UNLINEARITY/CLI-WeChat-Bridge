@@ -69,7 +69,6 @@ import {
   logError,
   appendDaemonLog,
   isDaemonAdapterKind,
-  isSameWorkspaceCwd,
 } from "./daemon-shared.ts";
 import { type DaemonCliOptions, parseDaemonCliArgs } from "./daemon-commands.ts";
 import {
@@ -78,7 +77,7 @@ import {
   isVisibleClientAlive,
 } from "./visible-client-launcher.ts";
 import { cleanupDaemonBeforeStart, cleanupSingleBridgeBeforeDaemon } from "./daemon-cleanup.ts";
-import type { DaemonSlot } from "./daemon-slot.ts";
+import type { DaemonSlot, EnsureSlotResult } from "./daemon-slot.ts";
 import { handleSlotEvent, type SlotEventHost } from "./slot-event-forwarder.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
 import { SlotManager } from "./slot-manager.ts";
@@ -256,6 +255,7 @@ export class WechatDaemon {
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       maybeDrainDeferredInputs: (slot) => this.inbound.maybeDrainDeferredInputs(slot),
       disposeDeadSlot: (slot) => this.slotManager.disposeDeadSlot(slot),
+      prefix: (slot, text) => this.slotManager.prefix(slot, text),
       daemonLog: (message) => this.daemonLog(message),
     };
     this.slotManager = new SlotManager({
@@ -276,7 +276,7 @@ export class WechatDaemon {
     this.controls = new DaemonControlCommands({
       driver: this.channelDriver,
       localeSettingsFile: this.deps.localeSettingsFile,
-      slots: () => this.slotManager.slots,
+      slotManager: this.slotManager,
       queueMessage: (senderId, text, context, targetOverride) =>
         this.queueWechatMessage(senderId, text, context, targetOverride),
       getStatus: () => this.getStatus(),
@@ -300,9 +300,10 @@ export class WechatDaemon {
     });
   }
 
-  /** Slot map, exposed for tests. */
+  /** Slots of the current workspace keyed by adapter, exposed for tests. */
   get slots(): Map<DaemonAdapterKind, DaemonSlot> {
-    return this.slotManager.slots;
+    const cwd = this.slotManager.activeCwd;
+    return new Map(this.slotManager.slotsIn(cwd).map((slot) => [slot.adapter, slot]));
   }
 
   set takenOverAdapter(adapter: DaemonAdapterKind | undefined) {
@@ -335,19 +336,22 @@ export class WechatDaemon {
   }
 
   getStatus(): DaemonStatus {
+    const slots = this.slotManager;
+    const workspaces = slots.workspaces();
     return {
-      cwd: this.cwd,
+      cwd: slots.activeCwd,
       channelId: this.channelId,
-      activeAdapter: this.slotManager.activeAdapter ?? undefined,
+      activeAdapter: slots.activeAdapter ?? undefined,
       startedAt: this.startedAt,
-      slots: Array.from(this.slotManager.slots.values()).map((slot): DaemonSlotSummary => {
-        const endpoint = readLocalCompanionEndpoint(this.cwd, {
+      ...(workspaces.length > 1 ? { workspaces } : {}),
+      slots: workspaces.flatMap((cwd) => slots.slotsIn(cwd)).map((slot): DaemonSlotSummary => {
+        const endpoint = readLocalCompanionEndpoint(slot.cwd, {
           adapter: slot.adapter,
         });
         return {
           adapter: slot.adapter,
           status: slot.runtime.getState().status,
-          cwd: this.cwd,
+          cwd: slot.cwd,
           companionPid: endpoint?.companionPid,
           pendingApproval: slot.pendingConfirmations.length > 0,
           pendingUserInput: Boolean(slot.pendingUserInput),
@@ -541,7 +545,7 @@ export class WechatDaemon {
     }
     clearDaemonEndpoint();
 
-    for (const slot of this.slotManager.slots.values()) {
+    for (const slot of this.slotManager.allSlots()) {
       try {
         await slot.outputBatcher.flushNow();
       } catch {
@@ -550,7 +554,7 @@ export class WechatDaemon {
     }
     await this.outbound.waitForForwardTasks();
     await this.outbound.drainSendChains();
-    for (const slot of this.slotManager.slots.values()) {
+    for (const slot of this.slotManager.clear()) {
       try {
         await slot.runtime.dispose();
       } catch {
@@ -558,7 +562,6 @@ export class WechatDaemon {
       }
       slot.controller.clearLocalClientEndpoint();
     }
-    this.slotManager.slots.clear();
 
     await this.ipcServer.close();
     clearDaemonEndpoint();
@@ -575,18 +578,7 @@ export class WechatDaemon {
         }, 0);
         return { shuttingDown: true };
       case "ensure_slot":
-        if (!isSameWorkspaceCwd(request.cwd, this.cwd)) {
-          throw new Error(
-            `${this.channelId}-daemon is bound to ${this.cwd}; requested cwd was ${request.cwd}.`,
-          );
-        }
-        return await this.slotManager.ensureSlot(request.adapter, {
-          profile: request.profile,
-          cliArgs: request.cliArgs,
-          openVisible: request.openVisible ?? true,
-          sessionStartMode: request.sessionStartMode,
-          reuseExistingVisible: request.reuseExistingVisible ?? true,
-        });
+        return await this.ensureWorkspaceSlot(request);
       case "switch_adapter":
         return await this.slotManager.ensureSlot(request.adapter, {
           profile: request.profile,
@@ -639,13 +631,44 @@ export class WechatDaemon {
     };
   }
 
+  /**
+   * A launcher asked for a slot. The current workspace switches to it like
+   * before; another workspace gets its slot without moving the channel, and
+   * the operator is told how to switch there.
+   */
+  private async ensureWorkspaceSlot(
+    request: Extract<DaemonRequest, { command: "ensure_slot" }>,
+  ): Promise<EnsureSlotResult> {
+    const slots = this.slotManager;
+    const activate = slots.isActiveWorkspace(request.cwd);
+    const known = slots.hasWorkspace(request.cwd);
+    const result = await slots.ensureSlot(request.adapter, {
+      cwd: request.cwd,
+      activate,
+      profile: request.profile,
+      cliArgs: request.cliArgs,
+      openVisible: request.openVisible ?? true,
+      sessionStartMode: request.sessionStartMode,
+      reuseExistingVisible: request.reuseExistingVisible ?? true,
+    });
+    if (!activate && result.created) {
+      const label = slots.workspaceLabel(request.cwd);
+      this.daemonLog(`workspace_slot_started: cwd=${request.cwd} adapter=${request.adapter} new_workspace=${!known}`);
+      await this.queueWechatMessage(
+        this.authorizedUserId,
+        t("daemon.workspace.connected", { label, adapter: request.adapter }),
+      );
+    }
+    return result;
+  }
+
   getSlotState(adapter: DaemonAdapterKind): {
     active: boolean;
     hasActiveTask: boolean;
     activeConversationId?: string;
     lastConversationId?: string;
   } | null {
-    const slot = this.slotManager.slots.get(adapter);
+    const slot = this.slotManager.getSlot(this.slotManager.activeCwd, adapter);
     if (!slot) return null;
     return {
       active: this.slotManager.activeAdapter === adapter,

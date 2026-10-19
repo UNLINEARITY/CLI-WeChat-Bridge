@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import path from "node:path";
 import { BridgeController } from "../bridge/bridge-controller.ts";
 import type {
   BridgeAdapter,
@@ -27,6 +28,8 @@ export type ActiveTask = {
 
 export type DaemonSlot = {
   adapter: DaemonAdapterKind;
+  /** Workspace directory this slot's CLI runs in. */
+  cwd: string;
   runtime: BridgeAdapter;
   controller: BridgeController;
   outputBatcher: OutputBatcher;
@@ -71,9 +74,10 @@ export function toPendingUserInput(request: UserInputRequest | PendingUserInputR
   };
 }
 
-export function prefixDaemonAdapterMessage(adapter: DaemonAdapterKind, text: string): string {
+/** Prefix a message with its source, e.g. `[claude]` or `[my-app/claude]`. */
+export function prefixSourceMessage(source: string, text: string): string {
   const trimmed = text.trim();
-  return trimmed ? `[${adapter}]\n${trimmed}` : `[${adapter}]`;
+  return trimmed ? `[${source}]\n${trimmed}` : `[${source}]`;
 }
 
 export function formatInboundMessagePreview(message: InboundWechatMessage): string {
@@ -96,10 +100,15 @@ export type EnsureSlotOptions = {
   openVisible?: boolean;
   sessionStartMode?: BridgeSessionStartMode;
   reuseExistingVisible?: boolean;
+  /** Workspace for the slot; defaults to the current workspace. */
+  cwd?: string;
+  /** Make the slot the current one once it is ready; defaults to true. */
+  activate?: boolean;
 };
 
 export type EnsureSlotResult = {
   activeAdapter: DaemonAdapterKind;
+  cwd: string;
   created: boolean;
   openedVisible: boolean;
   visibleConnected: boolean;
@@ -107,4 +116,41 @@ export type EnsureSlotResult = {
   activated: boolean;
   activationVersion: number;
   previousActiveAdapter?: DaemonAdapterKind;
+  previousActiveCwd: string;
 };
+
+/** Normalized identity of a workspace directory. */
+export function workspaceKeyOf(cwd: string): string {
+  const resolved = path.resolve(cwd);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+export function isSameWorkspace(left: string, right: string): boolean {
+  return workspaceKeyOf(left) === workspaceKeyOf(right);
+}
+
+/**
+ * Short, unambiguous display names for workspace directories: the directory
+ * name, widened with parent segments until no two workspaces collide.
+ */
+export function workspaceLabels(cwds: string[]): Map<string, string> {
+  const segmentsOf = (cwd: string) => path.resolve(cwd).split(/[\\/]+/).filter(Boolean);
+  const labels = new Map<string, string>();
+  const depth = new Map<string, number>(cwds.map((cwd) => [cwd, 1]));
+  for (let round = 0; round < 8; round += 1) {
+    const counts = new Map<string, number>();
+    for (const cwd of cwds) {
+      const label = segmentsOf(cwd).slice(-depth.get(cwd)!).join("/") || cwd;
+      labels.set(cwd, label);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    const colliding = cwds.filter((cwd) => (counts.get(labels.get(cwd)!) ?? 0) > 1);
+    if (colliding.length === 0) {
+      break;
+    }
+    for (const cwd of colliding) {
+      depth.set(cwd, depth.get(cwd)! + 1);
+    }
+  }
+  return labels;
+}

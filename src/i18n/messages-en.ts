@@ -98,7 +98,7 @@ export const messages: Record<string, string> = {
   "bridge.backlogIgnored": "Ignored {count} backlog message(s) sent before the bridge started (they will not be processed).\nIf you actually sent them after the bridge started, your system clock is likely skewed by more than {graceSeconds}s — sync the clock and restart the bridge.",
 
   // === Daemon welcome & control ===
-  "daemon.welcome": "{channel} Daemon ready.\nCWD: {cwd}\nActive: {adapter}\n\nCommands: /claude, /codex, /opencode, /pi, /stop, /confirm, /deny, /status, /lang [zh|en], /model, /plan, /all <prompt>\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
+  "daemon.welcome": "{channel} Daemon ready.\nCWD: {cwd}\nActive: {adapter}\n\nCommands: /claude, /codex, /opencode, /pi, /cd, /stop, /confirm, /deny, /status, /lang [zh|en], /model, /plan, /all <prompt>\n{bindings}\n\nManage: /bind [emoji] cmd, /unbind [emoji], /bindings",
   "daemon.noActiveAdapter": "No active terminal is selected. Send /codex, /claude, /opencode, or /pi to start one.",
   "daemon.switchResult.new": "Started a new visible CLI.",
   "daemon.switchResult.reused": "Reused the existing visible CLI.",
@@ -395,4 +395,19 @@ export const messages: Record<string, string> = {
   "native.claude.notConfirmed": "Claude did not confirm the selected model.",
   "native.claude.restoreUnsupported": "Claude cannot restore permission mode {mode} through the native mode switch.",
   "native.claude.restoreFailed": "Claude could not restore {mode}; check the native permission mode.",
+  "daemon.cd.list": "Directories:\n{list}\nSend /cd <number> or /cd <name> to switch.",
+  "daemon.cd.item": "{index}. {label} ({adapters}){current}",
+  "daemon.cd.current": " ← current",
+  "daemon.cd.none": "none started",
+  "daemon.cd.switched": "Switched to {label} ({cwd}).\nCurrent terminal: {adapter}",
+  "daemon.cd.notFound": "No directory matches {target}. Only directories opened on this computer can be selected.",
+  "daemon.cd.ambiguous": "Several directories are named {target}. Use the number instead.",
+  "daemon.workspace.connected": "{label}/{adapter} connected. Send /cd {label} to switch to it.",
+  "daemon.approval.item": "{index}. {source}: {summary}",
+  "daemon.approval.pendingElsewhere": "No approval is pending here. Other pending approvals:\n{list}\nSend /confirm <number> or /deny <number>.",
+  "daemon.approval.badIndex": "There is no pending approval numbered {index}.",
+  "daemon.answer.item": "#{index} {source}: {summary}",
+  "daemon.answer.pendingElsewhere": "No question is waiting here. Other waiting questions:\n{list}\nSend /answer #<number> <answer>.",
+  "daemon.answer.list": "Waiting questions:\n{list}\nAnswer the current one with /answer <answer>, others with /answer #<number> <answer>.",
+  "daemon.answer.badIndex": "There is no waiting question numbered #{index}.",
 };

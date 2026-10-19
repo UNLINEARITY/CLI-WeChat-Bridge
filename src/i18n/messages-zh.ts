@@ -98,7 +98,7 @@ export const messages: Record<string, string> = {
   "bridge.backlogIgnored": "已忽略 {count} 条桥接启动前的积压消息（不会自动处理）。\n如果你是在桥接启动后才发送的消息却看到此提示，说明本机系统时钟可能不准（偏差超过 {graceSeconds} 秒），请校准时间后重启桥接。",
 
   // === Daemon 欢迎 & 控制 ===
-  "daemon.welcome": "{channel} Daemon 就绪。\n工作目录: {cwd}\n当前: {adapter}\n\n命令: /claude, /codex, /opencode, /pi, /stop, /confirm, /deny, /status, /lang [zh|en], /model, /plan, /all <prompt>\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
+  "daemon.welcome": "{channel} Daemon 就绪。\n工作目录: {cwd}\n当前: {adapter}\n\n命令: /claude, /codex, /opencode, /pi, /cd, /stop, /confirm, /deny, /status, /lang [zh|en], /model, /plan, /all <prompt>\n{bindings}\n\n管理: /bind [表情] 命令, /unbind [表情], /bindings",
   "daemon.noActiveAdapter": "未选择活跃终端。发送 /codex、/claude、/opencode 或 /pi 启动一个。",
   "daemon.switchResult.new": "已启动新的可见 CLI。",
   "daemon.switchResult.reused": "已复用现有的可见 CLI。",
@@ -395,4 +395,19 @@ export const messages: Record<string, string> = {
   "native.claude.notConfirmed": "Claude 未确认选中的模型。",
   "native.claude.restoreUnsupported": "Claude 无法通过原生模式切换恢复权限模式 {mode}。",
   "native.claude.restoreFailed": "Claude 未能恢复 {mode}，请检查原生权限模式。",
+  "daemon.cd.list": "目录：\n{list}\n发送 /cd <编号> 或 /cd <目录名> 切换。",
+  "daemon.cd.item": "{index}. {label}（{adapters}）{current}",
+  "daemon.cd.current": " ← 当前",
+  "daemon.cd.none": "未启动",
+  "daemon.cd.switched": "已切换到 {label}（{cwd}）。\n当前终端：{adapter}",
+  "daemon.cd.notFound": "没有找到目录 {target}。只能切换到本机已打开的目录。",
+  "daemon.cd.ambiguous": "有多个目录叫 {target}，请改用编号。",
+  "daemon.workspace.connected": "{label}/{adapter} 已连接。发送 /cd {label} 切换到该目录。",
+  "daemon.approval.item": "{index}. {source}：{summary}",
+  "daemon.approval.pendingElsewhere": "当前没有待审批的请求。其他待审批的请求：\n{list}\n发送 /confirm <编号> 或 /deny <编号>。",
+  "daemon.approval.badIndex": "没有编号为 {index} 的待审批请求。",
+  "daemon.answer.item": "#{index} {source}：{summary}",
+  "daemon.answer.pendingElsewhere": "当前没有待回答的问题。其他待回答的问题：\n{list}\n发送 /answer #<编号> <回答>。",
+  "daemon.answer.list": "待回答的问题：\n{list}\n当前的问题直接发送 /answer <回答>，其他的发送 /answer #<编号> <回答>。",
+  "daemon.answer.badIndex": "没有编号为 #{index} 的待回答问题。",
 };

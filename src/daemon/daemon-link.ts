@@ -39,10 +39,13 @@ export type DaemonSlotSummary = {
 };
 
 export type DaemonStatus = {
+  /** Current workspace. */
   cwd: string;
   channelId?: BridgeChannelId;
   activeAdapter?: DaemonAdapterKind;
   startedAt: string;
+  /** Every listed workspace, present only when there is more than one. */
+  workspaces?: string[];
   slots: DaemonSlotSummary[];
 };
 

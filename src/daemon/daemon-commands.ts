@@ -12,6 +12,7 @@ import type { BridgeChannelId } from "../core/channel-types.ts";
 import { getBridgeChannelDisplayName, isBridgeChannelId } from "../core/channel-types.ts";
 import type { DaemonAdapterKind, DaemonStatus } from "./daemon-link.ts";
 import { DAEMON_ADAPTERS, isDaemonAdapterKind } from "./daemon-shared.ts";
+import { isSameWorkspace, workspaceLabels } from "./daemon-slot.ts";
 
 export type DaemonCliOptions = {
   cwd: string;
@@ -203,6 +204,15 @@ export function formatDaemonSwitchResultDetail(result: {
   return t(result.created ? "daemon.switch.slotStarted" : "daemon.switch.slotReused");
 }
 
+function formatSlotStatusLine(slot: DaemonStatus["slots"][number]): string {
+  const flags = [
+    slot.pendingApproval ? t("status.pendingApproval") : "",
+    slot.pendingUserInput ? t("status.pendingInput") : "",
+    slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
+  ].filter(Boolean);
+  return `${slot.adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`;
+}
+
 export function formatDaemonStatus(status: DaemonStatus): string {
   const lines = [
     t("status.daemon", { channel: status.channelId ?? "wechat" }),
@@ -211,18 +221,22 @@ export function formatDaemonStatus(status: DaemonStatus): string {
     `${t("status.label.started_at")}: ${status.startedAt}`,
   ];
 
+  const workspaces = status.workspaces ?? [status.cwd];
+  const current = status.slots.filter((slot) => isSameWorkspace(slot.cwd, status.cwd));
   for (const adapter of DAEMON_ADAPTERS) {
-    const slot = status.slots.find((entry) => entry.adapter === adapter);
-    if (!slot) {
-      lines.push(`${adapter}: ${t("status.notStarted")}`);
+    const slot = current.find((entry) => entry.adapter === adapter);
+    lines.push(slot ? formatSlotStatusLine(slot) : `${adapter}: ${t("status.notStarted")}`);
+  }
+
+  // Other workspaces list only their running slots.
+  const labels = workspaceLabels(workspaces);
+  for (const cwd of workspaces) {
+    if (isSameWorkspace(cwd, status.cwd)) {
       continue;
     }
-    const flags = [
-      slot.pendingApproval ? t("status.pendingApproval") : "",
-      slot.pendingUserInput ? t("status.pendingInput") : "",
-      slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
-    ].filter(Boolean);
-    lines.push(`${adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`);
+    const slots = status.slots.filter((slot) => isSameWorkspace(slot.cwd, cwd));
+    lines.push("", `[${labels.get(cwd) ?? cwd}] ${cwd}`);
+    lines.push(...(slots.length > 0 ? slots.map(formatSlotStatusLine) : [t("daemon.cd.none")]));
   }
 
   return lines.join("\n");

@@ -29,14 +29,12 @@ import type {
   ChannelConversationRef,
   ChannelOutputKind,
 } from "../core/channel-types.ts";
-import type { DaemonAdapterKind } from "./daemon-link.ts";
 import { log, logError } from "./daemon-shared.ts";
 import type { OutboundDispatcher } from "../core/outbound-dispatcher.ts";
 import {
   type DaemonSlot,
   toPendingApproval,
   toPendingUserInput,
-  prefixDaemonAdapterMessage,
 } from "./daemon-slot.ts";
 
 function toWechatSendContext(kind: ChannelOutputKind): WechatSendContext {
@@ -64,10 +62,13 @@ export type SlotEventHost = {
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;
   maybeDrainDeferredInputs: (slot: DaemonSlot) => Promise<void>;
   disposeDeadSlot: (slot: DaemonSlot) => void;
+  /** Source prefix for slot output (`[adapter]` or `[workspace/adapter]`). */
+  prefix: (slot: DaemonSlot, text: string) => string;
   daemonLog: (message: string) => void;
 };
 
-function createSlotChannelPort(host: SlotEventHost, adapter: DaemonAdapterKind): BridgeChannelPort {
+function createSlotChannelPort(host: SlotEventHost, slot: DaemonSlot): BridgeChannelPort {
+  const adapter = slot.adapter;
   return host.channel.createPort({
     sendTextToTarget: (target, text, kind) =>
       host.queueMessage(
@@ -79,8 +80,7 @@ function createSlotChannelPort(host: SlotEventHost, adapter: DaemonAdapterKind):
     sendTextToRecipient: (recipientId, text, context) =>
       host.queueMessage(recipientId, text, context as WechatSendContext),
     queueAttachment: (action) => host.outbound.queueAttachment(action),
-    prefixText: (currentAdapter, text) =>
-      prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
+    prefixText: (_currentAdapter, text) => host.prefix(slot, text),
     onEmptyVisibleReply: (currentAdapter, rawText) => {
       host.daemonLog(
         `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
@@ -98,7 +98,7 @@ function createSlotChannelPort(host: SlotEventHost, adapter: DaemonAdapterKind):
 export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: BridgeEvent): void {
   slot.controller.syncLocalClientEndpoint();
   const adapterState = slot.runtime.getState();
-  const channelPort = createSlotChannelPort(host, slot.adapter);
+  const channelPort = createSlotChannelPort(host, slot);
   const eventTarget = host.driver.capabilities.multiConversation
     ? host.resolveSlotOutputTarget(slot)
     : host.fallbackConversation;
@@ -156,7 +156,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       host.daemonLog(`${slot.adapter}_${next.level}_notice: ${truncatePreview(next.text)}`);
       if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, next.text), "notice", eventTarget);
+          await host.queueMessage(host.operatorId, host.prefix(slot, next.text), "notice", eventTarget);
         }));
       }
     },
@@ -169,7 +169,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
           slot.pendingConfirmations = [pending];
         }
         host.daemonLog(`approval_required: adapter=${slot.adapter} source=${pending.source} command=${truncatePreview(pending.commandPreview)}`);
-        await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatApprovalMessage(pending, liveState)), "approval_required", eventTarget);
+        await host.queueMessage(host.operatorId, host.prefix(slot, formatApprovalMessage(pending, liveState)), "approval_required", eventTarget);
         if (slot.runtime.getState().pendingApproval?.requestId === pending.requestId) {
           slot.displayedApprovalRequestId = pending.requestId;
         }
@@ -182,14 +182,14 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       host.daemonLog(`user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         if (pending.requestId !== undefined && slot.runtime.getState().pendingUserInput?.requestId !== pending.requestId) return;
-        await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatUserInputRequestMessage(pending, adapterState)), "user_input_required", eventTarget);
+        await host.queueMessage(host.operatorId, host.prefix(slot, formatUserInputRequestMessage(pending, adapterState)), "user_input_required", eventTarget);
       }));
     },
     mirroredUserInput: (next) => {
       host.daemonLog(`mirrored_local_input: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
       if (shouldForwardBridgeEventToWechat(slot.adapter, next.type, { text: next.text })) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatMirroredUserInputMessage(slot.adapter, next.text)), "mirrored_user_input", eventTarget);
+          await host.queueMessage(host.operatorId, host.prefix(slot, formatMirroredUserInputMessage(slot.adapter, next.text)), "mirrored_user_input", eventTarget);
         }));
       }
     },
@@ -198,7 +198,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       host.daemonLog(`session_switched: adapter=${slot.adapter} session=${next.sessionId} source=${next.source} reason=${next.reason}`);
       if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.sessionId, source: next.source, reason: next.reason })), "session_switched", eventTarget);
+          await host.queueMessage(host.operatorId, host.prefix(slot, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.sessionId, source: next.source, reason: next.reason })), "session_switched", eventTarget);
         }));
       }
     },
@@ -217,7 +217,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }
       if (shouldForwardSessionSwitchEvent(next.reason) && shouldForwardBridgeEventToWechat(slot.adapter, next.type)) {
         host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
-          await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.threadId, source: next.source, reason: next.reason })), "thread_switched", eventTarget);
+          await host.queueMessage(host.operatorId, host.prefix(slot, formatSessionSwitchMessage({ adapter: slot.adapter, sessionId: next.threadId, source: next.source, reason: next.reason })), "thread_switched", eventTarget);
         }));
       }
     },
@@ -241,7 +241,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
           slot.turns.complete(eventTask);
         }
         void host.maybeDrainDeferredInputs(slot);
-        await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatTaskFailedMessage(slot.adapter, next.message)), "task_failed", eventTarget);
+        await host.queueMessage(host.operatorId, host.prefix(slot, formatTaskFailedMessage(slot.adapter, next.message)), "task_failed", eventTarget);
       }));
     },
     fatalError: (next) => {
@@ -256,7 +256,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       void host.maybeDrainDeferredInputs(slot);
       host.disposeDeadSlot(slot);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
-        await host.queueMessage(host.operatorId, prefixDaemonAdapterMessage(slot.adapter, formatUserFacingBridgeFatalError(next.message)), "fatal_error", eventTarget);
+        await host.queueMessage(host.operatorId, host.prefix(slot, formatUserFacingBridgeFatalError(next.message)), "fatal_error", eventTarget);
       }));
     },
     shutdownRequested: (next) => {
