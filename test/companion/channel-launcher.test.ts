@@ -14,10 +14,8 @@ import {
   normalizeBridgeChannelId,
 } from "../../src/core/channel-types.ts";
 import {
-  buildBackgroundBridgeArgs,
   formatAttachedBridgeMessage,
   parseCliArgs,
-  resolveAttachedBridgeThreadId,
   claimDaemonSlot,
   connectToDaemon,
 } from "../../src/companion/local-companion-start.ts";
@@ -43,15 +41,6 @@ const lock: BridgeLockPayload = {
   lifecycle: "persistent",
   channelId: "telegram",
 };
-const state = {
-  instanceId: lock.instanceId,
-  adapter: lock.adapter,
-  cwd,
-  channelId: lock.channelId,
-  sharedThreadId: threadId,
-};
-const attachOptions = { cwd, channelId: "telegram" as const };
-
 describe("channel-aware companion launchers", () => {
   test("validates registered channels and preserves the legacy default", () => {
     for (const channelId of Object.keys(BRIDGE_CHANNEL_DISPLAY_NAMES)) {
@@ -68,19 +57,15 @@ describe("channel-aware companion launchers", () => {
   });
 
   for (const [channelId, displayName] of channels) {
-    test(`${channelId} attach forwards its channel and clears prior bridge session state`, () => {
+    test(`${channelId} attach keeps its channel and requested thread`, () => {
       const options = parseCliArgs([
         "--channel", channelId, "--attach-current-session",
         "--codex-thread-id", threadId, "--session-start-mode", "restore",
       ]);
       expect(options.channelId).toBe(channelId);
       expect(options.cliArgs).toEqual([]);
-      const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.js", options);
-      expect(args[args.indexOf("--channel") + 1]).toBe(channelId);
-      expect(args[args.indexOf("--lifecycle") + 1]).toBe("persistent");
-      expect(args[args.indexOf("--session-start-mode") + 1]).toBe("new");
-      expect(args).toContain("--codex-attach-daemon");
-      expect(args[args.indexOf("--codex-thread-id") + 1]).toBe(threadId);
+      expect(options.attachCurrentSession).toBe(true);
+      expect(options.codexThreadId).toBe(threadId);
       expect(formatAttachedBridgeMessage(options, threadId)).toContain(`${displayName} forwarding is active`);
     });
 
@@ -137,42 +122,5 @@ describe("channel-aware companion launchers", () => {
 
   test("omitted channel retains WeChat attach messages", () => {
     expect(formatAttachedBridgeMessage({ cwd }, threadId)).toContain("WeChat forwarding is active");
-  });
-});
-
-describe("attach readiness", () => {
-  test("accepts the active bridge instance, channel, workspace and explicit thread", () => {
-    expect(resolveAttachedBridgeThreadId(state, lock, attachOptions)).toBe(threadId);
-    expect(resolveAttachedBridgeThreadId(state, lock, { ...attachOptions, codexThreadId: threadId })).toBe(threadId);
-  });
-
-  test("rejects persisted state from the replaced bridge", () => {
-    expect(resolveAttachedBridgeThreadId({ ...state, instanceId: "previous-bridge" }, lock, attachOptions)).toBeNull();
-    expect(resolveAttachedBridgeThreadId(state, null, attachOptions)).toBeNull();
-  });
-
-  test("rejects state and locks belonging to another channel or workspace", () => {
-    for (const update of [
-      { channelId: "wechat" as const },
-      { cwd: path.resolve("./tmp/another-project") },
-      { adapter: "claude" as const },
-    ]) {
-      expect(resolveAttachedBridgeThreadId({ ...state, ...update }, lock, attachOptions)).toBeNull();
-      expect(resolveAttachedBridgeThreadId(state, { ...lock, ...update }, attachOptions)).toBeNull();
-    }
-  });
-
-  test("rejects incomplete state and an unexpected explicitly requested thread", () => {
-    for (const invalid of [null, {}, { ...state, sharedThreadId: "" }, { ...state, sharedThreadId: 42 }]) {
-      expect(resolveAttachedBridgeThreadId(invalid, lock, attachOptions)).toBeNull();
-    }
-    expect(resolveAttachedBridgeThreadId(state, lock, { ...attachOptions, codexThreadId: "another-thread" })).toBeNull();
-  });
-
-  test("legacy state without a channel id belongs only to WeChat", () => {
-    const legacyState = { ...state, channelId: undefined };
-    const legacyLock = { ...lock, channelId: undefined };
-    expect(resolveAttachedBridgeThreadId(legacyState, legacyLock, { cwd })).toBe(threadId);
-    expect(resolveAttachedBridgeThreadId(legacyState, legacyLock, attachOptions)).toBeNull();
   });
 });

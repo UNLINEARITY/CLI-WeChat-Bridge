@@ -37,6 +37,8 @@ export type DaemonSlot = {
   knownThreadId?: string;
   /** The slot ends when its visible window closes (launcher or ephemeral daemon). */
   boundToWindow: boolean;
+  /** Attached to a live Codex shared-daemon thread; the owning TUI keeps it. */
+  attached: boolean;
   /** When the slot was created (ms). */
   createdAtMs: number;
   /** A window has been seen connected for this slot. */
@@ -126,6 +128,8 @@ export type EnsureSlotOptions = {
   restrictToHome?: boolean;
   /** End the slot when its visible window closes. */
   boundToWindow?: boolean;
+  /** Codex only: attach to a live shared-daemon thread instead of a window. */
+  codexAttach?: { threadId?: string };
 };
 
 export type EnsureSlotResult = {
@@ -143,6 +147,8 @@ export type EnsureSlotResult = {
   outsideHome?: boolean;
   /** Refused: a launcher asked for a slot whose window is already open. */
   alreadyRunning?: boolean;
+  /** Thread the slot follows after the call (reported to attach launchers). */
+  sharedThreadId?: string;
 };
 
 /** Display name of a slot: `codex`, or `codex-2` for a second instance. */

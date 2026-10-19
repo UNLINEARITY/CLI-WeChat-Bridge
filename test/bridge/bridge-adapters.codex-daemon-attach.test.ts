@@ -170,25 +170,4 @@ describe("daemon-attach CLI parsing", () => {
       parseStartCliArgs(["--adapter", "pi", "--attach-current-session"]),
     ).toThrow(/requires the codex adapter/);
   });
-
-  test("attach background bridge is persistent, not companion-bound", async () => {
-    const { buildBackgroundBridgeArgs } = await import(
-      "../../src/companion/local-companion-start.ts"
-    );
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      ...parseStartCliArgs(["--adapter", "codex", "--attach-current-session"]),
-      timeoutMs: 30_000,
-    });
-    expect(args).toContain("--codex-attach-daemon");
-    const lifecycleIndex = args.indexOf("--lifecycle");
-    expect(args[lifecycleIndex + 1]).toBe("persistent");
-
-    const ownedArgs = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      ...parseStartCliArgs(["--adapter", "codex"]),
-      timeoutMs: 30_000,
-    });
-    const ownedLifecycleIndex = ownedArgs.indexOf("--lifecycle");
-    expect(ownedArgs[ownedLifecycleIndex + 1]).toBe("companion_bound");
-    expect(ownedArgs).not.toContain("--codex-attach-daemon");
-  });
 });

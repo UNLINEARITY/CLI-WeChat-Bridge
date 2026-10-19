@@ -339,8 +339,11 @@ export class SlotManager {
       }
       slot = await this.createSlot(adapter, cwd, {
         profile: options.profile ?? this.host.profile,
-        sessionStartMode: createSessionStartMode,
-        boundToWindow: options.boundToWindow === true || this.host.isEphemeral(),
+        sessionStartMode: options.codexAttach ? "new" : createSessionStartMode,
+        // An attached slot follows the Codex TUI that owns the thread, not a window.
+        boundToWindow: !options.codexAttach &&
+          (options.boundToWindow === true || this.host.isEphemeral()),
+        codexAttach: options.codexAttach,
       });
       this.slotMap.set(slotKey(cwd, adapter), slot);
       created = true;
@@ -485,13 +488,21 @@ export class SlotManager {
       activationVersion: this.activeAdapterVersion,
       previousActiveAdapter,
       previousActiveCwd,
+      ...(slot.runtime.getState().sharedThreadId
+        ? { sharedThreadId: slot.runtime.getState().sharedThreadId }
+        : {}),
     };
   }
 
   private async createSlot(
     adapter: DaemonAdapterKind,
     cwd: string,
-    options: { profile?: string; sessionStartMode?: BridgeSessionStartMode; boundToWindow: boolean },
+    options: {
+      profile?: string;
+      sessionStartMode?: BridgeSessionStartMode;
+      boundToWindow: boolean;
+      codexAttach?: { threadId?: string };
+    },
   ): Promise<DaemonSlot> {
     clearLocalCompanionEndpoint(cwd, undefined, { adapter });
     // An explicit restore resumes the session this slot followed last time.
@@ -512,6 +523,9 @@ export class SlotManager {
       initialSharedSessionId: restored?.sharedSessionId,
       initialResumeConversationId: restored?.resumeConversationId,
       initialTranscriptPath: restored?.transcriptPath,
+      ...(options.codexAttach
+        ? { codexAttachDaemon: true, codexAttachThreadId: options.codexAttach.threadId }
+        : {}),
       companionLaunchMode: "daemon_auto",
     });
     const controller = new BridgeController(runtime, cwd);
@@ -520,6 +534,7 @@ export class SlotManager {
       cwd,
       instance: 1,
       boundToWindow: options.boundToWindow,
+      attached: Boolean(options.codexAttach),
       createdAtMs: Date.now(),
       runtime,
       controller,

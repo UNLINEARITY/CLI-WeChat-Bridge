@@ -414,4 +414,5 @@ export const messages: Record<string, string> = {
   "daemon.outsideHome": "{label} has no {adapter}. To use it, run {launcher} in that directory on this computer.",
   "daemon.outsideHome.elsewhere": "{label} has {adapter}. Send /cd {label} to switch to it.",
   "daemon.cli.promoted": "{channel}-daemon is already running (pid {pid}) and now keeps running.\nRegistered directory: {cwd}\nLog: {log}",
+  "daemon.cd.attached": " (attached)",
 };

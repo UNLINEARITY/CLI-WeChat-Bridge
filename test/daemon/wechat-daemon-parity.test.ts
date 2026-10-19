@@ -64,6 +64,7 @@ class FakePendingStore {
 class FakeRuntime implements BridgeAdapter {
   state: BridgeAdapterState;
   lifecycle?: string;
+  attachThread?: string;
   readonly inputs: string[] = [];
   readonly approvals: Array<"confirm" | "deny"> = [];
   readonly answers: Record<string, string[]>[] = [];
@@ -159,6 +160,10 @@ class Env {
     createRuntime: (params) => {
       const runtime = new FakeRuntime(params.kind, params.cwd, params.command);
       runtime.lifecycle = params.lifecycle;
+      runtime.attachThread = params.codexAttachDaemon ? params.codexAttachThreadId ?? "discovered" : undefined;
+      if (runtime.attachThread) {
+        runtime.state = { ...runtime.state, sharedThreadId: runtime.attachThread };
+      }
       this.restoredWith.push(params.initialSharedSessionId);
       this.created.push(runtime);
       return runtime;
@@ -769,6 +774,52 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
     expect(claim.alreadyRunning).toBe(true);
     expect(env.created).toHaveLength(1);
     expect(claude.inputs).toEqual([]);
+  });
+});
+
+describe("Codex attach through the daemon", () => {
+  const attach = (daemon: WechatDaemon, threadId?: string) => daemon.handleDaemonRequest({
+    command: "ensure_slot",
+    adapter: "codex",
+    cwd: OTHER_CWD,
+    openVisible: false,
+    sessionStartMode: "new",
+    codexAttach: threadId ? { threadId } : {},
+  }) as Promise<Record<string, unknown>>;
+
+  test("attaching adds a windowless codex slot that outlives windows, even in single-bridge mode", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    daemon.setEphemeral(true);
+
+    const claim = await attach(daemon, "thread-7");
+    const slots = (daemon as unknown as {
+      slotManager: { releaseClosedWindows(nowMs?: number): void };
+    }).slotManager;
+    slots.releaseClosedWindows(Date.now() + 120_000);
+
+    expect(claim.sharedThreadId).toBe("thread-7");
+    expect(env.opened).toEqual([]);
+    expect(env.latest().attachThread).toBe("thread-7");
+    expect(env.latest().lifecycle).toBe("persistent");
+    expect(daemon.getStatus().slots).toHaveLength(1);
+    expect(env.exitCodes).toEqual([]);
+
+    await send(daemon, "/cd");
+    expect(env.texts().at(-1)).toContain("other-app (codex (attached))");
+  });
+
+  test("attaching is refused while the directory already has a codex slot", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, OTHER_CWD, "codex");
+
+    const claim = await attach(daemon);
+
+    expect(claim.alreadyRunning).toBe(true);
+    expect(env.created).toHaveLength(1);
   });
 });
 

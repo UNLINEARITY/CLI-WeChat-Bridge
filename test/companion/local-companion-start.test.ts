@@ -8,13 +8,8 @@ import { describe, expect, test } from "bun:test";
 import path from "node:path";
 
 import {
-  buildBackgroundBridgeArgs,
-  decideLaunchAction,
+  attachDaemonSlot,
   ensureCompanionStartWechatCredentials,
-  formatAlreadyActiveMessage,
-  formatRestartUnhealthyMessage,
-  formatSwitchFailureMessage,
-  formatSwitchMessage,
   isSameWorkspaceCwd,
   normalizeComparablePath,
   parseCliArgs,
@@ -108,114 +103,6 @@ describe("local-companion-start helpers", () => {
 
     expect(options.channelId).toBe("wecom");
     expect(options.cliArgs).toEqual(["--yolo"]);
-  });
-
-  test("buildBackgroundBridgeArgs passes the WeCom channel to the internal bridge", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      adapter: "codex",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-      sessionStartMode: "restore",
-      cliArgs: [],
-      channelId: "wecom",
-    });
-
-    expect(args).toContain("--channel");
-    expect(args).toContain("wecom");
-  });
-
-  test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      adapter: "codex",
-      cwd: path.resolve("./tmp/project"),
-      profile: "work",
-      timeoutMs: 15000,
-      sessionStartMode: "restore",
-      cliArgs: [],
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/wechat-bridge.ts",
-      "--adapter",
-      "codex",
-      "--cwd",
-      path.resolve("./tmp/project"),
-      "--lifecycle",
-      "companion_bound",
-      "--profile",
-      "work",
-    ]);
-  });
-
-  test("buildBackgroundBridgeArgs can launch claude in the background", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      adapter: "claude",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-      sessionStartMode: "new",
-      cliArgs: [],
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/wechat-bridge.ts",
-      "--adapter",
-      "claude",
-      "--cwd",
-      path.resolve("./tmp/project"),
-      "--lifecycle",
-      "companion_bound",
-      "--session-start-mode",
-      "new",
-    ]);
-  });
-
-  test("buildBackgroundBridgeArgs keeps the OpenCode bridge companion_bound", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      adapter: "opencode",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-      sessionStartMode: "new",
-      cliArgs: [],
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/wechat-bridge.ts",
-      "--adapter",
-      "opencode",
-      "--cwd",
-      path.resolve("./tmp/project"),
-      "--lifecycle",
-      "companion_bound",
-      "--session-start-mode",
-      "new",
-    ]);
-  });
-
-  test("buildBackgroundBridgeArgs runs compiled bridge entries without TypeScript stripping", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/dist/bridge/wechat-bridge.js", {
-      adapter: "codex",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-      sessionStartMode: "restore",
-      cliArgs: [],
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "/tmp/dist/bridge/wechat-bridge.js",
-      "--adapter",
-      "codex",
-      "--cwd",
-      path.resolve("./tmp/project"),
-      "--lifecycle",
-      "companion_bound",
-    ]);
   });
 
   test("runVisibleClient routes codex through the in-process remote client", async () => {
@@ -405,6 +292,34 @@ describe("local-companion-start helpers", () => {
     ).rejects.toThrow("could not prepare opencode");
   });
 
+  test("attachDaemonSlot asks for a windowless codex slot on the requested thread", async () => {
+    const requests: DaemonRequest[] = [];
+
+    const claim = await attachDaemonSlot(
+      launchOptions({ adapter: "codex", codexThreadId: "thread-7", attachCurrentSession: true }),
+      liveEndpoint(),
+      {
+        sendRequest: async (_endpoint, request) => {
+          requests.push(request);
+          return { ok: true, result: { created: true, activated: true, sharedThreadId: "thread-7" } };
+        },
+      },
+    );
+
+    expect(claim.sharedThreadId).toBe("thread-7");
+    expect(requests).toEqual([
+      {
+        command: "ensure_slot",
+        adapter: "codex",
+        cwd: path.resolve("./tmp/project"),
+        profile: undefined,
+        openVisible: false,
+        sessionStartMode: "new",
+        codexAttach: { threadId: "thread-7" },
+      },
+    ]);
+  });
+
   test("buildEphemeralDaemonArgs starts the daemon in launcher mode for the channel", () => {
     expect(buildEphemeralDaemonArgs("/pkg/dist/daemon/wechat-daemon.js", {
       cwd: "/work/app",
@@ -518,28 +433,6 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
-  test("buildBackgroundBridgeArgs keeps the launch cwd stable for codex", () => {
-    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
-      adapter: "codex",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-      sessionStartMode: "restore",
-      cliArgs: [],
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/wechat-bridge.ts",
-      "--adapter",
-      "codex",
-      "--cwd",
-      path.resolve("./tmp/project"),
-      "--lifecycle",
-      "companion_bound",
-    ]);
-  });
-
   test("normalizeComparablePath is stable for the same logical cwd", () => {
     const first = normalizeComparablePath(".");
     const second = normalizeComparablePath(process.cwd());
@@ -550,286 +443,4 @@ describe("local-companion-start helpers", () => {
     expect(isSameWorkspaceCwd(".", process.cwd())).toBe(true);
   });
 
-  test("same workspace with live visible client is already active", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: {
-        protocolVersion: 2,
-        runtimeKind: "codex_runtime_host",
-        instanceId: "bridge-1",
-        kind: "codex",
-        port: 8123,
-        token: "token",
-        cwd: "D:/work/project",
-        command: "codex",
-        startedAt: "2026-03-28T00:01:00.000Z",
-        companionPid: 456,
-        companionConnectedAt: "2026-03-28T00:02:00.000Z",
-        companionStatus: "idle",
-      },
-      endpointIsReachable: true,
-      companionIsAlive: true,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "already_active",
-      message: formatAlreadyActiveMessage("D:/work/project"),
-    });
-  });
-
-  test("same workspace reopens visible client when bridge is alive but client is gone", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: {
-        protocolVersion: 2,
-        runtimeKind: "codex_runtime_host",
-        instanceId: "bridge-1",
-        kind: "codex",
-        port: 8123,
-        token: "token",
-        cwd: "D:/work/project",
-        command: "codex",
-        startedAt: "2026-03-28T00:01:00.000Z",
-      },
-      endpointIsReachable: true,
-      companionIsAlive: false,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "open_companion",
-      message: "Found running bridge for D:/work/project. Opening companion...",
-    });
-  });
-
-  test("same workspace with no reachable endpoint requests auto-heal restart", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "persistent",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: null,
-      endpointIsReachable: false,
-      companionIsAlive: false,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "restart_unhealthy",
-      message: formatRestartUnhealthyMessage("D:/work/project"),
-    });
-  });
-
-  test("different workspace requests an explicit switch", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project-b",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project-a",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: null,
-      endpointIsReachable: false,
-      companionIsAlive: false,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "switch_workspace",
-      fromCwd: "D:/work/project-a",
-      toCwd: "D:/work/project-b",
-      message: formatSwitchMessage("D:/work/project-a", "D:/work/project-b"),
-      failureMessage: formatSwitchFailureMessage("D:/work/project-a"),
-    });
-  });
-
-  test("reclaimable lock starts a replacement bridge", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: true,
-      endpoint: null,
-      endpointIsReachable: false,
-      companionIsAlive: false,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "start_bridge",
-      message:
-        "Detected reclaimable bridge lock for D:/work/project. Replacing it for D:/work/project...",
-    });
-  });
-
-  test("same workspace with stopped visible worker requests auto-heal restart", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "codex",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "codex",
-        command: "codex",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: {
-        protocolVersion: 2,
-        runtimeKind: "codex_runtime_host",
-        instanceId: "bridge-1",
-        kind: "codex",
-        port: 8123,
-        token: "token",
-        cwd: "D:/work/project",
-        command: "codex",
-        startedAt: "2026-03-28T00:01:00.000Z",
-        companionPid: 456,
-        companionConnectedAt: "2026-03-28T00:02:00.000Z",
-        companionStatus: "stopped",
-        companionLastStateAt: "2026-03-28T00:03:00.000Z",
-      },
-      endpointIsReachable: true,
-      companionIsAlive: true,
-      sessionStartMode: "restore",
-    });
-
-    expect(decision).toEqual({
-      kind: "restart_unhealthy",
-      message: formatRestartUnhealthyMessage("D:/work/project"),
-    });
-  });
-
-  test("same workspace start request replaces Claude when a fresh session is requested", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "claude",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "claude",
-        command: "claude",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: {
-        protocolVersion: 2,
-        runtimeKind: "legacy_adapter",
-        instanceId: "bridge-1",
-        kind: "claude",
-        port: 8123,
-        token: "token",
-        cwd: "D:/work/project",
-        command: "claude",
-        startedAt: "2026-03-28T00:01:00.000Z",
-        companionPid: 456,
-        companionConnectedAt: "2026-03-28T00:02:00.000Z",
-        companionStatus: "idle",
-      },
-      endpointIsReachable: true,
-      companionIsAlive: true,
-      sessionStartMode: "new",
-    });
-
-    expect(decision).toEqual({
-      kind: "start_bridge",
-      message: "Starting a fresh claude session for D:/work/project...",
-    });
-  });
-
-  test("same workspace start request replaces Pi when a fresh session is requested", () => {
-    const decision = decideLaunchAction({
-      requestedAdapter: "pi",
-      requestedCwd: "D:/work/project",
-      runningLock: {
-        pid: 123,
-        parentPid: 321,
-        instanceId: "bridge-1",
-        adapter: "pi",
-        command: "pi",
-        cwd: "D:/work/project",
-        startedAt: "2026-03-28T00:00:00.000Z",
-        lifecycle: "companion_bound",
-      },
-      lockShouldAutoReclaim: false,
-      endpoint: {
-        protocolVersion: 2,
-        runtimeKind: "legacy_adapter",
-        instanceId: "bridge-1",
-        kind: "pi",
-        port: 8123,
-        token: "token",
-        cwd: "D:/work/project",
-        command: "pi",
-        startedAt: "2026-03-28T00:01:00.000Z",
-        companionPid: 456,
-        companionConnectedAt: "2026-03-28T00:02:00.000Z",
-        companionStatus: "idle",
-      },
-      endpointIsReachable: true,
-      companionIsAlive: true,
-      sessionStartMode: "new",
-    });
-
-    expect(decision).toEqual({
-      kind: "start_bridge",
-      message: "Starting a fresh pi session for D:/work/project...",
-    });
-  });
 });

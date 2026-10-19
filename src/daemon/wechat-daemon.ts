@@ -709,7 +709,11 @@ export class WechatDaemon {
     const activate = slots.isActiveWorkspace(request.cwd);
     const known = slots.hasWorkspace(request.cwd);
     const existing = slots.getSlot(request.cwd, request.adapter);
-    if (request.boundToWindow && existing && this.isVisibleClientAlive(request.cwd, request.adapter)) {
+    const occupied = request.codexAttach
+      // One codex slot per directory until numbered instances exist.
+      ? Boolean(existing)
+      : request.boundToWindow && Boolean(existing) && this.isVisibleClientAlive(request.cwd, request.adapter);
+    if (occupied) {
       // One window per slot until numbered instances exist; never reset the
       // session of a window that is already running.
       this.daemonLog(`launcher_refused_already_running: adapter=${request.adapter} cwd=${request.cwd}`);
@@ -732,6 +736,7 @@ export class WechatDaemon {
       // The launcher runs on this computer in that directory.
       restrictToHome: false,
       boundToWindow: request.boundToWindow,
+      codexAttach: request.codexAttach,
       profile: request.profile,
       cliArgs: request.cliArgs,
       openVisible: request.openVisible ?? true,

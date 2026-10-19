@@ -40,6 +40,7 @@ import {
   type EnsureSlotOptions,
   type EnsureSlotResult,
   toPendingApproval,
+  slotName,
 } from "./daemon-slot.ts";
 
 export type ControlCommandHost = {
@@ -268,7 +269,9 @@ export class DaemonControlCommands {
   private formatWorkspaceList(workspaces: string[]): string {
     const slots = this.host.slotManager;
     const list = workspaces.map((cwd, index) => {
-      const adapters = slots.slotsIn(cwd).map((slot) => slot.adapter).join(", ");
+      const adapters = slots.slotsIn(cwd)
+        .map((slot) => `${slotName(slot)}${slot.attached ? t("daemon.cd.attached") : ""}`)
+        .join(", ");
       return t("daemon.cd.item", {
         index: index + 1,
         label: slots.workspaceLabel(cwd),

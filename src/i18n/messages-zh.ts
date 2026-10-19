@@ -414,4 +414,5 @@ export const messages: Record<string, string> = {
   "daemon.outsideHome": "{label} 里没有 {adapter}。如需使用，请在本机该目录运行 {launcher}。",
   "daemon.outsideHome.elsewhere": "{label} 有 {adapter}，发送 /cd {label} 切过去。",
   "daemon.cli.promoted": "{channel}-daemon 已在运行（pid {pid}），已转为常驻。\n已注册目录：{cwd}\n日志：{log}",
+  "daemon.cd.attached": "（附加）",
 };

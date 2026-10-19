@@ -10,7 +10,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { BRIDGE_LOG_FILE, getWorkspaceChannelPaths } from "../wechat/channel-config.ts";
+import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import {
   resolveCodexDaemonControlSocketPath,
 } from "../bridge/bridge-adapters.codex.ts";
@@ -24,14 +24,6 @@ import {
   type BridgeChannelId,
 } from "../core/channel-types.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
-import {
-  readBridgeLockFile,
-  type BridgeLockPayload,
-} from "../bridge/bridge-state.ts";
-import {
-  clearLocalCompanionEndpoint,
-  type LocalCompanionEndpoint,
-} from "./local-companion-link.ts";
 import type {
   BridgeAdapterKind,
   BridgeSessionStartMode,
@@ -60,31 +52,6 @@ type LocalCompanionStartCliOptions = {
   /** Codex-only: attach the bridge to the live shared-daemon session in cwd. */
   attachCurrentSession?: boolean;
   codexThreadId?: string;
-};
-
-export type LocalCompanionLaunchDecision =
-  | { kind: "already_active"; message: string }
-  | { kind: "open_companion"; message: string }
-  | { kind: "restart_unhealthy"; message: string }
-  | {
-      kind: "switch_workspace";
-      fromCwd: string;
-      toCwd: string;
-      message: string;
-      failureMessage: string;
-    }
-  | { kind: "start_bridge"; message: string };
-
-type DecideLaunchActionInput = {
-  requestedAdapter: LocalCompanionLaunchAdapter;
-  requestedCwd: string;
-  runningLock: BridgeLockPayload;
-  lockShouldAutoReclaim: boolean;
-  endpoint: LocalCompanionEndpoint | null;
-  endpointIsReachable: boolean;
-  companionIsAlive: boolean;
-  sessionStartMode: BridgeSessionStartMode;
-  requestedChannelId?: BridgeChannelId;
 };
 
 type VisibleClientRunners = {
@@ -120,22 +87,6 @@ export function isSameWorkspaceCwd(left: string, right: string): boolean {
   return normalizeComparablePath(left) === normalizeComparablePath(right);
 }
 
-export function formatAlreadyActiveMessage(cwd: string): string {
-  return `Current workspace is already active: ${cwd}. Visible companion is already running, so nothing else was opened.`;
-}
-
-export function formatSwitchMessage(fromCwd: string, toCwd: string): string {
-  return `Detected active workspace ${fromCwd}. Switching to ${toCwd}...`;
-}
-
-export function formatSwitchFailureMessage(cwd: string): string {
-  return `Failed to stop the previous workspace bridge. Switch canceled; current workspace remains ${cwd}.`;
-}
-
-export function formatRestartUnhealthyMessage(cwd: string): string {
-  return `Detected unhealthy companion state for ${cwd}. Restarting bridge...`;
-}
-
 export function defaultSessionStartMode(
   _adapter: LocalCompanionLaunchAdapter,
 ): BridgeSessionStartMode {
@@ -145,76 +96,6 @@ export function defaultSessionStartMode(
   // explicit --session-start-mode restore remains available for deliberate
   // restores of already persisted threads.
   return "new";
-}
-
-export function decideLaunchAction(
-  input: DecideLaunchActionInput,
-): LocalCompanionLaunchDecision {
-  if (input.lockShouldAutoReclaim) {
-    return {
-      kind: "start_bridge",
-      message: `Detected reclaimable bridge lock for ${input.runningLock.cwd}. Replacing it for ${input.requestedCwd}...`,
-    };
-  }
-
-  const sameWorkspace =
-    input.runningLock.adapter === input.requestedAdapter &&
-    (input.runningLock.channelId ?? "wechat") ===
-      (input.requestedChannelId ?? "wechat") &&
-    isSameWorkspaceCwd(input.runningLock.cwd, input.requestedCwd);
-
-  if (!sameWorkspace) {
-    return {
-      kind: "switch_workspace",
-      fromCwd: input.runningLock.cwd,
-      toCwd: input.requestedCwd,
-      message: formatSwitchMessage(input.runningLock.cwd, input.requestedCwd),
-      failureMessage: formatSwitchFailureMessage(input.runningLock.cwd),
-    };
-  }
-
-  if (
-    input.sessionStartMode === "new" &&
-    (input.requestedAdapter === "claude" ||
-      input.requestedAdapter === "opencode" ||
-      input.requestedAdapter === "pi" ||
-      input.requestedAdapter === "codex")
-  ) {
-    return {
-      kind: "start_bridge",
-      message: `Starting a fresh ${input.requestedAdapter} session for ${input.requestedCwd}...`,
-    };
-  }
-
-  if (!input.endpoint || !input.endpointIsReachable) {
-    return {
-      kind: "restart_unhealthy",
-      message: formatRestartUnhealthyMessage(input.requestedCwd),
-    };
-  }
-
-  if (
-    input.companionIsAlive &&
-    (input.endpoint.companionStatus === "stopped" ||
-      input.endpoint.companionStatus === "error")
-  ) {
-    return {
-      kind: "restart_unhealthy",
-      message: formatRestartUnhealthyMessage(input.requestedCwd),
-    };
-  }
-
-  if (input.endpoint && input.endpointIsReachable && input.companionIsAlive) {
-    return {
-      kind: "already_active",
-      message: formatAlreadyActiveMessage(input.requestedCwd),
-    };
-  }
-
-  return {
-    kind: "open_companion",
-    message: `Found running bridge for ${input.requestedCwd}. Opening companion...`,
-  };
 }
 
 export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
@@ -360,139 +241,6 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   };
 }
 
-function isPidAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForProcessExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isPidAlive(pid)) {
-      return true;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  return !isPidAlive(pid);
-}
-
-async function stopExistingBridge(
-  lock: BridgeLockPayload,
-  options: Pick<LocalCompanionStartCliOptions, "adapter" | "channelId">,
-): Promise<void> {
-  const { pid, cwd } = lock;
-  log(options, `Stopping existing bridge for ${cwd} (pid=${pid})...`);
-
-  try {
-    process.kill(pid);
-  } catch (error) {
-    if (isPidAlive(pid)) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to stop existing bridge pid=${pid}: ${message}`, {
-        cause: error,
-      });
-    }
-  }
-
-  if (!(await waitForProcessExit(pid, 10_000))) {
-    throw new Error(`Timed out waiting for existing bridge pid=${pid} to exit.`);
-  }
-
-  if (
-    lock.adapter === "codex" ||
-    lock.adapter === "claude" ||
-    lock.adapter === "opencode" ||
-    lock.adapter === "pi"
-  ) {
-    clearLocalCompanionEndpoint(cwd, undefined, { adapter: lock.adapter });
-  } else {
-    clearLocalCompanionEndpoint(cwd);
-  }
-  log(
-    options,
-    `Cleared stale local companion endpoint for previous workspace ${cwd}.`,
-  );
-}
-
-export function buildBackgroundBridgeArgs(
-  entryPath: string,
-  options: LocalCompanionStartCliOptions,
-): string[] {
-  // The attach bridge outlives this launcher (no visible client keeps the
-  // foreground alive), so it must not be companion-bound to the launcher pid.
-  const lifecycle = options.attachCurrentSession ? "persistent" : "companion_bound";
-  const args = ["--no-warnings"];
-  if (path.extname(entryPath) === ".ts") {
-    args.push("--experimental-strip-types");
-  }
-  args.push(
-    entryPath,
-    "--adapter",
-    options.adapter,
-    "--cwd",
-    options.cwd,
-    "--lifecycle",
-    lifecycle,
-  );
-
-  if (options.channelId) {
-    args.push("--channel", options.channelId);
-  }
-
-  // Attach discovery owns thread selection; do not restore stale bridge state.
-  const sessionStartMode = options.attachCurrentSession ? "new" : options.sessionStartMode;
-  if (sessionStartMode !== "restore") {
-    args.push("--session-start-mode", sessionStartMode);
-  }
-
-  if (options.profile) {
-    args.push("--profile", options.profile);
-  }
-
-  if (options.attachCurrentSession) {
-    args.push("--codex-attach-daemon");
-    if (options.codexThreadId) {
-      args.push("--codex-thread-id", options.codexThreadId);
-    }
-  }
-
-  return args;
-}
-
-function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
-  const entryPath = path.resolve(
-    MODULE_DIR,
-    "..",
-    "bridge",
-    `wechat-bridge${RUNTIME_ENTRY_EXTENSION}`,
-  );
-  const args = buildBackgroundBridgeArgs(entryPath, options);
-
-  const child = spawn(process.execPath, args, {
-    cwd: options.cwd,
-    env: process.env,
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-
-  // A detached background spawn must still handle its own 'error' event
-  // (e.g. ENOENT), otherwise it surfaces as an unhandled exception.
-  child.on("error", () => {
-    /* best effort: background bridge failed to detach */
-  });
-
-  child.unref();
-}
-
 // ensure_slot creates the slot runtime before answering; Codex app-server
 // startup can take a while, so delegation uses a generous deadline.
 const ENSURE_SLOT_TIMEOUT_MS = 45_000;
@@ -600,6 +348,7 @@ export type DaemonSlotClaim = {
   created: boolean;
   activated: boolean;
   alreadyRunning?: boolean;
+  sharedThreadId?: string;
 };
 
 /** Ask the daemon for this directory's slot; the CLI then runs in this terminal. */
@@ -720,38 +469,6 @@ export async function runLocalCompanionStart(
   return await runVisibleClient(options);
 }
 
-type AttachedBridgeState = {
-  sharedThreadId: string;
-};
-
-export function resolveAttachedBridgeThreadId(
-  state: unknown,
-  lock: BridgeLockPayload | null,
-  options: Pick<LocalCompanionStartCliOptions, "cwd" | "channelId" | "codexThreadId">,
-): string | null {
-  if (!lock || !state || typeof state !== "object") {
-    return null;
-  }
-  const parsed = state as Record<string, unknown>;
-  const channelId = options.channelId ?? "wechat";
-  if (
-    lock.adapter !== "codex" ||
-    !isSameWorkspaceCwd(lock.cwd, options.cwd) ||
-    (lock.channelId ?? "wechat") !== channelId ||
-    parsed.instanceId !== lock.instanceId ||
-    parsed.adapter !== "codex" ||
-    typeof parsed.cwd !== "string" ||
-    !isSameWorkspaceCwd(parsed.cwd, options.cwd) ||
-    (parsed.channelId ?? "wechat") !== channelId ||
-    typeof parsed.sharedThreadId !== "string" ||
-    !parsed.sharedThreadId ||
-    (options.codexThreadId && parsed.sharedThreadId !== options.codexThreadId)
-  ) {
-    return null;
-  }
-  return parsed.sharedThreadId;
-}
-
 export function formatAttachedBridgeMessage(
   options: Pick<LocalCompanionStartCliOptions, "cwd" | "channelId">,
   sharedThreadId: string,
@@ -759,47 +476,16 @@ export function formatAttachedBridgeMessage(
   return `Attached Codex daemon thread ${sharedThreadId.slice(0, 8)} for ${options.cwd}. ${getBridgeChannelDisplayName(options.channelId ?? "wechat")} forwarding is active; the visible Codex session keeps running unchanged.`;
 }
 
-async function waitForAttachedBridgeState(
-  options: LocalCompanionStartCliOptions,
-): Promise<AttachedBridgeState> {
-  const { cwd, timeoutMs } = options;
-  const stateFile = getWorkspaceChannelPaths(cwd).stateFile;
-  const deadline = Date.now() + timeoutMs;
-
-  while (Date.now() < deadline) {
-    try {
-      const raw = fs.readFileSync(stateFile, "utf8");
-      const parsed: unknown = JSON.parse(raw);
-      const lock = readBridgeLockFile();
-      const sharedThreadId = resolveAttachedBridgeThreadId(parsed, lock, options);
-      if (sharedThreadId && lock && isPidAlive(lock.pid)) {
-        return { sharedThreadId };
-      }
-    } catch {
-      // Not written yet; keep polling until the deadline.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-
-  throw new Error(
-    `Timed out waiting for the attach bridge to bind a Codex thread for ${cwd}. Check ${BRIDGE_LOG_FILE}.`,
-  );
-}
-
 /**
- * Attach flow: bind the selected channel to the live Codex shared-daemon session in the
- * workspace. No visible client is opened — the owning Codex TUI stays as-is —
- * so readiness is the persisted bridge state carrying the attached thread id.
+ * Attach flow: bind the selected channel to the live Codex shared-daemon
+ * session in the workspace. The bridge daemon (started if needed) adds a
+ * codex slot without a window — the owning Codex TUI stays as-is — and
+ * reports the thread it joined.
  */
-async function runAttachCurrentSession(options: LocalCompanionStartCliOptions): Promise<number> {
-  const daemonEndpoint = readDaemonEndpoint();
-  if (daemonEndpoint && (await isDaemonEndpointAlive(daemonEndpoint))) {
-    const channel = daemonEndpoint.channelId ?? "wechat";
-    throw new Error(
-      `A ${channel}-daemon is running for ${daemonEndpoint.cwd}. Attach mode needs the workspace bridge lock; stop the daemon first or use its slots.`,
-    );
-  }
-
+async function runAttachCurrentSession(
+  options: LocalCompanionStartCliOptions,
+  deps: DaemonConnectionDeps = {},
+): Promise<number> {
   const socketPath = resolveCodexDaemonControlSocketPath();
   if (!fs.existsSync(socketPath)) {
     throw new Error(
@@ -807,24 +493,49 @@ async function runAttachCurrentSession(options: LocalCompanionStartCliOptions): 
     );
   }
 
-  const lock = readBridgeLockFile();
-  if (lock) {
-    if (isPidAlive(lock.pid)) {
-      await stopExistingBridge(lock, options);
-    } else {
-      clearLocalCompanionEndpoint(options.cwd, undefined, { adapter: options.adapter });
-      log(options, `Cleared stale bridge lock and endpoint for ${lock.cwd}.`);
-    }
+  const endpoint = await connectToDaemon(options, deps);
+  const claim = await attachDaemonSlot(options, endpoint, deps);
+  if (claim.alreadyRunning) {
+    log(
+      options,
+      `codex is already connected for ${options.cwd}. Close that Codex window, or stop its slot, before attaching.`,
+    );
+    return 1;
   }
-
-  log(options, `Starting attach bridge in background for ${options.cwd}...`);
-  startBridgeInBackground(options);
-  const state = await waitForAttachedBridgeState(options);
-  log(
-    options,
-    formatAttachedBridgeMessage(options, state.sharedThreadId),
-  );
+  if (!claim.sharedThreadId) {
+    throw new Error(
+      `The ${options.channelId ?? "wechat"} bridge attached no Codex thread for ${options.cwd}. Check ${BRIDGE_LOG_FILE}.`,
+    );
+  }
+  log(options, formatAttachedBridgeMessage(options, claim.sharedThreadId));
   return 0;
+}
+
+/** Ask the daemon for a windowless codex slot attached to a live thread. */
+export async function attachDaemonSlot(
+  options: LocalCompanionStartCliOptions,
+  endpoint: DaemonEndpoint,
+  deps: Pick<DaemonConnectionDeps, "sendRequest"> = {},
+): Promise<DaemonSlotClaim> {
+  const response: DaemonResponse = await (deps.sendRequest ?? sendDaemonRequest)(
+    endpoint,
+    {
+      command: "ensure_slot",
+      adapter: "codex",
+      cwd: options.cwd,
+      profile: options.profile,
+      openVisible: false,
+      sessionStartMode: "new",
+      codexAttach: options.codexThreadId ? { threadId: options.codexThreadId } : {},
+    },
+    { timeoutMs: ENSURE_SLOT_TIMEOUT_MS },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `The ${options.channelId ?? "wechat"} bridge could not attach Codex for ${options.cwd}: ${response.error ?? "no response"}. Check ${BRIDGE_LOG_FILE}.`,
+    );
+  }
+  return response.result as DaemonSlotClaim;
 }
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {

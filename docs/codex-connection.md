@@ -21,7 +21,7 @@ node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-命令在后台启动 attach bridge 并等待绑定完成,成功输出 `Attached Codex daemon thread <id>`。同一工作区重复执行会替换上一个 attach bridge。停止:在通道内发送 `/shutdown`,或结束持有 `~/.cli-bridge/bridge.lock.json` 的进程。
+命令把当前会话作为一个无窗口的 codex 终端加入 bridge daemon(没有运行中的 daemon 时在后台自动启动),并等待绑定完成,成功输出 `Attached Codex daemon thread <id>`。同一目录已有 codex 终端时会拒绝;要换到同一目录的另一个线程,在通道内使用 `/resume`。停止:在通道内发送 `/daemon-stop`(会停止整个 bridge daemon)。
 
 ### 工作原理(已实测验证)
 
@@ -34,7 +34,7 @@ node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 - **内嵌会话无法接入**:桌面 App(Codex Desktop)、`--no-daemon`、`--oss`、`--profile` 启动的会话内嵌 app-server,不在共享 daemon 里;对它们 resume 会得到 `thread ... already has an active writer`。
 - codex < 0.162 没有共享 daemon socket,attach 模式不可用;原有 wechat-codex 自建 app-server 流程(验证范围 0.149–0.161)不受影响。
 - 共享 daemon 的环境变量在 daemon 启动时固定;daemon 重启期间 Bridge 会自动重连并 rejoin。
-- 同一工作区若有 `wechat-daemon`/`wecom-daemon`/`telegram-daemon` 在运行,它持有 bridge 锁,attach 会被拒绝;先停 daemon 或使用其多槽位。
+- 已有 `wechat-daemon`/`wecom-daemon`/`telegram-daemon` 在运行时,attach 会加入它,在 `/cd` 列表中显示为 `codex（附加）`;不同渠道的 daemon 在运行时需要先停止。
 
 ### 为什么桌面会话无法接入(实证)
 
@@ -63,7 +63,7 @@ Invoke `$codex-bridge` inside a Codex TUI session, or run from the project direc
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-The command starts the attach bridge in the background and waits for the bind; success prints `Attached Codex daemon thread <id>`. Re-running it in the same workspace replaces the previous attach bridge. Stop with `/shutdown` from the channel or by ending the process holding `~/.cli-bridge/bridge.lock.json`.
+The command adds the session to the bridge daemon as a windowless codex terminal (starting the daemon in the background when none runs) and waits for the bind; success prints `Attached Codex daemon thread <id>`. It is refused when the directory already has a codex terminal; to move to another thread in the same directory, use `/resume` from the channel. Stop with `/daemon-stop` from the channel, which stops the whole bridge daemon.
 
 ### How it works (verified live)
 
@@ -76,7 +76,7 @@ The command starts the attach bridge in the background and waits for the bind; s
 - **Embedded sessions cannot be attached**: desktop-app (Codex Desktop), `--no-daemon`, `--oss`, and `--profile` sessions run an embedded app-server outside the shared daemon; resuming them fails with `thread ... already has an active writer`.
 - codex < 0.162 has no shared daemon socket, so attach mode is unavailable; the existing wechat-codex owned-app-server flow (validated 0.149–0.161) is unaffected.
 - The daemon's environment is fixed at daemon start; the bridge reconnects and rejoins automatically across daemon restarts.
-- If a `wechat-daemon`/`wecom-daemon`/`telegram-daemon` owns the workspace it holds the bridge lock and attach is refused; stop it first or use its multi-slot workflow.
+- When a `wechat-daemon`/`wecom-daemon`/`telegram-daemon` is running, attach joins it and appears as `codex (attached)` in the `/cd` list; a daemon of another channel must be stopped first.
 
 ### Why desktop sessions cannot be attached (verified)
 

@@ -82,6 +82,8 @@ export type DaemonRequest =
       reuseExistingVisible?: boolean;
       /** The launcher runs the CLI itself; the slot ends when that window closes. */
       boundToWindow?: boolean;
+      /** Codex only: join a live thread of Codex's shared daemon, without a window. */
+      codexAttach?: { threadId?: string };
     }
   | {
       command: "switch_adapter";
