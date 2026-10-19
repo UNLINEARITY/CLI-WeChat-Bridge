@@ -26,6 +26,7 @@ import type {
   InboundWechatMessage,
   WeChatTransport,
 } from "../../src/wechat/wechat-transport.ts";
+import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -130,10 +131,24 @@ class FakeRuntime implements BridgeAdapter {
   }
 }
 
+class MemorySessionStore implements SlotSessionStore {
+  readonly records = new Map<string, SlotSessionRecord>();
+
+  read(cwd: string, adapter: DaemonAdapterKind): SlotSessionRecord | null {
+    return this.records.get(`${cwd}|${adapter}`) ?? null;
+  }
+
+  write(cwd: string, adapter: DaemonAdapterKind, record: SlotSessionRecord): void {
+    this.records.set(`${cwd}|${adapter}`, record);
+  }
+}
+
 class Env {
   readonly wechat = new FakeWeChatTransport();
   readonly created: FakeRuntime[] = [];
   readonly logs: string[] = [];
+  readonly sessions = new MemorySessionStore();
+  readonly restoredWith: Array<string | undefined> = [];
   readonly opened: { cwd: string; adapter: DaemonAdapterKind; title?: string }[] = [];
   /** Visible windows that are already running, as `cwd|adapter`. */
   readonly alive = new Set<string>();
@@ -144,6 +159,7 @@ class Env {
     createRuntime: (params) => {
       const runtime = new FakeRuntime(params.kind, params.cwd, params.command);
       runtime.lifecycle = params.lifecycle;
+      this.restoredWith.push(params.initialSharedSessionId);
       this.created.push(runtime);
       return runtime;
     },
@@ -163,6 +179,7 @@ class Env {
     exitProcess: (code) => {
       this.exitCodes.push(code);
     },
+    slotSessions: this.sessions,
   };
   readonly exitCodes: number[] = [];
 
@@ -755,6 +772,39 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
   });
 });
 
-describe("daemon behaviors the standalone merge still has to change", () => {
-  test.todo("persists per-slot session state so --session-start-mode restore resumes it");
+describe("per-slot session restore", () => {
+  test("a slot saves the session it follows and an explicit restore resumes it", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const first = env.buildDaemon();
+    await launcherSlot(first, OTHER_CWD, "claude");
+    const claude = env.runtimeIn(OTHER_CWD, "claude");
+    claude.state = { ...claude.state, sharedSessionId: "session-42", transcriptPath: "/tmp/t.jsonl" };
+    claude.emit(event("status", { status: "idle" }));
+    await tick(20);
+    expect(env.sessions.read(OTHER_CWD, "claude")).toEqual({
+      sharedSessionId: "session-42",
+      transcriptPath: "/tmp/t.jsonl",
+    });
+
+    const second = env.buildDaemon();
+    await second.handleDaemonRequest({
+      command: "ensure_slot",
+      adapter: "claude",
+      cwd: OTHER_CWD,
+      openVisible: false,
+      sessionStartMode: "restore",
+      boundToWindow: true,
+    });
+    await second.handleDaemonRequest({
+      command: "ensure_slot",
+      adapter: "pi",
+      cwd: OTHER_CWD,
+      openVisible: false,
+      sessionStartMode: "new",
+      boundToWindow: true,
+    });
+
+    expect(env.restoredWith).toEqual([undefined, "session-42", undefined]);
+  });
 });

@@ -5,6 +5,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { fileSlotSessionStore, type SlotSessionStore } from "./slot-session-store.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
 import { t } from "../i18n/index.ts";
@@ -127,6 +128,8 @@ export type WechatDaemonDeps = {
   pendingWechatMessages?: PendingWechatMessageStore;
   visibleClientConnectTimeoutMs?: number;
   fatalNoticeGraceMs?: number;
+  /** Where slots save their sessions; tests keep them in memory. */
+  slotSessions?: SlotSessionStore;
   /** Ends the process once an ephemeral daemon has shut down. */
   exitProcess?: (code: number) => void;
 };
@@ -270,6 +273,7 @@ export class WechatDaemon {
       maybeDrainDeferredInputs: (slot) => this.inbound.maybeDrainDeferredInputs(slot),
       disposeDeadSlot: (slot) => this.slotManager.disposeDeadSlot(slot),
       releaseSlot: (slot) => this.slotManager.releaseSlot(slot),
+      syncSession: (slot) => this.slotManager.syncSession(slot),
       prefix: (slot, text) => this.slotManager.prefix(slot, text),
       isShuttingDown: () => this.shutdownPromise !== null,
       fatalNoticeGraceMs: this.deps.fatalNoticeGraceMs,
@@ -289,6 +293,7 @@ export class WechatDaemon {
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
       isEphemeral: () => this.ephemeral,
+      sessions: this.deps.slotSessions ?? fileSlotSessionStore,
       onSlotRemoved: () => this.exitIfIdle(),
       daemonLog: (message) => this.daemonLog(message),
     });

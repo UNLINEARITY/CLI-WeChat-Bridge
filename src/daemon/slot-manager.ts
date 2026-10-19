@@ -4,6 +4,11 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import {
+  sameSlotSession,
+  toSlotSessionRecord,
+  type SlotSessionStore,
+} from "./slot-session-store.ts";
 import { resolveDefaultAdapterCommand } from "../bridge/bridge-adapters.ts";
 import { t } from "../i18n/index.ts";
 import { getSharedSessionIdFromAdapterState } from "../bridge/bridge-adapters.shared.ts";
@@ -63,6 +68,8 @@ export type SlotManagerHost = {
   ) => Promise<boolean>;
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;
   onSlotEvent: (slot: DaemonSlot, event: BridgeEvent) => void;
+  /** Where slots save the session they follow, for later restores. */
+  sessions: SlotSessionStore;
   /** An ephemeral daemon binds every slot to its visible window. */
   isEphemeral: () => boolean;
   /** Called after a slot left the map (released or dead). */
@@ -487,6 +494,13 @@ export class SlotManager {
     options: { profile?: string; sessionStartMode?: BridgeSessionStartMode; boundToWindow: boolean },
   ): Promise<DaemonSlot> {
     clearLocalCompanionEndpoint(cwd, undefined, { adapter });
+    // An explicit restore resumes the session this slot followed last time.
+    const restored = options.sessionStartMode === "restore"
+      ? this.host.sessions.read(cwd, adapter)
+      : null;
+    if (restored?.sharedSessionId) {
+      this.host.daemonLog(`slot_session_restore: adapter=${adapter} cwd=${cwd} session=${restored.sharedSessionId}`);
+    }
     const runtime = this.host.createRuntime({
       kind: adapter,
       command: resolveDefaultAdapterCommand(adapter),
@@ -495,6 +509,9 @@ export class SlotManager {
       // A window-bound slot asks to stop when its visible client closes.
       lifecycle: options.boundToWindow ? "companion_bound" : "persistent",
       sessionStartMode: options.sessionStartMode,
+      initialSharedSessionId: restored?.sharedSessionId,
+      initialResumeConversationId: restored?.resumeConversationId,
+      initialTranscriptPath: restored?.transcriptPath,
       companionLaunchMode: "daemon_auto",
     });
     const controller = new BridgeController(runtime, cwd);
@@ -597,6 +614,20 @@ export class SlotManager {
       if (slot.windowMissingChecks >= 2) {
         this.releaseSlot(slot);
       }
+    }
+  }
+
+  /** Save the session a slot follows whenever it changes. */
+  syncSession(slot: DaemonSlot): void {
+    const record = toSlotSessionRecord(slot.runtime.getState());
+    if (!record.sharedSessionId || sameSlotSession(slot.savedSession ?? null, record)) {
+      return;
+    }
+    try {
+      this.host.sessions.write(slot.cwd, slot.adapter, record);
+      slot.savedSession = record;
+    } catch (error) {
+      this.host.daemonLog(`slot_session_save_failed: adapter=${slot.adapter} error=${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import type { SlotSessionRecord } from "./slot-session-store.ts";
 import path from "node:path";
 import { BridgeController } from "../bridge/bridge-controller.ts";
 import type {
@@ -42,6 +43,8 @@ export type DaemonSlot = {
   windowSeen?: boolean;
   /** Consecutive window checks that found no connected window. */
   windowMissingChecks?: number;
+  /** Last session record written for this slot. */
+  savedSession?: SlotSessionRecord;
   runtime: BridgeAdapter;
   controller: BridgeController;
   outputBatcher: OutputBatcher;

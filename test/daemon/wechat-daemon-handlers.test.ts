@@ -33,6 +33,7 @@ import type { WecomTransport } from "../../src/channels/wecom/wecom-transport.ts
 import type { WeChatTransport } from "../../src/wechat/wechat-transport.ts";
 import type { PendingWechatMessageStore } from "../../src/channels/wechat/wechat-outbound-queue.ts";
 import type { WechatSendContext } from "../../src/channels/wechat/wechat-forwarding.ts";
+import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -230,6 +231,18 @@ class FakeBridgeRuntime implements BridgeAdapter {
   }
 }
 
+class MemorySessionStore implements SlotSessionStore {
+  readonly records = new Map<string, SlotSessionRecord>();
+
+  read(cwd: string, adapter: DaemonAdapterKind): SlotSessionRecord | null {
+    return this.records.get(`${cwd}|${adapter}`) ?? null;
+  }
+
+  write(cwd: string, adapter: DaemonAdapterKind, record: SlotSessionRecord): void {
+    this.records.set(`${cwd}|${adapter}`, record);
+  }
+}
+
 /**
  * Injects fakes for every daemon side effect (PTY, visible terminal, log
  * files, pending-message store) so the real handler layer can be driven
@@ -272,6 +285,7 @@ class FakeDaemonEnvironment {
       new FakePendingStore() as unknown as PendingWechatMessageStore,
     visibleClientConnectTimeoutMs: 50,
     fatalNoticeGraceMs: 0,
+    slotSessions: new MemorySessionStore(),
   };
 
   buildDaemon(channelId: "wecom" | "wechat" = "wecom"): WechatDaemon {

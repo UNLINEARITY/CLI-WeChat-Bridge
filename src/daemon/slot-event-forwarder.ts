@@ -66,6 +66,8 @@ export type SlotEventHost = {
   maybeDrainDeferredInputs: (slot: DaemonSlot) => Promise<void>;
   disposeDeadSlot: (slot: DaemonSlot) => void;
   releaseSlot: (slot: DaemonSlot) => void;
+  /** Persist the session the slot now follows. */
+  syncSession: (slot: DaemonSlot) => void;
   /** True once the daemon has started shutting down. */
   isShuttingDown: () => boolean;
   /** Wait before reporting a fatal error, to tell it apart from shutdown. */
@@ -105,6 +107,7 @@ function createSlotChannelPort(host: SlotEventHost, slot: DaemonSlot): BridgeCha
 /** Forward one adapter event from a daemon slot to the channel. */
 export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: BridgeEvent): void {
   slot.controller.syncLocalClientEndpoint();
+  host.syncSession(slot);
   const adapterState = slot.runtime.getState();
   const channelPort = createSlotChannelPort(host, slot);
   const eventTarget = host.driver.capabilities.multiConversation
