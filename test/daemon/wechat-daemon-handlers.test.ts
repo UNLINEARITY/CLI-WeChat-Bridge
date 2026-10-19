@@ -271,6 +271,7 @@ class FakeDaemonEnvironment {
     pendingWechatMessages:
       new FakePendingStore() as unknown as PendingWechatMessageStore,
     visibleClientConnectTimeoutMs: 50,
+    fatalNoticeGraceMs: 0,
   };
 
   buildDaemon(channelId: "wecom" | "wechat" = "wecom"): WechatDaemon {
@@ -791,7 +792,8 @@ describe("wechat-daemon handlers: forward_input dispatch", () => {
     expect(env.runtime("claude").inputs).toHaveLength(0);
     expect(daemon.getSlotState("claude")?.activeConversationId).toBeUndefined();
     expect(daemon.getSlotState("claude")?.active).toBe(false);
-    expect(env.wecom.sent).toHaveLength(0);
+    // Only the "opening" notice was sent; the prompt never reached the CLI.
+    expect(env.wecom.sent.map((message) => message.text)).toEqual(["Opening claude. Please wait…"]);
   });
 });
 

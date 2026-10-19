@@ -410,4 +410,8 @@ export const messages: Record<string, string> = {
   "daemon.answer.pendingElsewhere": "当前没有待回答的问题。其他待回答的问题：\n{list}\n发送 /answer #<编号> <回答>。",
   "daemon.answer.list": "待回答的问题：\n{list}\n当前的问题直接发送 /answer <回答>，其他的发送 /answer #<编号> <回答>。",
   "daemon.answer.badIndex": "没有编号为 #{index} 的待回答问题。",
+  "daemon.opening": "正在打开 {source}，请稍候…",
+  "daemon.outsideHome": "{label} 里没有 {adapter}。如需使用，请在本机该目录运行 {launcher}。",
+  "daemon.outsideHome.elsewhere": "{label} 有 {adapter}，发送 /cd {label} 切过去。",
+  "daemon.cli.promoted": "{channel}-daemon 已在运行（pid {pid}），已转为常驻。\n已注册目录：{cwd}\n日志：{log}",
 };

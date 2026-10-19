@@ -45,6 +45,7 @@ import {
 import {
   type ActiveTask,
   type DaemonSlot,
+  type EnsureSlotResult,
   formatInboundMessagePreview,
 } from "./daemon-slot.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
@@ -248,6 +249,51 @@ export class InboundRouter {
     slot.turns.observeConversation(conversation);
   }
 
+  /**
+   * Record control commands so a session can be reconstructed from the log.
+   * Only the command word is kept, plus short arguments of navigation
+   * commands; prompts and answers are never logged.
+   */
+  private logInboundCommand(text: string): void {
+    const [word, ...rest] = text.trim().split(/\s+/);
+    if (!word?.startsWith("/")) {
+      return;
+    }
+    const command = word.toLowerCase();
+    const argument = rest.join(" ");
+    const keepsArgument = ["/cd", "/confirm", "/yes", "/deny", "/no", "/resume", "/model", "/lang", "/language", "/plan"]
+      .includes(command);
+    this.host.daemonLog(
+      `inbound_command: ${command}${keepsArgument && argument ? ` ${truncatePreview(argument, 80)}` : ""}`,
+    );
+  }
+
+  /** Reply for a switch that did not activate, naming the workspace. */
+  private describeSwitchFailure(result: EnsureSlotResult): string {
+    const slots = this.host.slotManager;
+    if (result.outsideHome) {
+      const label = slots.workspaceLabel(result.cwd);
+      const lines = [t("daemon.outsideHome", {
+        label,
+        adapter: result.activeAdapter,
+        launcher: `${this.host.channelId}-${result.activeAdapter}`,
+      })];
+      for (const cwd of slots.workspaces()) {
+        if (slots.getSlot(cwd, result.activeAdapter)) {
+          lines.push(t("daemon.outsideHome.elsewhere", {
+            label: slots.workspaceLabel(cwd),
+            adapter: result.activeAdapter,
+          }));
+        }
+      }
+      return lines.join("\n");
+    }
+    return t("daemon.activateFailed", {
+      adapter: slots.sourceName(result.cwd, result.activeAdapter),
+      detail: formatDaemonSwitchResultDetail(result),
+    });
+  }
+
   async handleInboundMessage(message: InboundWechatMessage): Promise<void> {
     if (message.senderId !== this.host.operatorId) {
       await this.host.queueMessage(
@@ -256,6 +302,8 @@ export class InboundRouter {
       );
       return;
     }
+
+    this.logInboundCommand(message.text);
 
     const languageCommand = parseBridgeControlCommand(message.text);
     if (languageCommand?.type === "language") {
@@ -275,10 +323,9 @@ export class InboundRouter {
           this.bindCurrentConversation(this.host.slotManager.getActiveSlot());
           message = { ...message, text: emojiMatch.remainder };
         } else {
-          const detail = formatDaemonSwitchResultDetail(result);
           await this.host.queueMessage(
             message.senderId,
-            t("daemon.activateFailed", { adapter: switchTarget, detail }),
+            this.describeSwitchFailure(result),
           );
           return;
         }
@@ -296,21 +343,21 @@ export class InboundRouter {
         openVisible: true,
         reuseExistingVisible: true,
       });
-      const detail = formatDaemonSwitchResultDetail(result);
       if (!result.activated) {
-        await this.host.queueMessage(
-          message.senderId,
-          t("daemon.activateFailed", { adapter: switchDirective.adapter, detail }),
-        );
+        await this.host.queueMessage(message.senderId, this.describeSwitchFailure(result));
         return;
       }
+      const detail = formatDaemonSwitchResultDetail(result);
       this.bindCurrentConversation(this.host.slotManager.getActiveSlot());
       if (switchDirective.remainder) {
         message = { ...message, text: switchDirective.remainder };
       } else {
         await this.host.queueMessage(
           message.senderId,
-          t("daemon.activeTerminal", { adapter: switchDirective.adapter, detail }),
+          t("daemon.activeTerminal", {
+            adapter: this.host.slotManager.sourceName(result.cwd, switchDirective.adapter),
+            detail,
+          }),
         );
         return;
       }
@@ -462,10 +509,9 @@ export class InboundRouter {
     if (!visibleResult.activated) {
       await this.host.queueMessage(
         message.senderId,
-        this.host.slotManager.prefix(
-          slot,
-          formatDaemonSwitchResultDetail(visibleResult),
-        ),
+        visibleResult.outsideHome
+          ? this.describeSwitchFailure(visibleResult)
+          : this.host.slotManager.prefix(slot, formatDaemonSwitchResultDetail(visibleResult)),
       );
       return;
     }
@@ -554,7 +600,9 @@ export class InboundRouter {
         adapter,
         conversationId,
         reason: "not_activated",
-        message: formatDaemonSwitchResultDetail(ensureResult),
+        message: ensureResult.outsideHome
+          ? this.describeSwitchFailure(ensureResult)
+          : formatDaemonSwitchResultDetail(ensureResult),
       };
     }
     const slot = slots.getSlot(cwd, adapter);

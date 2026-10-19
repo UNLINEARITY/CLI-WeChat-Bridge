@@ -5,6 +5,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
 import { t } from "../i18n/index.ts";
 import { delay } from "../bridge/bridge-adapters.shared.ts";
@@ -58,6 +59,9 @@ import type {
 import { readLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
 import {
   clearDaemonEndpoint,
+  isDaemonEndpointAlive,
+  readDaemonEndpoint,
+  sendDaemonRequest,
   type DaemonAdapterKind,
   type DaemonRequest,
   type DaemonSendTextResult,
@@ -109,6 +113,9 @@ export {
   cleanupSingleBridgeBeforeDaemon,
 } from "./daemon-cleanup.ts";
 
+/** How long an ephemeral daemon waits for its launcher's first slot. */
+const EPHEMERAL_STARTUP_IDLE_MS = 60_000;
+
 export type WechatDaemonDeps = {
   localeSettingsFile?: string;
   createRuntime?: typeof createRuntimeHost;
@@ -117,6 +124,9 @@ export type WechatDaemonDeps = {
   daemonLog?: (message: string) => void;
   pendingWechatMessages?: PendingWechatMessageStore;
   visibleClientConnectTimeoutMs?: number;
+  fatalNoticeGraceMs?: number;
+  /** Ends the process once an ephemeral daemon has shut down. */
+  exitProcess?: (code: number) => void;
 };
 
 const POLL_RETRY_BASE_MS = 1_000;
@@ -168,6 +178,8 @@ export class WechatDaemon {
   private readonly inbound: InboundRouter;
   private readonly deps: WechatDaemonDeps;
   private shutdownPromise: Promise<void> | null = null;
+  /** Started by a launcher; exits after the last window closes. */
+  private ephemeral = false;
   private readonly ipcServer = new DaemonIpcServer();
 
   constructor(params: {
@@ -255,7 +267,10 @@ export class WechatDaemon {
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       maybeDrainDeferredInputs: (slot) => this.inbound.maybeDrainDeferredInputs(slot),
       disposeDeadSlot: (slot) => this.slotManager.disposeDeadSlot(slot),
+      releaseSlot: (slot) => this.slotManager.releaseSlot(slot),
       prefix: (slot, text) => this.slotManager.prefix(slot, text),
+      isShuttingDown: () => this.shutdownPromise !== null,
+      fatalNoticeGraceMs: this.deps.fatalNoticeGraceMs,
       daemonLog: (message) => this.daemonLog(message),
     };
     this.slotManager = new SlotManager({
@@ -271,6 +286,8 @@ export class WechatDaemon {
         this.queueWechatMessage(senderId, text, context, targetOverride),
       resolveSlotOutputTarget: (slot) => this.resolveSlotOutputTarget(slot),
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
+      isEphemeral: () => this.ephemeral,
+      onSlotRemoved: () => this.exitIfIdle(),
       daemonLog: (message) => this.daemonLog(message),
     });
     this.controls = new DaemonControlCommands({
@@ -304,6 +321,37 @@ export class WechatDaemon {
   get slots(): Map<DaemonAdapterKind, DaemonSlot> {
     const cwd = this.slotManager.activeCwd;
     return new Map(this.slotManager.slotsIn(cwd).map((slot) => [slot.adapter, slot]));
+  }
+
+  /** Run as a launcher's single-bridge daemon. */
+  setEphemeral(ephemeral: boolean): void {
+    this.ephemeral = ephemeral;
+  }
+
+  /**
+   * `wechat-daemon` started in `cwd` while this daemon runs: stay alive after
+   * the last window closes and make `cwd` the home workspace.
+   */
+  promote(cwd: string): { pid: number; wasEphemeral: boolean } {
+    const wasEphemeral = this.ephemeral;
+    this.ephemeral = false;
+    this.slotManager.setHome(cwd);
+    this.daemonLog(`promoted: cwd=${cwd} was_ephemeral=${wasEphemeral}`);
+    return { pid: process.pid, wasEphemeral };
+  }
+
+  /** An ephemeral daemon nobody joined within `ms` exits. */
+  startIdleWatch(ms = EPHEMERAL_STARTUP_IDLE_MS): void {
+    setTimeout(() => this.exitIfIdle(), ms).unref?.();
+  }
+
+  /** An ephemeral daemon stops once no slot is left. */
+  private exitIfIdle(): void {
+    if (!this.ephemeral || this.shutdownPromise || this.slotManager.allSlots().length > 0) {
+      return;
+    }
+    this.daemonLog("ephemeral_idle_exit: no slot left");
+    void this.shutdown().finally(() => (this.deps.exitProcess ?? process.exit)(0));
   }
 
   set takenOverAdapter(adapter: DaemonAdapterKind | undefined) {
@@ -579,6 +627,8 @@ export class WechatDaemon {
         return { shuttingDown: true };
       case "ensure_slot":
         return await this.ensureWorkspaceSlot(request);
+      case "promote":
+        return this.promote(request.cwd);
       case "switch_adapter":
         return await this.slotManager.ensureSlot(request.adapter, {
           profile: request.profile,
@@ -642,9 +692,30 @@ export class WechatDaemon {
     const slots = this.slotManager;
     const activate = slots.isActiveWorkspace(request.cwd);
     const known = slots.hasWorkspace(request.cwd);
+    const existing = slots.getSlot(request.cwd, request.adapter);
+    if (request.boundToWindow && existing && this.isVisibleClientAlive(request.cwd, request.adapter)) {
+      // One window per slot until numbered instances exist; never reset the
+      // session of a window that is already running.
+      this.daemonLog(`launcher_refused_already_running: adapter=${request.adapter} cwd=${request.cwd}`);
+      return {
+        activeAdapter: request.adapter,
+        cwd: request.cwd,
+        created: false,
+        openedVisible: false,
+        visibleConnected: true,
+        visibleReady: true,
+        activated: false,
+        activationVersion: 0,
+        previousActiveCwd: slots.activeCwd,
+        alreadyRunning: true,
+      };
+    }
     const result = await slots.ensureSlot(request.adapter, {
       cwd: request.cwd,
       activate,
+      // The launcher runs on this computer in that directory.
+      restrictToHome: false,
+      boundToWindow: request.boundToWindow,
       profile: request.profile,
       cliArgs: request.cliArgs,
       openVisible: request.openVisible ?? true,
@@ -701,11 +772,58 @@ export class WechatDaemon {
   }
 }
 
+/**
+ * A daemon for this channel is already running. A launcher-started
+ * (ephemeral) daemon steps aside; `wechat-daemon` promotes the running one to
+ * a persistent daemon homed in this directory instead of replacing it.
+ * Returns true when this process has nothing left to do.
+ */
+async function joinRunningDaemon(options: DaemonCliOptions): Promise<boolean> {
+  const endpoint = readDaemonEndpoint();
+  if (!endpoint || (endpoint.channelId ?? "wechat") !== (options.channelId ?? "wechat")) {
+    return false;
+  }
+  if (!(await isDaemonEndpointAlive(endpoint))) {
+    return false;
+  }
+  if (options.ephemeral) {
+    appendDaemonLog(`ephemeral_start_skipped: running_pid=${endpoint.pid}`);
+    return true;
+  }
+  const promoted = await sendDaemonRequest(endpoint, { command: "promote", cwd: options.cwd });
+  if (!promoted.ok) {
+    throw new Error(`Could not reach the running daemon (pid ${endpoint.pid}): ${promoted.error ?? "no response"}`);
+  }
+  if (options.initialAdapter) {
+    await sendDaemonRequest(
+      endpoint,
+      {
+        command: "ensure_slot",
+        adapter: options.initialAdapter,
+        cwd: options.cwd,
+        profile: options.profile,
+        openVisible: options.openVisible,
+      },
+      { timeoutMs: 45_000 },
+    );
+  }
+  process.stdout.write(`${t("daemon.cli.promoted", {
+    channel: options.channelId ?? "wechat",
+    pid: endpoint.pid,
+    cwd: options.cwd,
+    log: BRIDGE_LOG_FILE,
+  })}\n`);
+  return true;
+}
+
 export async function runDaemon(
   options: DaemonCliOptions,
 ): Promise<void> {
   const channelId = options.channelId ?? "wechat";
   prepareChannel(channelId, (message) => log(message));
+  if (await joinRunningDaemon(options)) {
+    return;
+  }
   loadEmojiBindings();
   await cleanupDaemonBeforeStart({ cwd: options.cwd });
   const cleanupResult = await cleanupSingleBridgeBeforeDaemon();
@@ -732,10 +850,14 @@ export async function runDaemon(
     profile: options.profile,
     setup,
   });
+  daemon.setEphemeral(options.ephemeral === true);
   if (cleanupResult.action === "stopped" && isDaemonAdapterKind(cleanupResult.lock.adapter)) {
     daemon.takenOverAdapter = cleanupResult.lock.adapter;
   }
   await daemon.startIpcServer();
+  if (options.ephemeral) {
+    daemon.startIdleWatch();
+  }
   try {
     await daemon.runInitialAdapter(options);
 

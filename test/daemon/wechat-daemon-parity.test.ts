@@ -62,6 +62,7 @@ class FakePendingStore {
 
 class FakeRuntime implements BridgeAdapter {
   state: BridgeAdapterState;
+  lifecycle?: string;
   readonly inputs: string[] = [];
   readonly approvals: Array<"confirm" | "deny"> = [];
   readonly answers: Record<string, string[]>[] = [];
@@ -132,20 +133,38 @@ class FakeRuntime implements BridgeAdapter {
 class Env {
   readonly wechat = new FakeWeChatTransport();
   readonly created: FakeRuntime[] = [];
+  readonly logs: string[] = [];
+  readonly opened: { cwd: string; adapter: DaemonAdapterKind; title?: string }[] = [];
+  /** Visible windows that are already running, as `cwd|adapter`. */
+  readonly alive = new Set<string>();
+  /** Treat every visible window as already running (the default). */
+  allAlive = true;
 
   readonly deps: WechatDaemonDeps = {
     createRuntime: (params) => {
       const runtime = new FakeRuntime(params.kind, params.cwd, params.command);
+      runtime.lifecycle = params.lifecycle;
       this.created.push(runtime);
       return runtime;
     },
-    openVisibleClient: () => ({ command: "fake-visible-client", args: [] }),
-    isVisibleClientAlive: () => true,
-    daemonLog: () => undefined,
+    openVisibleClient: (params) => {
+      this.opened.push({ cwd: params.cwd, adapter: params.adapter, title: params.title });
+      this.alive.add(`${params.cwd}|${params.adapter}`);
+      return { command: "fake-visible-client", args: [] };
+    },
+    isVisibleClientAlive: (cwd, adapter) => this.allAlive || this.alive.has(`${cwd}|${adapter}`),
+    daemonLog: (message) => {
+      this.logs.push(message);
+    },
     pendingWechatMessages:
       new FakePendingStore() as unknown as PendingWechatMessageStore,
     visibleClientConnectTimeoutMs: 50,
+    fatalNoticeGraceMs: 0,
+    exitProcess: (code) => {
+      this.exitCodes.push(code);
+    },
   };
+  readonly exitCodes: number[] = [];
 
   buildDaemon(): WechatDaemon {
     return new WechatDaemon({
@@ -366,7 +385,11 @@ describe("multi-directory daemon", () => {
     env.runtimeIn(TEST_CWD, "claude").emit(event("final_reply", { text: "Tests pass." }));
     await tick(20);
 
-    expect(env.texts()).toEqual(["[other-app/codex]\nBuild finished.", "[claude]\nTests pass."]);
+    // With two workspaces listed, every message names its directory.
+    expect(env.texts()).toEqual([
+      "[other-app/codex]\nBuild finished.",
+      "[daemon-parity/claude]\nTests pass.",
+    ]);
     expect(daemon.getStatus().cwd).toBe(TEST_CWD);
   });
 
@@ -486,7 +509,213 @@ describe("multi-directory daemon", () => {
   });
 });
 
+describe("visibility fixes after the first field test", () => {
+  test("a remote switch does not open a window outside the home directory", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await send(daemon, "/codex");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "pi");
+    env.alive.add(`${OTHER_CWD}|pi`);
+    await send(daemon, "/cd other-app");
+    env.wechat.sent.length = 0;
+    const createdBefore = env.created.length;
+
+    await send(daemon, "/codex");
+
+    expect(env.created).toHaveLength(createdBefore);
+    expect(env.opened.filter((entry) => entry.cwd === OTHER_CWD && entry.adapter === "codex")).toEqual([]);
+    expect(env.texts().at(-1)).toContain("other-app has no codex");
+    expect(env.texts().at(-1)).toContain("wechat-codex");
+    expect(env.texts().at(-1)).toContain("daemon-parity has codex. Send /cd daemon-parity");
+    expect(daemon.getStatus().activeAdapter).toBe("pi");
+  });
+
+  test("a remote switch still opens a window in the home directory, titled with it", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/claude");
+
+    expect(env.opened).toEqual([
+      { cwd: TEST_CWD, adapter: "claude", title: "wechat-claude · daemon-parity" },
+    ]);
+    expect(env.texts()).toContain("Opening claude. Please wait…");
+  });
+
+  test("switch replies name the directory once several are open", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+
+    await send(daemon, "/claude");
+
+    expect(env.texts().at(-1)).toContain("Active terminal: daemon-parity/claude.");
+  });
+
+  test("the thread a new Codex window opens is not announced; later switches are", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/codex");
+    const codex = env.latest();
+    env.wechat.sent.length = 0;
+
+    codex.emit(event("thread_switched", { threadId: "thread-1", source: "local", reason: "local_follow" }));
+    await tick(20);
+    expect(env.wechat.sent).toHaveLength(0);
+
+    codex.emit(event("thread_switched", { threadId: "thread-2", source: "local", reason: "local_follow" }));
+    await tick(20);
+    expect(env.wechat.sent).toHaveLength(1);
+  });
+
+  test("a CLI exiting while the daemon shuts down is not reported as an error", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    env.wechat.sent.length = 0;
+
+    env.latest().emit(event("fatal_error", { message: "app-server exited with code 0" }));
+    await daemon.shutdown();
+
+    expect(env.wechat.sent).toHaveLength(0);
+    expect(env.logs).toContain("fatal_error_notice_skipped: adapter=claude reason=shutdown");
+  });
+
+  test("control commands are logged without prompt or answer text", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+
+    await send(daemon, "/cd 1");
+    await send(daemon, "/answer secret-value");
+    await send(daemon, "plain prompt text");
+
+    expect(env.logs).toContain("inbound_command: /cd 1");
+    expect(env.logs).toContain("inbound_command: /answer");
+    expect(env.logs.some((line) => line.includes("secret-value"))).toBe(false);
+    expect(env.logs.some((line) => line.startsWith("inbound_command:") && line.includes("plain prompt"))).toBe(false);
+  });
+});
+
+async function launcherSlot(
+  daemon: WechatDaemon,
+  cwd: string,
+  adapter: DaemonAdapterKind,
+): Promise<Record<string, unknown>> {
+  return await daemon.handleDaemonRequest({
+    command: "ensure_slot",
+    adapter,
+    cwd,
+    openVisible: false,
+    sessionStartMode: "new",
+    boundToWindow: true,
+  }) as Record<string, unknown>;
+}
+
+function windowClosed(runtime: FakeRuntime): void {
+  runtime.emit(event("shutdown_requested", {
+    reason: "companion_closed",
+    message: "companion closed",
+  }));
+}
+
+describe("one engine, single-bridge and multi-CLI modes", () => {
+  test("a launcher's slot is bound to its window and needs no window from the daemon", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+
+    const claim = await launcherSlot(daemon, TEST_CWD, "pi");
+
+    expect(claim.activated).toBe(true);
+    expect(env.opened).toEqual([]);
+    expect(env.latest().lifecycle).toBe("companion_bound");
+    expect(daemon.getStatus().activeAdapter).toBe("pi");
+  });
+
+  test("an ephemeral daemon exits once the last window closes", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    daemon.setEphemeral(true);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    await launcherSlot(daemon, OTHER_CWD, "codex");
+
+    windowClosed(env.runtimeIn(TEST_CWD, "pi"));
+    await tick(20);
+    expect(env.exitCodes).toEqual([]);
+    expect(daemon.getStatus().slots.map((slot) => slot.adapter)).toEqual(["codex"]);
+
+    windowClosed(env.runtimeIn(OTHER_CWD, "codex"));
+    await tick(20);
+    expect(env.exitCodes).toEqual([0]);
+    expect(env.logs).toContain("ephemeral_idle_exit: no slot left");
+  });
+
+  test("in single-bridge mode a remote switch opens a window-bound CLI in the home directory", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    daemon.setEphemeral(true);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+
+    await send(daemon, "/codex");
+
+    expect(env.opened.map((entry) => `${entry.cwd}|${entry.adapter}`)).toEqual([`${TEST_CWD}|codex`]);
+    expect(env.runtimeIn(TEST_CWD, "codex").lifecycle).toBe("companion_bound");
+  });
+
+  test("a persistent daemon keeps running after a launcher window closes", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, OTHER_CWD, "codex");
+
+    windowClosed(env.runtimeIn(OTHER_CWD, "codex"));
+    await tick(20);
+
+    expect(env.exitCodes).toEqual([]);
+    expect(daemon.getStatus().slots).toEqual([]);
+    expect(env.logs.some((line) => line.startsWith("slot_released: adapter=codex"))).toBe(true);
+  });
+
+  test("promote keeps an ephemeral daemon running and moves home to the new directory", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    daemon.setEphemeral(true);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+
+    const promoted = await daemon.handleDaemonRequest({ command: "promote", cwd: OTHER_CWD });
+    windowClosed(env.runtimeIn(TEST_CWD, "pi"));
+    await tick(20);
+
+    expect(promoted).toEqual({ pid: process.pid, wasEphemeral: true });
+    expect(env.exitCodes).toEqual([]);
+    await send(daemon, "/cd other-app");
+    await send(daemon, "/claude");
+    expect(env.opened.map((entry) => `${entry.cwd}|${entry.adapter}`)).toEqual([`${OTHER_CWD}|claude`]);
+  });
+
+  test("a second launcher for a slot whose window is open is refused without resetting it", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "claude");
+    env.alive.add(`${TEST_CWD}|claude`);
+    const claude = env.latest();
+
+    const claim = await launcherSlot(daemon, TEST_CWD, "claude");
+
+    expect(claim.alreadyRunning).toBe(true);
+    expect(env.created).toHaveLength(1);
+    expect(claude.inputs).toEqual([]);
+  });
+});
+
 describe("daemon behaviors the standalone merge still has to change", () => {
   test.todo("persists per-slot session state so --session-start-mode restore resumes it");
-  test.todo("disposes a companion-bound slot on shutdown_requested and exits an ephemeral daemon with no slots left");
 });

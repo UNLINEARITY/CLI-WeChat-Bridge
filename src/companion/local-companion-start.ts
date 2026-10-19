@@ -6,7 +6,6 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -27,13 +26,10 @@ import {
 import { isDirectModuleRun } from "../core/direct-run.ts";
 import {
   readBridgeLockFile,
-  shouldAutoReclaimBridgeLock,
   type BridgeLockPayload,
 } from "../bridge/bridge-state.ts";
 import {
-  clearLocalCompanionOccupancy,
   clearLocalCompanionEndpoint,
-  readLocalCompanionEndpoint,
   type LocalCompanionEndpoint,
 } from "./local-companion-link.ts";
 import type {
@@ -64,14 +60,6 @@ type LocalCompanionStartCliOptions = {
   /** Codex-only: attach the bridge to the live shared-daemon session in cwd. */
   attachCurrentSession?: boolean;
   codexThreadId?: string;
-};
-
-type EndpointReadResult = {
-  endpoint: LocalCompanionEndpoint | null;
-};
-
-type EnsureBridgeReadyResult = {
-  shouldOpenVisibleClient: boolean;
 };
 
 export type LocalCompanionLaunchDecision =
@@ -434,66 +422,6 @@ async function stopExistingBridge(
   );
 }
 
-async function isEndpointReachable(endpoint: LocalCompanionEndpoint): Promise<boolean> {
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-  return await new Promise<boolean>((resolve) => {
-    const port = endpoint.serverPort ?? endpoint.port;
-    const socket = net.connect({
-      host: "127.0.0.1",
-      port,
-    });
-
-    let done = false;
-    const finish = (result: boolean) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      socket.destroy();
-      resolve(result);
-    };
-
-    socket.setTimeout(400);
-    socket.once("connect", () => finish(true));
-    socket.once("timeout", () => finish(false));
-    socket.once("error", () => finish(false));
-  });
-}
-
-async function readUsableEndpoint(
-  options: Pick<LocalCompanionStartCliOptions, "cwd" | "adapter" | "channelId">,
-): Promise<EndpointReadResult> {
-  const { cwd, adapter } = options;
-  const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
-  if (!endpoint || endpoint.kind !== adapter) {
-    return { endpoint: null };
-  }
-
-  if (await isEndpointReachable(endpoint)) {
-    return { endpoint };
-  }
-
-  clearLocalCompanionEndpoint(cwd, endpoint.instanceId, { adapter });
-  log(options, `Removed stale local companion endpoint for ${cwd}.`);
-  return { endpoint: null };
-}
-
-function isCompanionAlive(endpoint: LocalCompanionEndpoint | null): boolean {
-  if (!endpoint?.companionPid) {
-    return false;
-  }
-
-  if (isPidAlive(endpoint.companionPid)) {
-    return true;
-  }
-
-  clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId, {
-    adapter: endpoint.kind,
-  });
-  return false;
-}
-
 export function buildBackgroundBridgeArgs(
   entryPath: string,
   options: LocalCompanionStartCliOptions,
@@ -565,122 +493,71 @@ function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
   child.unref();
 }
 
-async function waitForEndpoint(
-  options: LocalCompanionStartCliOptions,
-): Promise<LocalCompanionEndpoint> {
-  const { cwd, adapter, timeoutMs } = options;
-  const deadline = Date.now() + timeoutMs;
+// ensure_slot creates the slot runtime before answering; Codex app-server
+// startup can take a while, so delegation uses a generous deadline.
+const ENSURE_SLOT_TIMEOUT_MS = 45_000;
+const DAEMON_START_TIMEOUT_MS = 20_000;
 
-  while (Date.now() < deadline) {
-    const result = await readUsableEndpoint(options);
-    if (result.endpoint) {
-      return result.endpoint;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+type DaemonConnectionDeps = {
+  readEndpoint?: DaemonEndpointReader;
+  isEndpointAlive?: DaemonEndpointAliveChecker;
+  sendRequest?: DaemonRequestSender;
+  clearEndpoint?: DaemonEndpointClearer;
+  startDaemon?: (options: LocalCompanionStartCliOptions) => void;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+export function buildEphemeralDaemonArgs(
+  entryPath: string,
+  options: Pick<LocalCompanionStartCliOptions, "cwd" | "channelId">,
+): string[] {
+  const args = ["--no-warnings"];
+  if (path.extname(entryPath) === ".ts") {
+    args.push("--experimental-strip-types");
   }
+  args.push(entryPath, "--ephemeral", "--cwd", options.cwd);
+  if (options.channelId) {
+    args.push("--channel", options.channelId);
+  }
+  return args;
+}
 
-  throw new Error(
-    `Timed out waiting for the ${adapter} bridge endpoint for ${cwd}. Check ${BRIDGE_LOG_FILE}.`,
+/** Start a launcher-bound daemon that exits after its last window closes. */
+function startEphemeralDaemon(options: LocalCompanionStartCliOptions): void {
+  const entryPath = path.resolve(
+    MODULE_DIR,
+    "..",
+    "daemon",
+    `wechat-daemon${RUNTIME_ENTRY_EXTENSION}`,
   );
-}
-
-async function ensureBridgeReady(
-  options: LocalCompanionStartCliOptions,
-): Promise<EnsureBridgeReadyResult> {
-  // If the lock is absent or the lock-holding process is dead, do NOT trust a
-  // leftover endpoint.  The channel transport may have crashed while
-  // the opencode server kept running.  Starting only the panel would leave no
-  // bridge to receive channel messages.
-  const lock = readBridgeLockFile();
-  const lockProcessAlive = lock ? isPidAlive(lock.pid) : false;
-  if (!lock || !lockProcessAlive) {
-    if (lock && !lockProcessAlive) {
-      log(options, `Found stale lock for ${options.cwd} (pid=${lock.pid} dead). Clearing.`);
-      clearLocalCompanionEndpoint(options.cwd, undefined, {
-        adapter: options.adapter,
-      });
-    }
-
-    log(options, `Starting bridge in background for ${options.cwd}...`);
-    startBridgeInBackground(options);
-    await waitForEndpoint(options);
-    return { shouldOpenVisibleClient: true };
-  }
-
-  // Lock is held by a live process; decide whether to reuse, switch, or replace it.
-  const endpointResult = await readUsableEndpoint(options);
-  const decision = decideLaunchAction({
-    requestedAdapter: options.adapter,
-    requestedCwd: options.cwd,
-    runningLock: lock,
-    lockShouldAutoReclaim: shouldAutoReclaimBridgeLock(lock),
-    endpoint: endpointResult.endpoint,
-    endpointIsReachable: Boolean(endpointResult.endpoint),
-    companionIsAlive: isCompanionAlive(endpointResult.endpoint),
-    sessionStartMode: options.sessionStartMode,
-    requestedChannelId: options.channelId,
+  const child = spawn(process.execPath, buildEphemeralDaemonArgs(entryPath, options), {
+    cwd: options.cwd,
+    env: process.env,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
   });
-
-  log(options, decision.message);
-
-  if (decision.kind === "already_active") {
-    return { shouldOpenVisibleClient: false };
-  }
-
-  if (decision.kind === "open_companion") {
-    if (!endpointResult.endpoint) {
-      await waitForEndpoint(options);
-    }
-    return { shouldOpenVisibleClient: true };
-  }
-
-  if (decision.kind === "switch_workspace") {
-    try {
-      await stopExistingBridge(lock, options);
-    } catch (error) {
-      log(options, decision.failureMessage);
-      throw error;
-    }
-  } else {
-    await stopExistingBridge(lock, options);
-  }
-
-  log(options, `Starting replacement bridge in background for ${options.cwd}...`);
-  startBridgeInBackground(options);
-  await waitForEndpoint(options);
-  return { shouldOpenVisibleClient: true };
+  // A detached background spawn must still handle its own 'error' event
+  // (e.g. ENOENT), otherwise it surfaces as an unhandled exception.
+  child.on("error", () => {
+    /* reported below when the daemon never answers */
+  });
+  child.unref();
 }
 
-// The daemon's ensure_slot can legitimately take a while: opening a visible
-// client waits up to 15s for it to connect, and codex waits another 15s for
-// the visible thread — all serialized per adapter. The default 2s IPC timeout
-// would expire on nearly every cold start, so delegation uses a generous
-// deadline and falls back to a local bridge when the daemon cannot deliver.
-const ENSURE_SLOT_DELEGATION_TIMEOUT_MS = 45_000;
-
-export async function tryDelegateToDaemon(
+/** This channel's live daemon, clearing a stale endpoint on the way. */
+async function findLiveDaemon(
   options: LocalCompanionStartCliOptions,
-  deps: {
-    readEndpoint?: DaemonEndpointReader;
-    isEndpointAlive?: DaemonEndpointAliveChecker;
-    sendRequest?: DaemonRequestSender;
-    clearEndpoint?: DaemonEndpointClearer;
-  } = {},
-): Promise<boolean> {
-  const readEndpoint = deps.readEndpoint ?? readDaemonEndpoint;
-  const isEndpointAlive = deps.isEndpointAlive ?? isDaemonEndpointAlive;
-  const sendRequest = deps.sendRequest ?? sendDaemonRequest;
-  const clearEndpoint = deps.clearEndpoint ?? clearDaemonEndpoint;
-  const endpoint: DaemonEndpoint | null = readEndpoint();
+  deps: DaemonConnectionDeps,
+): Promise<DaemonEndpoint | null> {
+  const endpoint = (deps.readEndpoint ?? readDaemonEndpoint)();
   if (!endpoint) {
-    return false;
+    return null;
   }
-
-  if (!(await isEndpointAlive(endpoint))) {
-    clearEndpoint(endpoint.pid);
-    return false;
+  if (!(await (deps.isEndpointAlive ?? isDaemonEndpointAlive)(endpoint))) {
+    (deps.clearEndpoint ?? clearDaemonEndpoint)(endpoint.pid);
+    return null;
   }
-
   const requestedChannel = options.channelId ?? "wechat";
   const endpointChannel = endpoint.channelId ?? "wechat";
   if (requestedChannel !== endpointChannel) {
@@ -688,8 +565,50 @@ export async function tryDelegateToDaemon(
       `${endpointChannel}-daemon is running for ${endpoint.cwd}. Stop it before starting the ${requestedChannel} channel.`,
     );
   }
+  return endpoint;
+}
 
-  const response: DaemonResponse = await sendRequest(
+/**
+ * The channel daemon this launcher joins. When none is running, start an
+ * ephemeral one (single-bridge mode) and wait for it to answer.
+ */
+export async function connectToDaemon(
+  options: LocalCompanionStartCliOptions,
+  deps: DaemonConnectionDeps = {},
+): Promise<DaemonEndpoint> {
+  const running = await findLiveDaemon(options, deps);
+  if (running) {
+    return running;
+  }
+  log(options, `Starting ${options.channelId ?? "wechat"} bridge for ${options.cwd}...`);
+  (deps.startDaemon ?? startEphemeralDaemon)(options);
+  const sleep = deps.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const deadline = Date.now() + Math.max(options.timeoutMs, DAEMON_START_TIMEOUT_MS);
+  while (Date.now() < deadline) {
+    await sleep(250);
+    const started = await findLiveDaemon(options, deps);
+    if (started) {
+      return started;
+    }
+  }
+  throw new Error(
+    `The ${options.channelId ?? "wechat"} bridge did not start within ${Math.round(DAEMON_START_TIMEOUT_MS / 1000)}s. Check ${BRIDGE_LOG_FILE}.`,
+  );
+}
+
+export type DaemonSlotClaim = {
+  created: boolean;
+  activated: boolean;
+  alreadyRunning?: boolean;
+};
+
+/** Ask the daemon for this directory's slot; the CLI then runs in this terminal. */
+export async function claimDaemonSlot(
+  options: LocalCompanionStartCliOptions,
+  endpoint: DaemonEndpoint,
+  deps: Pick<DaemonConnectionDeps, "sendRequest"> = {},
+): Promise<DaemonSlotClaim> {
+  const response: DaemonResponse = await (deps.sendRequest ?? sendDaemonRequest)(
     endpoint,
     {
       command: "ensure_slot",
@@ -697,30 +616,18 @@ export async function tryDelegateToDaemon(
       cwd: options.cwd,
       profile: options.profile,
       cliArgs: options.cliArgs,
-      openVisible: true,
+      openVisible: false,
       sessionStartMode: options.sessionStartMode,
-      reuseExistingVisible:
-        options.adapter !== "pi" || options.sessionStartMode !== "new",
+      boundToWindow: true,
     },
-    { timeoutMs: ENSURE_SLOT_DELEGATION_TIMEOUT_MS },
+    { timeoutMs: ENSURE_SLOT_TIMEOUT_MS },
   );
   if (!response.ok) {
-    // A daemon that cannot answer in time (or at all) must not abort the
-    // launch: fall back to a local companion-bound bridge so the user still
-    // gets a working terminal instead of an error for work the daemon may
-    // still complete.
-    log(
-      options,
-      `Daemon delegation failed (${response.error ?? "unknown error"}). Falling back to a local bridge.`,
+    throw new Error(
+      `The ${options.channelId ?? "wechat"} bridge could not prepare ${options.adapter} for ${options.cwd}: ${response.error ?? "no response"}. Check ${BRIDGE_LOG_FILE}.`,
     );
-    return false;
   }
-
-  log(
-    options,
-    `Delegated to running ${requestedChannel}-daemon for ${options.cwd}.`,
-  );
-  return true;
+  return response.result as DaemonSlotClaim;
 }
 
 export async function runVisibleClient(
@@ -801,13 +708,14 @@ export async function runLocalCompanionStart(
     return await runAttachCurrentSession(options);
   }
 
-  if (await tryDelegateToDaemon(options)) {
-    return 0;
-  }
-
-  const ready = await ensureBridgeReady(options);
-  if (!ready.shouldOpenVisibleClient) {
-    return 0;
+  const endpoint = await connectToDaemon(options);
+  const claim = await claimDaemonSlot(options, endpoint);
+  if (claim.alreadyRunning) {
+    log(
+      options,
+      `${options.adapter} is already running for ${options.cwd} in another terminal. Use that window, or close it and run this command again.`,
+    );
+    return 1;
   }
   return await runVisibleClient(options);
 }

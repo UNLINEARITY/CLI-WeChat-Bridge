@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { delay } from "../bridge/bridge-adapters.shared.ts";
 import type { BridgeEvent } from "../bridge/bridge-types.ts";
 import {
   formatApprovalMessage,
@@ -37,6 +38,8 @@ import {
   toPendingUserInput,
 } from "./daemon-slot.ts";
 
+const FATAL_NOTICE_GRACE_MS = 1_000;
+
 function toWechatSendContext(kind: ChannelOutputKind): WechatSendContext {
   if (kind === "mirrored_input") {
     return "mirrored_user_input";
@@ -62,6 +65,11 @@ export type SlotEventHost = {
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;
   maybeDrainDeferredInputs: (slot: DaemonSlot) => Promise<void>;
   disposeDeadSlot: (slot: DaemonSlot) => void;
+  releaseSlot: (slot: DaemonSlot) => void;
+  /** True once the daemon has started shutting down. */
+  isShuttingDown: () => boolean;
+  /** Wait before reporting a fatal error, to tell it apart from shutdown. */
+  fatalNoticeGraceMs?: number;
   /** Source prefix for slot output (`[adapter]` or `[workspace/adapter]`). */
   prefix: (slot: DaemonSlot, text: string) => string;
   daemonLog: (message: string) => void;
@@ -205,7 +213,12 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
     threadSwitched: (next) => {
       if (next.source === "local") slot.resumeCoordinator.clear();
       host.daemonLog(`thread_switched: adapter=${slot.adapter} thread=${next.threadId} source=${next.source} reason=${next.reason}`);
+      // The first thread is the one a new visible window opens; switching
+      // into it is not news to the operator.
+      const firstThread = slot.knownThreadId === undefined;
+      slot.knownThreadId = next.threadId;
       if (
+        firstThread ||
         shouldSuppressCodexLocalThreadNotice({
           adapter: slot.adapter,
           source: next.source,
@@ -256,11 +269,22 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       void host.maybeDrainDeferredInputs(slot);
       host.disposeDeadSlot(slot);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
+        // Closing the daemon's terminal ends its CLI children a moment before
+        // the daemon sees the signal; those exits are not errors to report.
+        await delay(host.fatalNoticeGraceMs ?? FATAL_NOTICE_GRACE_MS);
+        if (host.isShuttingDown()) {
+          host.daemonLog(`fatal_error_notice_skipped: adapter=${slot.adapter} reason=shutdown`);
+          return;
+        }
         await host.queueMessage(host.operatorId, host.prefix(slot, formatUserFacingBridgeFatalError(next.message)), "fatal_error", eventTarget);
       }));
     },
     shutdownRequested: (next) => {
       host.daemonLog(`slot_shutdown_requested: adapter=${slot.adapter} reason=${next.reason}`);
+      // A window-bound slot ends with its visible window.
+      if (slot.boundToWindow) {
+        host.releaseSlot(slot);
+      }
     },
     }))
     .catch((error) => {

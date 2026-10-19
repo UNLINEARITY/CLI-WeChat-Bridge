@@ -19,7 +19,9 @@ import {
   normalizeComparablePath,
   parseCliArgs,
   runVisibleClient,
-  tryDelegateToDaemon,
+  buildEphemeralDaemonArgs,
+  claimDaemonSlot,
+  connectToDaemon,
 } from "../../src/companion/local-companion-start.ts";
 import type {
   DaemonEndpoint,
@@ -278,223 +280,146 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
-  test("tryDelegateToDaemon asks a live same-cwd daemon to ensure the requested slot", async () => {
-    const cwd = path.resolve("./tmp/project");
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd,
-      startedAt: "2026-05-22T00:00:00.000Z",
-    };
-    const requests: DaemonRequest[] = [];
+  const liveEndpoint = (overrides: Partial<DaemonEndpoint> = {}): DaemonEndpoint => ({
+    protocolVersion: 1,
+    pid: 123,
+    port: 9123,
+    token: "token",
+    cwd: path.resolve("./tmp/project"),
+    startedAt: "2026-05-22T00:00:00.000Z",
+    ...overrides,
+  });
+  const launchOptions = (overrides: Partial<Parameters<typeof connectToDaemon>[0]> = {}) => ({
+    adapter: "opencode" as const,
+    cwd: path.resolve("./tmp/project"),
+    timeoutMs: 15000,
+    sessionStartMode: "new" as const,
+    cliArgs: [],
+    ...overrides,
+  });
 
-    const delegated = await tryDelegateToDaemon(
-      {
-        adapter: "opencode",
-        cwd,
-        profile: "work",
-        timeoutMs: 15000,
-        sessionStartMode: "new",
-        cliArgs: ["--mode", "build"],
+  test("connectToDaemon joins a live daemon in any directory without starting another", async () => {
+    let started = 0;
+    const endpoint = liveEndpoint({ cwd: "D:/work/project-a" });
+
+    const connected = await connectToDaemon(launchOptions({ cwd: "D:/work/project-b" }), {
+      readEndpoint: () => endpoint,
+      isEndpointAlive: async () => true,
+      startDaemon: () => {
+        started += 1;
       },
-      {
-        readEndpoint: () => endpoint,
+    });
+
+    expect(connected).toBe(endpoint);
+    expect(started).toBe(0);
+  });
+
+  test("connectToDaemon starts an ephemeral daemon when none is running and waits for it", async () => {
+    const endpoint = liveEndpoint();
+    let current: DaemonEndpoint | null = null;
+    const startedFor: string[] = [];
+
+    const connected = await connectToDaemon(launchOptions(), {
+      readEndpoint: () => current,
+      isEndpointAlive: async () => true,
+      startDaemon: (options) => {
+        startedFor.push(options.cwd);
+        current = endpoint;
+      },
+      sleep: async () => undefined,
+    });
+
+    expect(startedFor).toEqual([path.resolve("./tmp/project")]);
+    expect(connected).toBe(endpoint);
+  });
+
+  test("connectToDaemon clears a stale endpoint before starting a daemon", async () => {
+    const stale = liveEndpoint({ pid: 999 });
+    const fresh = liveEndpoint({ pid: 456 });
+    const cleared: number[] = [];
+    let current: DaemonEndpoint | null = stale;
+
+    const connected = await connectToDaemon(launchOptions(), {
+      readEndpoint: () => current,
+      isEndpointAlive: async (endpoint) => endpoint.pid !== 999,
+      clearEndpoint: (pid) => {
+        cleared.push(pid ?? 0);
+        current = null;
+      },
+      startDaemon: () => {
+        current = fresh;
+      },
+      sleep: async () => undefined,
+    });
+
+    expect(cleared).toEqual([999]);
+    expect(connected).toBe(fresh);
+  });
+
+  test("connectToDaemon rejects a live daemon owned by another channel", async () => {
+    await expect(
+      connectToDaemon(launchOptions({ channelId: "wecom" }), {
+        readEndpoint: () => liveEndpoint({ channelId: "wechat" }),
         isEndpointAlive: async () => true,
-        sendRequest: async (_endpoint, request) => {
+      }),
+    ).rejects.toThrow("Stop it before starting the wecom channel");
+  });
+
+  test("claimDaemonSlot asks for a window-bound slot without opening a window", async () => {
+    const requests: DaemonRequest[] = [];
+    const timeouts: number[] = [];
+
+    const claim = await claimDaemonSlot(
+      launchOptions({ profile: "work", cliArgs: ["--mode", "build"] }),
+      liveEndpoint(),
+      {
+        sendRequest: async (_endpoint, request, options) => {
           requests.push(request);
-          return { ok: true };
+          timeouts.push(options?.timeoutMs ?? 0);
+          return { ok: true, result: { created: true, activated: true } };
         },
       },
     );
 
-    expect(delegated).toBe(true);
+    expect(claim).toEqual({ created: true, activated: true });
     expect(requests).toEqual([
       {
         command: "ensure_slot",
         adapter: "opencode",
-        cwd,
+        cwd: path.resolve("./tmp/project"),
         profile: "work",
         cliArgs: ["--mode", "build"],
-        openVisible: true,
+        openVisible: false,
         sessionStartMode: "new",
-        reuseExistingVisible: true,
+        boundToWindow: true,
       },
     ]);
-  });
-
-  test("tryDelegateToDaemon requests a fresh Pi session even when its TUI is visible", async () => {
-    const cwd = path.resolve("./tmp/project");
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd,
-      startedAt: "2026-05-22T00:00:00.000Z",
-    };
-    const requests: DaemonRequest[] = [];
-
-    const delegated = await tryDelegateToDaemon(
-      {
-        adapter: "pi",
-        cwd,
-        timeoutMs: 15000,
-        sessionStartMode: "new",
-        cliArgs: [],
-      },
-      {
-        readEndpoint: () => endpoint,
-        isEndpointAlive: async () => true,
-        sendRequest: async (_endpoint, request) => {
-          requests.push(request);
-          return { ok: true };
-        },
-      },
-    );
-
-    expect(delegated).toBe(true);
-    expect(requests[0]).toEqual(
-      expect.objectContaining({
-        adapter: "pi",
-        sessionStartMode: "new",
-        reuseExistingVisible: false,
-      }),
-    );
-  });
-
-  test("tryDelegateToDaemon hands a launcher in another directory to the running daemon", async () => {
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd: "D:/work/project-a",
-      startedAt: "2026-05-22T00:00:00.000Z",
-    };
-    const requests: unknown[] = [];
-
-    const delegated = await tryDelegateToDaemon(
-      {
-        adapter: "codex",
-        cwd: "D:/work/project-b",
-        timeoutMs: 15000,
-        sessionStartMode: "restore",
-        cliArgs: [],
-      },
-      {
-        readEndpoint: () => endpoint,
-        isEndpointAlive: async () => true,
-        sendRequest: async (_endpoint, payload) => {
-          requests.push(payload);
-          return { ok: true, result: {} };
-        },
-      },
-    );
-
-    expect(delegated).toBe(true);
-    expect(requests).toEqual([
-      expect.objectContaining({ command: "ensure_slot", adapter: "codex", cwd: "D:/work/project-b" }),
-    ]);
-  });
-
-  test("tryDelegateToDaemon rejects a live daemon owned by another channel", async () => {
-    const cwd = path.resolve("./tmp/project");
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd,
-      startedAt: "2026-05-22T00:00:00.000Z",
-      channelId: "wechat",
-    };
-
-    await expect(
-      tryDelegateToDaemon(
-        {
-          adapter: "codex",
-          cwd,
-          timeoutMs: 15000,
-          sessionStartMode: "restore",
-          cliArgs: [],
-          channelId: "wecom",
-        },
-        {
-          readEndpoint: () => endpoint,
-          isEndpointAlive: async () => true,
-        },
-      ),
-    ).rejects.toThrow("Stop it before starting the wecom channel");
-  });
-
-  test("tryDelegateToDaemon clears stale daemon endpoint and falls back", async () => {
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd: path.resolve("./tmp/project"),
-      startedAt: "2026-05-22T00:00:00.000Z",
-    };
-    const cleared: number[] = [];
-
-    const delegated = await tryDelegateToDaemon(
-      {
-        adapter: "codex",
-        cwd: endpoint.cwd,
-        timeoutMs: 15000,
-        sessionStartMode: "restore",
-        cliArgs: [],
-      },
-      {
-        readEndpoint: () => endpoint,
-        isEndpointAlive: async () => false,
-        clearEndpoint: (pid) => {
-          cleared.push(pid ?? 0);
-        },
-      },
-    );
-
-    expect(delegated).toBe(false);
-    expect(cleared).toEqual([123]);
-  });
-
-  test("tryDelegateToDaemon falls back to a local bridge when the daemon cannot deliver", async () => {
-    const endpoint: DaemonEndpoint = {
-      protocolVersion: 1,
-      pid: 123,
-      port: 9123,
-      token: "token",
-      cwd: path.resolve("./tmp/project"),
-      startedAt: "2026-05-22T00:00:00.000Z",
-    };
-    const timeouts: number[] = [];
-
-    const delegated = await tryDelegateToDaemon(
-      {
-        adapter: "codex",
-        cwd: endpoint.cwd,
-        timeoutMs: 15000,
-        sessionStartMode: "restore",
-        cliArgs: [],
-      },
-      {
-        readEndpoint: () => endpoint,
-        isEndpointAlive: async () => true,
-        sendRequest: async (_endpoint, _request, options) => {
-          timeouts.push(options?.timeoutMs ?? 0);
-          return { ok: false, error: "Timed out waiting for daemon response." };
-        },
-      },
-    );
-
-    // Failure must degrade to a local launch (false) instead of throwing, and
-    // ensure_slot must use a deadline that covers the daemon's 15s+15s
-    // visible-client waits instead of the 2s IPC default.
-    expect(delegated).toBe(false);
     expect(timeouts).toEqual([45_000]);
+  });
+
+  test("claimDaemonSlot reports a daemon that cannot prepare the slot", async () => {
+    await expect(
+      claimDaemonSlot(launchOptions(), liveEndpoint(), {
+        sendRequest: async () => ({ ok: false, error: "Timed out waiting for daemon response." }),
+      }),
+    ).rejects.toThrow("could not prepare opencode");
+  });
+
+  test("buildEphemeralDaemonArgs starts the daemon in launcher mode for the channel", () => {
+    expect(buildEphemeralDaemonArgs("/pkg/dist/daemon/wechat-daemon.js", {
+      cwd: "/work/app",
+      channelId: "telegram",
+    })).toEqual([
+      "--no-warnings",
+      "/pkg/dist/daemon/wechat-daemon.js",
+      "--ephemeral",
+      "--cwd",
+      "/work/app",
+      "--channel",
+      "telegram",
+    ]);
+    expect(buildEphemeralDaemonArgs("/repo/src/daemon/wechat-daemon.ts", { cwd: "/work/app" }))
+      .toContain("--experimental-strip-types");
   });
 
   test("runVisibleClient routes OpenCode through the shared in-process companion", async () => {

@@ -80,6 +80,8 @@ export type DaemonRequest =
       openVisible?: boolean;
       sessionStartMode?: BridgeSessionStartMode;
       reuseExistingVisible?: boolean;
+      /** The launcher runs the CLI itself; the slot ends when that window closes. */
+      boundToWindow?: boolean;
     }
   | {
       command: "switch_adapter";
@@ -111,7 +113,9 @@ export type DaemonRequest =
       metadata?: Record<string, string>;
     }
   | { command: "status" }
-  | { command: "shutdown" };
+  | { command: "shutdown" }
+  /** `wechat-daemon` found this daemon running: keep it alive and make `cwd` home. */
+  | { command: "promote"; cwd: string };
 
 export type DaemonResponse =
   | {

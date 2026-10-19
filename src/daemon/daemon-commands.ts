@@ -19,6 +19,11 @@ export type DaemonCliOptions = {
   profile?: string;
   initialAdapter?: DaemonAdapterKind;
   openVisible: boolean;
+  /**
+   * Started by a launcher (single-bridge mode): exits once the last window
+   * closes, and `wechat-daemon` can promote it to a persistent daemon.
+   */
+  ephemeral?: boolean;
   channelId?: BridgeChannelId;
 };
 
@@ -27,6 +32,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
   let profile: string | undefined;
   let initialAdapter: DaemonAdapterKind | undefined;
   let openVisible = true;
+  let ephemeral = false;
   let channelId: BridgeChannelId = "wechat";
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -86,6 +92,11 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
       continue;
     }
 
+    if (arg === "--ephemeral") {
+      ephemeral = true;
+      continue;
+    }
+
     if (arg === "--no-open") {
       openVisible = false;
       continue;
@@ -99,6 +110,7 @@ export function parseDaemonCliArgs(argv: string[]): DaemonCliOptions {
     profile,
     initialAdapter,
     openVisible,
+    ...(ephemeral ? { ephemeral } : {}),
     ...(channelId === "wechat" ? {} : { channelId }),
   };
 }

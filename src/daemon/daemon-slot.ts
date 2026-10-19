@@ -30,6 +30,12 @@ export type DaemonSlot = {
   adapter: DaemonAdapterKind;
   /** Workspace directory this slot's CLI runs in. */
   cwd: string;
+  /** 1-based instance number of this adapter within its workspace. */
+  instance: number;
+  /** First thread seen for this slot; its opening is not announced. */
+  knownThreadId?: string;
+  /** The slot ends when its visible window closes (launcher or ephemeral daemon). */
+  boundToWindow: boolean;
   runtime: BridgeAdapter;
   controller: BridgeController;
   outputBatcher: OutputBatcher;
@@ -104,6 +110,13 @@ export type EnsureSlotOptions = {
   cwd?: string;
   /** Make the slot the current one once it is ready; defaults to true. */
   activate?: boolean;
+  /**
+   * Remote requests may open a visible window only in the home workspace;
+   * launchers running locally pass false. Defaults to true.
+   */
+  restrictToHome?: boolean;
+  /** End the slot when its visible window closes. */
+  boundToWindow?: boolean;
 };
 
 export type EnsureSlotResult = {
@@ -117,7 +130,16 @@ export type EnsureSlotResult = {
   activationVersion: number;
   previousActiveAdapter?: DaemonAdapterKind;
   previousActiveCwd: string;
+  /** Refused: no window exists and remote requests cannot open one here. */
+  outsideHome?: boolean;
+  /** Refused: a launcher asked for a slot whose window is already open. */
+  alreadyRunning?: boolean;
 };
+
+/** Display name of a slot: `codex`, or `codex-2` for a second instance. */
+export function slotName(slot: Pick<DaemonSlot, "adapter" | "instance">): string {
+  return slot.instance > 1 ? `${slot.adapter}-${slot.instance}` : slot.adapter;
+}
 
 /** Normalized identity of a workspace directory. */
 export function workspaceKeyOf(cwd: string): string {

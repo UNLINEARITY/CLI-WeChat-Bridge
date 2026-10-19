@@ -18,7 +18,8 @@ import {
   formatAttachedBridgeMessage,
   parseCliArgs,
   resolveAttachedBridgeThreadId,
-  tryDelegateToDaemon,
+  claimDaemonSlot,
+  connectToDaemon,
 } from "../../src/companion/local-companion-start.ts";
 import type { BridgeLockPayload } from "../../src/bridge/bridge-state.ts";
 
@@ -105,32 +106,32 @@ describe("channel-aware companion launchers", () => {
       expect(result.stderr.toString()).toContain(`[${channelId}-claude] --timeout-ms must be a number >= 1000`);
     });
 
-    test(`${channelId} daemon success and fallback logs use the requesting launcher prefix`, async () => {
+    test(`${channelId} daemon start and failure messages use the requesting launcher prefix`, async () => {
       const options = parseCliArgs(["--channel", channelId, "--adapter", "claude", "--cwd", cwd]);
+      const endpoint = { protocolVersion: 1 as const, pid: 123, port: 9123,
+        token: "test-token", cwd, startedAt: lock.startedAt, channelId };
       const output: string[] = [];
       const write = spyOn(process.stderr, "write").mockImplementation((chunk) => {
         output.push(String(chunk));
         return true;
       });
+      let current: typeof endpoint | null = null;
       try {
-        const deps = {
-          readEndpoint: () => ({ protocolVersion: 1 as const, pid: 123, port: 9123,
-            token: "test-token", cwd, startedAt: lock.startedAt, channelId }),
+        await connectToDaemon(options, {
+          readEndpoint: () => current,
           isEndpointAlive: async () => true,
-        };
-        expect(await tryDelegateToDaemon(options, {
-          ...deps, sendRequest: async () => ({ ok: true as const }),
-        })).toBe(true);
-        expect(await tryDelegateToDaemon(options, {
-          ...deps, sendRequest: async () => ({ ok: false as const, error: "timeout" }),
-        })).toBe(false);
+          startDaemon: () => {
+            current = endpoint;
+          },
+          sleep: async () => undefined,
+        });
       } finally {
         write.mockRestore();
       }
-      expect(output).toEqual([
-        `[${channelId}-claude] Delegated to running ${channelId}-daemon for ${cwd}.\n`,
-        `[${channelId}-claude] Daemon delegation failed (timeout). Falling back to a local bridge.\n`,
-      ]);
+      expect(output).toEqual([`[${channelId}-claude] Starting ${channelId} bridge for ${cwd}...\n`]);
+      await expect(claimDaemonSlot(options, endpoint, {
+        sendRequest: async () => ({ ok: false as const, error: "timeout" }),
+      })).rejects.toThrow(`The ${channelId} bridge could not prepare claude for ${cwd}: timeout.`);
     });
   }
 

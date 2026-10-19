@@ -260,10 +260,10 @@ After starting the daemon, you can switch CLIs from the messaging channel. When 
 
 Daemon behavior:
 
-- One daemon can manage several working directories: running a direct launcher (for example `wechat-claude`) in another directory adds that directory to the running daemon. Send `/cd` in the channel to list directories and `/cd <number>` or `/cd <name>` to switch. Only directories opened on this computer can be selected.
-- Output from the current directory is labeled like `[codex]`; output from other directories is labeled like `[directory/codex]`.
+- One daemon can manage several working directories: running a direct launcher (for example `wechat-claude`) in another directory runs the CLI in that terminal and adds the directory to the running daemon. Send `/cd` in the channel to list directories and `/cd <number>` or `/cd <name>` to switch. Only directories opened on this computer can be selected.
+- With one directory, output is labeled like `[codex]`; with several, all output is labeled like `[directory/codex]`.
 - Startup takes over and cleans up old standalone bridge processes, stale locks, and old endpoints.
-- It opens a new visible terminal when the requested CLI is not already available.
+- It opens a new visible terminal in its startup directory when the requested CLI is not already available; CLIs in other directories start from a direct launcher run in that directory.
 - Important output includes `[codex]`, `[claude]`, `[opencode]`, or `[pi]` labels before being sent back.
 - Send `/daemon-stop` in the connected channel to stop the daemon.
 

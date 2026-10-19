@@ -410,4 +410,8 @@ export const messages: Record<string, string> = {
   "daemon.answer.pendingElsewhere": "No question is waiting here. Other waiting questions:\n{list}\nSend /answer #<number> <answer>.",
   "daemon.answer.list": "Waiting questions:\n{list}\nAnswer the current one with /answer <answer>, others with /answer #<number> <answer>.",
   "daemon.answer.badIndex": "There is no waiting question numbered #{index}.",
+  "daemon.opening": "Opening {source}. Please wait…",
+  "daemon.outsideHome": "{label} has no {adapter}. To use it, run {launcher} in that directory on this computer.",
+  "daemon.outsideHome.elsewhere": "{label} has {adapter}. Send /cd {label} to switch to it.",
+  "daemon.cli.promoted": "{channel}-daemon is already running (pid {pid}) and now keeps running.\nRegistered directory: {cwd}\nLog: {log}",
 };

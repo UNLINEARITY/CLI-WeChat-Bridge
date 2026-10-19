@@ -59,15 +59,29 @@ export function buildVisibleClientLaunchArgs(params: {
   return args;
 }
 
+/** Terminal window title; names the workspace when the caller provides one. */
+function visibleClientTitle(params: {
+  adapter: DaemonAdapterKind;
+  channelId?: BridgeChannelId;
+  title?: string;
+}): string {
+  return params.title ?? `${params.channelId ?? "wechat"}-${params.adapter}`;
+}
+
+function appleScriptString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 export function buildWindowsVisibleClientLaunchCommand(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
   args: string[];
   channelId?: BridgeChannelId;
+  title?: string;
 }): string {
   return [
     "start",
-    quoteWindowsCommandArg(`${params.channelId ?? "wechat"}-${params.adapter}`),
+    quoteWindowsCommandArg(visibleClientTitle(params)),
     "/D",
     quoteWindowsCommandArg(params.cwd),
     quoteWindowsCommandArg(process.execPath),
@@ -124,6 +138,8 @@ export function openVisibleClient(params: {
   cliArgs?: string[];
   onError?: (error: Error) => void;
   channelId?: BridgeChannelId;
+  /** Window title, e.g. `wechat-codex · my-app`. */
+  title?: string;
 }): VisibleClientLaunch {
   const args = buildVisibleClientLaunchArgs(params);
   // E2E harness override: host the visible client in a PTY owned by an
@@ -157,6 +173,7 @@ export function openVisibleClient(params: {
         cwd: params.cwd,
         args,
         channelId: params.channelId,
+        title: params.title,
       }),
     ];
     const child = spawn(
@@ -182,14 +199,15 @@ export function openVisibleClient(params: {
     };
   }
 
-  const title = `${params.channelId ?? "wechat"}-${params.adapter}`;
+  const title = visibleClientTitle(params);
   const fullArgs = [process.execPath, ...args];
 
   if (process.platform === "darwin") {
     const cmdLine = fullArgs.map(shellQuotePosix).join(" ");
     const script = `tell application "Terminal"
 activate
-do script "cd ${shellQuotePosix(params.cwd)} && exec ${cmdLine}"
+set clientTab to do script "cd ${shellQuotePosix(params.cwd)} && exec ${cmdLine}"
+set custom title of clientTab to ${appleScriptString(title)}
 end tell`;
     const child = spawn("osascript", ["-e", script], {
       cwd: params.cwd,
