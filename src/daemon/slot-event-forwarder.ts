@@ -11,10 +11,9 @@ import {
   formatMirroredUserInputMessage,
   formatSessionSwitchMessage,
   formatTaskFailedMessage,
-  formatUserInputRequestMessage,
-  nowIso,
-  truncatePreview,
-} from "../bridge/bridge-utils.ts";
+} from "../bridge/message-formatting.ts";
+import { formatUserInputRequestMessage } from "../bridge/user-input-messages.ts";
+import { nowIso, truncatePreview } from "../bridge/bridge-utils.ts";
 import { shouldForwardSessionSwitchEvent } from "../bridge/bridge-session-resume.ts";
 import {
   formatUserFacingBridgeFatalError,

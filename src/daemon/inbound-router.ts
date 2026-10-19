@@ -6,12 +6,9 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import { t } from "../i18n/index.ts";
 import { parseBridgeControlCommand } from "../core/bridge-control.ts";
-import {
-  formatPendingApprovalReminder,
-  formatPendingUserInputReminder,
-  parseControlCommand,
-  truncatePreview,
-} from "../bridge/bridge-utils.ts";
+import { formatPendingApprovalReminder } from "../bridge/message-formatting.ts";
+import { formatPendingUserInputReminder } from "../bridge/user-input-messages.ts";
+import { parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
 import {
   formatUserFacingInboundError,
   type ChannelSendKind,

@@ -27,13 +27,12 @@ import type {
   UserInputRequestOption,
 } from "./bridge-types.ts";
 import {
-  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
-  containsWechatOutboundAttachmentPath,
-  containsWechatOutboundAttachmentPathDeep,
-  isWechatOutboundAttachmentWriteCommand,
-  isHighRiskShellCommand,
-  isStrictApprovalModeEnabled,
-} from "./bridge-utils.ts";
+  OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  containsOutboundAttachmentPath,
+  containsOutboundAttachmentPathDeep,
+  isOutboundAttachmentWriteCommand,
+} from "./outbound-attachments.ts";
+import { isHighRiskShellCommand, isStrictApprovalModeEnabled } from "./approval-detection.ts";
 import { normalizeOutput, truncatePreview } from "../core/text-utils.ts";
 import {
   getNotificationThreadId,
@@ -386,7 +385,7 @@ export function buildCodexApprovalRequest(
   return null;
 }
 
-export function getCodexWechatOutboundAttachmentDenyMessage(
+export function getCodexOutboundAttachmentDenyMessage(
   method: string,
   params: unknown,
 ): string | null {
@@ -395,21 +394,21 @@ export function getCodexWechatOutboundAttachmentDenyMessage(
   }
 
   if (method === "item/commandExecution/requestApproval") {
-    return isWechatOutboundAttachmentWriteCommand(params.command) ||
-      containsWechatOutboundAttachmentPathDeep(params.additionalPermissions)
-      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+    return isOutboundAttachmentWriteCommand(params.command) ||
+      containsOutboundAttachmentPathDeep(params.additionalPermissions)
+      ? OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
 
   if (method === "item/fileChange/requestApproval") {
-    return containsWechatOutboundAttachmentPath(params.grantRoot)
-      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+    return containsOutboundAttachmentPath(params.grantRoot)
+      ? OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
 
   if (method === "item/permissions/requestApproval") {
-    return containsWechatOutboundAttachmentPathDeep(params.permissions)
-      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+    return containsOutboundAttachmentPathDeep(params.permissions)
+      ? OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
 

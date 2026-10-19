@@ -7,14 +7,12 @@
 import { t } from "../i18n/index.ts";
 import type { ApprovalRequest, UserInputRequest } from "./bridge-types.ts";
 import {
-  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
-  containsWechatOutboundAttachmentPath,
-  isHighRiskShellCommand,
-  isStrictApprovalModeEnabled,
-  isWechatOutboundAttachmentWriteCommand,
-  normalizeOutput,
-  truncatePreview,
-} from "./bridge-utils.ts";
+  OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  containsOutboundAttachmentPath,
+  isOutboundAttachmentWriteCommand,
+} from "./outbound-attachments.ts";
+import { isHighRiskShellCommand, isStrictApprovalModeEnabled } from "./approval-detection.ts";
+import { normalizeOutput, truncatePreview } from "./bridge-utils.ts";
 
 export type ClaudeHookEventName =
   | "SessionStart"
@@ -63,8 +61,8 @@ export type ClaudePermissionAutoResponse = {
   reason: string;
 };
 
-export const CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
-  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
+export const CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
+  OUTBOUND_ATTACHMENT_DENY_MESSAGE;
 const FILE_MUTATION_TOOL_NAMES = new Set([
   "Write",
   "Edit",
@@ -324,7 +322,7 @@ function getClaudeToolInputString(payload: ClaudeHookPayload, key: string): stri
   return typeof value === "string" ? value : "";
 }
 
-export function getClaudeWechatOutboundAttachmentDenyMessage(
+export function getClaudeOutboundAttachmentDenyMessage(
   payload: ClaudeHookPayload,
 ): string | null {
   const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
@@ -334,15 +332,15 @@ export function getClaudeWechatOutboundAttachmentDenyMessage(
 
   if (FILE_MUTATION_TOOL_NAMES.has(toolName)) {
     const filePath = getClaudeToolInputString(payload, "file_path");
-    return containsWechatOutboundAttachmentPath(filePath)
-      ? CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+    return containsOutboundAttachmentPath(filePath)
+      ? CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
 
   if (toolName === "Bash") {
     const command = getClaudeToolInputString(payload, "command");
-    if (isWechatOutboundAttachmentWriteCommand(command)) {
-      return CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
+    if (isOutboundAttachmentWriteCommand(command)) {
+      return CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
     }
   }
 

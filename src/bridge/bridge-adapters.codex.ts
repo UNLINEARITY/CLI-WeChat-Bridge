@@ -19,9 +19,7 @@ import type {
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
 } from "./bridge-types.ts";
-import {
-  detectCliApproval,
-} from "./bridge-utils.ts";
+import { detectCliApproval } from "./approval-detection.ts";
 import {
   normalizeOutput,
   nowIso,
@@ -235,7 +233,7 @@ const {
   findRecentCodexSessionFileForCwd,
   getCodexRpcRequestId,
   getCodexApprovalAutoResponse,
-  getCodexWechatOutboundAttachmentDenyMessage,
+  getCodexOutboundAttachmentDenyMessage,
   getNotificationThreadId,
   getNotificationTurnId,
   isRecord,
@@ -3558,7 +3556,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const denyMessage = getCodexWechatOutboundAttachmentDenyMessage(method, params);
+    const denyMessage = getCodexOutboundAttachmentDenyMessage(method, params);
     if (denyMessage) {
       this.sendRpcMessage({
         id: requestId,

@@ -5,11 +5,11 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import type { BridgeAdapterKind } from "../../bridge/bridge-types.ts";
+import { formatFinalReplyMessage } from "../../bridge/message-formatting.ts";
 import {
-  formatFinalReplyMessage,
-  parseWechatFinalReply,
-  sanitizeWechatFinalReplyText,
-} from "../../bridge/bridge-utils.ts";
+  parseFinalReply,
+  sanitizeFinalReplyText,
+} from "../../bridge/outbound-attachments.ts";
 
 export type WechatFinalReplySender = {
   sendText: (text: string) => Promise<boolean | void>;
@@ -32,8 +32,8 @@ export async function forwardWechatFinalReply(params: {
   }) => void;
 }): Promise<void> {
   const { adapter, rawText, sender, onEmptyVisibleReply } = params;
-  const parsed = parseWechatFinalReply(rawText);
-  const sanitizedText = sanitizeWechatFinalReplyText(adapter, parsed.visibleText);
+  const parsed = parseFinalReply(rawText);
+  const sanitizedText = sanitizeFinalReplyText(adapter, parsed.visibleText);
   const visibleText = formatFinalReplyMessage(adapter, sanitizedText).trim();
 
   if (visibleText) {

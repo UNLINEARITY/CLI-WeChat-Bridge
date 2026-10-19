@@ -11,10 +11,7 @@ import type {
   BridgeResumeSessionCandidate,
   BridgeSessionSwitchReason,
 } from "./bridge-types.ts";
-import {
-  formatResumeSessionList,
-  formatSessionSwitchMessage,
-} from "./bridge-utils.ts";
+import { formatResumeSessionList, formatSessionSwitchMessage } from "./message-formatting.ts";
 
 export const RESUME_SESSION_LIST_LIMIT = 8;
 export const RESUME_SESSION_SNAPSHOT_TTL_MS = 5 * 60 * 1_000;

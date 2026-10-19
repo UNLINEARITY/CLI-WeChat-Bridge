@@ -30,7 +30,7 @@ import {
   formatMirroredUserInputMessage,
   formatResumeSessionList,
   formatTaskFailedMessage,
-} from "../../src/bridge/bridge-utils.ts";
+} from "../../src/bridge/message-formatting.ts";
 
 beforeEach(() => setLocale("en"));
 

@@ -13,13 +13,13 @@ import {
   buildClaudeHookSettings,
   buildClaudePermissionDecisionHookOutput,
   buildClaudePermissionApprovalRequest,
-  CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   extractClaudeAssistantMessageText,
   extractClaudeResumeConversationId,
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
   getClaudePermissionAutoResponse,
-  getClaudeWechatOutboundAttachmentDenyMessage,
+  getClaudeOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
 } from "../../src/bridge/claude-hooks.ts";
@@ -209,34 +209,34 @@ describe("buildClaudePermissionDecisionHookOutput", () => {
   });
 });
 
-describe("getClaudeWechatOutboundAttachmentDenyMessage", () => {
+describe("getClaudeOutboundAttachmentDenyMessage", () => {
   test("denies file mutation tools targeting legacy WeChat outbound directories", () => {
     expect(
-      getClaudeWechatOutboundAttachmentDenyMessage({
+      getClaudeOutboundAttachmentDenyMessage({
         tool_name: "Write",
         tool_input: {
           file_path:
             "C:\\Users\\unlin\\.claude\\channels\\wechat\\outbound-attachments\\2026-05-22\\report.docx",
         },
       }),
-    ).toBe(CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE);
+    ).toBe(CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE);
   });
 
   test("denies write-like Bash commands targeting outbound directories", () => {
     expect(
-      getClaudeWechatOutboundAttachmentDenyMessage({
+      getClaudeOutboundAttachmentDenyMessage({
         tool_name: "Bash",
         tool_input: {
           command:
             'cp "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-22/report.docx"',
         },
       }),
-    ).toBe(CLAUDE_WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE);
+    ).toBe(CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE);
   });
 
   test("allows source file references and non-mutating commands", () => {
     expect(
-      getClaudeWechatOutboundAttachmentDenyMessage({
+      getClaudeOutboundAttachmentDenyMessage({
         tool_name: "Write",
         tool_input: {
           file_path: "C:\\Users\\unlin\\Desktop\\report.docx",
@@ -244,7 +244,7 @@ describe("getClaudeWechatOutboundAttachmentDenyMessage", () => {
       }),
     ).toBeNull();
     expect(
-      getClaudeWechatOutboundAttachmentDenyMessage({
+      getClaudeOutboundAttachmentDenyMessage({
         tool_name: "Bash",
         tool_input: {
           command:

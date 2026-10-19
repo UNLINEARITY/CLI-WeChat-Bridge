@@ -7,11 +7,11 @@
 import path from "node:path";
 
 import type { BridgeAdapterKind } from "../../bridge/bridge-types.ts";
+import { formatFinalReplyMessage } from "../../bridge/message-formatting.ts";
 import {
-  formatFinalReplyMessage,
-  parseWechatFinalReply,
-  sanitizeWechatFinalReplyText,
-} from "../../bridge/bridge-utils.ts";
+  parseFinalReply,
+  sanitizeFinalReplyText,
+} from "../../bridge/outbound-attachments.ts";
 import type {
   ChannelAttachment,
   ChannelConversationRef,
@@ -29,8 +29,8 @@ export async function forwardWecomFinalReply(params: {
   sender: WecomFinalReplySender;
   onEmptyVisibleReply?: (rawText: string) => void;
 }): Promise<void> {
-  const parsed = parseWechatFinalReply(params.rawText);
-  const sanitized = sanitizeWechatFinalReplyText(params.adapter, parsed.visibleText);
+  const parsed = parseFinalReply(params.rawText);
+  const sanitized = sanitizeFinalReplyText(params.adapter, parsed.visibleText);
   const visibleText = formatFinalReplyMessage(params.adapter, sanitized).trim();
   if (visibleText) {
     await params.sender.sendText(visibleText);

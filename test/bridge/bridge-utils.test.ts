@@ -16,34 +16,39 @@ import type {
 } from "../../src/bridge/bridge-types.ts";
 import {
   buildAttachmentInboundPrompt,
+  containsOutboundAttachmentPath,
+  extractInlineAttachments,
+  shouldInjectAttachmentPrompt,
+  isOutboundAttachmentMutationTool,
+  isOutboundAttachmentWriteCommand,
+  parseFinalReply,
+} from "../../src/bridge/outbound-attachments.ts";
+import {
   buildOneTimeCode,
-  containsWechatOutboundAttachmentPath,
-  extractInlineWechatAttachments,
-  shouldInjectWechatAttachmentPrompt,
-  detectCliApproval,
-  formatApprovalMessage,
-  formatFinalReplyMessage,
-  formatMirroredUserInputMessage,
-  formatPendingApprovalReminder,
-  formatUserInputRequestMessage,
-  formatResumeSessionList,
-  formatResumeThreadList,
-  formatStatusReport,
-  formatTaskFailedMessage,
-  formatThreadSwitchMessage,
-  isWechatOutboundAttachmentMutationTool,
-  isWechatOutboundAttachmentWriteCommand,
-  isHighRiskShellCommand,
   MESSAGE_START_GRACE_MS,
   OutputBatcher,
   parseCodexSessionAgentMessage,
-  parsePendingUserInputAnswerCommand,
-  parseWechatFinalReply,
   parseSystemCommand,
   parseControlCommand,
   shouldDropStartupBacklogMessage,
   WECHAT_TEXT_CHUNK_MAX_CHARS,
 } from "../../src/bridge/bridge-utils.ts";
+import { detectCliApproval, isHighRiskShellCommand } from "../../src/bridge/approval-detection.ts";
+import {
+  formatApprovalMessage,
+  formatFinalReplyMessage,
+  formatMirroredUserInputMessage,
+  formatPendingApprovalReminder,
+  formatResumeSessionList,
+  formatResumeThreadList,
+  formatStatusReport,
+  formatTaskFailedMessage,
+  formatThreadSwitchMessage,
+} from "../../src/bridge/message-formatting.ts";
+import {
+  formatUserInputRequestMessage,
+  parsePendingUserInputAnswerCommand,
+} from "../../src/bridge/user-input-messages.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -258,7 +263,7 @@ describe("wechat inbound prompt injection", () => {
   test("injects attachment guidance for explicit send-to-WeChat requests", () => {
     const prompt = buildAttachmentInboundPrompt("把桌面的pdf发给我，发送微信");
 
-    expect(shouldInjectWechatAttachmentPrompt("把桌面的pdf发给我，发送微信")).toBe(true);
+    expect(shouldInjectAttachmentPrompt("把桌面的pdf发给我，发送微信")).toBe(true);
     expect(prompt).toContain("[WeChat bridge note]");
     expect(prompt).toContain("```wechat-attachments");
     expect(prompt).toContain("[User request]\n把桌面的pdf发给我，发送微信");
@@ -276,28 +281,28 @@ describe("wechat inbound prompt injection", () => {
 
   test("detects outbound attachment staging writes without blocking read-only commands", () => {
     expect(
-      containsWechatOutboundAttachmentPath(
+      containsOutboundAttachmentPath(
         "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23\\report.docx",
       ),
     ).toBe(true);
     expect(
-      isWechatOutboundAttachmentWriteCommand(
+      isOutboundAttachmentWriteCommand(
         'Copy-Item "C:/Users/unlin/Desktop/report.docx" "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23/report.docx"',
       ),
     ).toBe(true);
     expect(
-      isWechatOutboundAttachmentWriteCommand(
+      isOutboundAttachmentWriteCommand(
         'ls "C:/Users/unlin/.cli-bridge/outbound-attachments/2026-05-23"',
       ),
     ).toBe(false);
     expect(
-      isWechatOutboundAttachmentMutationTool(
+      isOutboundAttachmentMutationTool(
         "edit",
         "C:\\Users\\unlin\\.claude\\channels\\wechat\\outbound-attachments\\2026-05-23\\report.docx",
       ),
     ).toBe(true);
     expect(
-      isWechatOutboundAttachmentMutationTool(
+      isOutboundAttachmentMutationTool(
         "external_directory",
         "C:\\Users\\unlin\\.cli-bridge\\outbound-attachments\\2026-05-23",
       ),
@@ -305,8 +310,8 @@ describe("wechat inbound prompt injection", () => {
   });
 
   test("injects attachment guidance for short follow-up send commands", () => {
-    expect(shouldInjectWechatAttachmentPrompt("发送微信")).toBe(true);
-    expect(shouldInjectWechatAttachmentPrompt("发呀")).toBe(true);
+    expect(shouldInjectAttachmentPrompt("发送微信")).toBe(true);
+    expect(shouldInjectAttachmentPrompt("发呀")).toBe(true);
     expect(buildAttachmentInboundPrompt("直接发给我")).toContain("```wechat-attachments");
   });
 
@@ -318,7 +323,7 @@ describe("wechat inbound prompt injection", () => {
     ];
 
     for (const request of requests) {
-      expect(shouldInjectWechatAttachmentPrompt(request)).toBe(true);
+      expect(shouldInjectAttachmentPrompt(request)).toBe(true);
       expect(buildAttachmentInboundPrompt(request)).toContain("```wechat-attachments");
     }
   });
@@ -333,8 +338,8 @@ describe("wechat inbound prompt injection", () => {
       "```",
     ].join("\n");
 
-    expect(shouldInjectWechatAttachmentPrompt(ordinary)).toBe(false);
-    expect(shouldInjectWechatAttachmentPrompt(nonSendWithChineseFa)).toBe(false);
+    expect(shouldInjectAttachmentPrompt(ordinary)).toBe(false);
+    expect(shouldInjectAttachmentPrompt(nonSendWithChineseFa)).toBe(false);
     expect(buildAttachmentInboundPrompt(ordinary)).toBe(ordinary);
     expect(buildAttachmentInboundPrompt(explicitProtocol)).toBe(explicitProtocol);
   });
@@ -405,7 +410,7 @@ describe("parseCodexSessionAgentMessage", () => {
 describe("WeChat attachment reply protocol", () => {
   test("extracts trailing attachment blocks with multiple local paths", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Finished.",
           "```wechat-attachments",
@@ -441,7 +446,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("rejects malformed attachment metadata and leaves the text unchanged", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Finished.",
           "```wechat-attachments",
@@ -459,7 +464,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("extracts local files from wrapped maas image URLs when no attachment block is present", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Main campus wallpaper:",
           "",
@@ -482,7 +487,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("extracts inline code paths and keeps the surrounding narration", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Saved the render to `C:\\Users\\unlin\\Desktop\\exports\\cover.png`.",
           "Please review it.",
@@ -501,7 +506,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("keeps multi-dot document names intact when extracting inline attachments", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Artifacts:",
           "```text",
@@ -523,7 +528,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("extracts ordinary local text files from inline paths", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Saved note to `C:\\Users\\unlin\\Desktop\\exports\\summary.txt`.",
           "Review it.",
@@ -542,7 +547,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("extracts standalone absolute paths from code fences", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Artifacts:",
           "```text",
@@ -568,7 +573,7 @@ describe("WeChat attachment reply protocol", () => {
   });
 
   test("auto-attaches referenced source files while excluding executables", () => {
-    const result = parseWechatFinalReply(
+    const result = parseFinalReply(
       [
         "Reference:",
         "`C:\\Users\\unlin\\Desktop\\Github\\claude-code-wechat-channel\\src\\bridge\\bridge-adapters.test.ts`",
@@ -588,7 +593,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("extracts home-relative desktop paths from ordinary text", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Pick this one:",
           "Desktop/screenshots/air. png",
@@ -608,7 +613,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("keeps explicit attachment blocks authoritative for arbitrary file types", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Ready.",
           "```wechat-attachments",
@@ -629,7 +634,7 @@ describe("WeChat attachment reply protocol", () => {
 
   test("accepts home-relative desktop paths inside attachment blocks", () => {
     expect(
-      parseWechatFinalReply(
+      parseFinalReply(
         [
           "Ready.",
           "```wechat-attachments",
@@ -880,7 +885,7 @@ describe("adapter-aware message formatting", () => {
 
 describe("inline WeChat attachment extraction", () => {
   test("keeps ordinary referenced files auto-sendable", () => {
-    const parsed = extractInlineWechatAttachments(
+    const parsed = extractInlineAttachments(
       "Report saved to C:\\Users\\me\\Desktop\\notes.md and config at C:\\proj\\package.json; full doc: C:\\proj\\report.pdf",
     );
     expect(parsed.attachments.map((a) => a.kind)).toEqual(["file", "file", "file"]);
@@ -888,7 +893,7 @@ describe("inline WeChat attachment extraction", () => {
   });
 
   test("never auto-sends directly executable or installer types", () => {
-    const parsed = extractInlineWechatAttachments(
+    const parsed = extractInlineAttachments(
       "Built C:\\proj\\app.exe and C:\\proj\\lib.dll; run setup C:\\proj\\install.bat or deploy.sh",
     );
     expect(parsed.attachments).toEqual([]);

@@ -32,9 +32,7 @@ import type {
   BridgeLifecycleMode,
   BridgeResumeSessionCandidate,
 } from "./bridge-types.ts";
-import {
-  detectCliApproval,
-} from "./bridge-utils.ts";
+import { detectCliApproval } from "./approval-detection.ts";
 import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 import { LOCAL_CLIENT_PROTOCOL_VERSION } from "../runtime/runtime-types.ts";

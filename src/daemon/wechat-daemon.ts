@@ -15,12 +15,8 @@ import {
   reapPeerBridgeProcesses,
 } from "../bridge/bridge-process-reaper.ts";
 import type { BridgeAdapter } from "../bridge/bridge-types.ts";
-import {
-  buildChannelInboundPrompt,
-  formatDuration,
-  MESSAGE_START_GRACE_MS,
-  truncatePreview,
-} from "../bridge/bridge-utils.ts";
+import { buildChannelInboundPrompt } from "../bridge/outbound-attachments.ts";
+import { formatDuration, MESSAGE_START_GRACE_MS, truncatePreview } from "../bridge/bridge-utils.ts";
 import {
   CHANNEL_SEND_KINDS,
   formatUserFacingInboundError,

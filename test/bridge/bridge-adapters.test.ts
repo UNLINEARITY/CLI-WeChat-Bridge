@@ -26,7 +26,7 @@ import {
   extractCodexUserMessageText,
   findRecentCodexSessionFileForCwd,
   getCodexApprovalAutoResponse,
-  getCodexWechatOutboundAttachmentDenyMessage,
+  getCodexOutboundAttachmentDenyMessage,
   hasClaudeNoAltScreenOption,
   isClaudeInvalidResumeError,
   listCodexResumeThreads,
@@ -42,7 +42,7 @@ import {
   ensureClaudeWorkspaceTrustAccepted,
   normalizeClaudeProjectConfigKey,
 } from "../../src/bridge/bridge-adapters.claude.ts";
-import { buildAttachmentInboundPrompt } from "../../src/bridge/bridge-utils.ts";
+import { buildAttachmentInboundPrompt } from "../../src/bridge/outbound-attachments.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -461,7 +461,7 @@ describe("buildCodexApprovalRequest", () => {
 
   test("detects outbound attachment staging approvals", () => {
     expect(
-      getCodexWechatOutboundAttachmentDenyMessage(
+      getCodexOutboundAttachmentDenyMessage(
         "item/commandExecution/requestApproval",
         {
           command:
@@ -471,7 +471,7 @@ describe("buildCodexApprovalRequest", () => {
     ).toContain("original absolute local file path");
 
     expect(
-      getCodexWechatOutboundAttachmentDenyMessage(
+      getCodexOutboundAttachmentDenyMessage(
         "item/fileChange/requestApproval",
         {
           grantRoot:
@@ -481,7 +481,7 @@ describe("buildCodexApprovalRequest", () => {
     ).toContain("original absolute local file path");
 
     expect(
-      getCodexWechatOutboundAttachmentDenyMessage(
+      getCodexOutboundAttachmentDenyMessage(
         "item/permissions/requestApproval",
         {
           permissions: {
@@ -496,7 +496,7 @@ describe("buildCodexApprovalRequest", () => {
     ).toContain("original absolute local file path");
 
     expect(
-      getCodexWechatOutboundAttachmentDenyMessage(
+      getCodexOutboundAttachmentDenyMessage(
         "item/commandExecution/requestApproval",
         {
           command:

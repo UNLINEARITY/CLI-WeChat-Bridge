@@ -14,7 +14,10 @@ import { messages as en } from "../../src/i18n/messages-en.ts";
 import { messages as zh } from "../../src/i18n/messages-zh.ts";
 import { handleLanguageControl } from "../../src/bridge/language-control.ts";
 import { parseBridgeControlCommand } from "../../src/core/bridge-control.ts";
-import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
+import {
+  formatUserInputRequestMessage,
+  parsePendingUserInputAnswerCommand,
+} from "../../src/bridge/user-input-messages.ts";
 import { handleAdapterControl } from "../../src/bridge/adapter-control.ts";
 import { BridgeDaemon } from "../../src/daemon/wechat-daemon.ts";
 import type { BridgeAdapter, PendingUserInputRequest } from "../../src/bridge/bridge-types.ts";

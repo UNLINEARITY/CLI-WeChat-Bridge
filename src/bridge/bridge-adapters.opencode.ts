@@ -48,10 +48,12 @@ import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import { createOpenCodeV2CompatClient } from "./opencode-v2-compat.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
-  WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  OUTBOUND_ATTACHMENT_DENY_MESSAGE,
+  isOutboundAttachmentMutationTool,
+  isOutboundAttachmentWriteCommand,
+} from "./outbound-attachments.ts";
+import {
   buildOneTimeCode,
-  isWechatOutboundAttachmentMutationTool,
-  isWechatOutboundAttachmentWriteCommand,
   normalizeOutput,
   nowIso,
   truncatePreview,
@@ -2084,7 +2086,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     this.clearRemoteWorkingNotice();
-    const denyMessage = this.getWechatOutboundAttachmentPermissionDenyMessage(
+    const denyMessage = this.getOutboundAttachmentPermissionDenyMessage(
       properties,
       pendingPermission,
     );
@@ -2290,14 +2292,14 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
   }
 
-  private getWechatOutboundAttachmentPermissionDenyMessage(
+  private getOutboundAttachmentPermissionDenyMessage(
     properties: Record<string, unknown>,
     pendingPermission: OpenCodePendingPermission,
   ): string | null {
     const metadata = isRecord(properties.metadata) ? properties.metadata : {};
     const command = this.extractPermissionCommand(properties, metadata);
-    if (isWechatOutboundAttachmentWriteCommand(command)) {
-      return WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE;
+    if (isOutboundAttachmentWriteCommand(command)) {
+      return OUTBOUND_ATTACHMENT_DENY_MESSAGE;
     }
 
     const targetPath = [
@@ -2315,11 +2317,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       typeof properties.pattern === "string" ? properties.pattern : "",
     ].join(" ");
 
-    return isWechatOutboundAttachmentMutationTool(
+    return isOutboundAttachmentMutationTool(
       pendingPermission.request.toolName,
       targetPath,
     )
-      ? WECHAT_OUTBOUND_ATTACHMENT_DENY_MESSAGE
+      ? OUTBOUND_ATTACHMENT_DENY_MESSAGE
       : null;
   }
 

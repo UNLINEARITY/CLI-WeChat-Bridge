@@ -27,7 +27,7 @@ import {
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
   getClaudePermissionAutoResponse,
-  getClaudeWechatOutboundAttachmentDenyMessage,
+  getClaudeOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
   type ClaudeHookPayload,
@@ -43,9 +43,7 @@ import type {
   BridgeTurnOrigin,
   UserInputRequest,
 } from "./bridge-types.ts";
-import {
-  detectCliApproval,
-} from "./bridge-utils.ts";
+import { detectCliApproval } from "./approval-detection.ts";
 import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import * as shared from "./bridge-adapters.shared.ts";
@@ -1873,7 +1871,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       this.handleClaudeUserInputRequest(requestId, { ...payload, hook_event_name: "PermissionRequest" }, socket);
       return;
     }
-    const denyMessage = getClaudeWechatOutboundAttachmentDenyMessage(payload);
+    const denyMessage = getClaudeOutboundAttachmentDenyMessage(payload);
     if (denyMessage) {
       this.respondToClaudeHook(
         socket,

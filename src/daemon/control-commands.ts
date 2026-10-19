@@ -8,12 +8,8 @@ import path from "node:path";
 import { t } from "../i18n/index.ts";
 import { handleLanguageControl } from "../bridge/language-control.ts";
 import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
-import {
-  nowIso,
-  parsePendingUserInputAnswerCommand,
-  parseControlCommand,
-  truncatePreview,
-} from "../bridge/bridge-utils.ts";
+import { nowIso, parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
+import { parsePendingUserInputAnswerCommand } from "../bridge/user-input-messages.ts";
 import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 import {

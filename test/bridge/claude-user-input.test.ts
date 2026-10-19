@@ -10,7 +10,10 @@ import { spawn } from "node:child_process";
 import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
 import { buildClaudeUserInputRequest, getClaudePermissionAutoResponse } from "../../src/bridge/claude-hooks.ts";
-import { formatUserInputRequestMessage, parsePendingUserInputAnswerCommand } from "../../src/bridge/bridge-utils.ts";
+import {
+  formatUserInputRequestMessage,
+  parsePendingUserInputAnswerCommand,
+} from "../../src/bridge/user-input-messages.ts";
 import type { ClaudeHookPayload } from "../../src/bridge/claude-hooks.ts";
 
 beforeEach(() => setLocale("en"));
