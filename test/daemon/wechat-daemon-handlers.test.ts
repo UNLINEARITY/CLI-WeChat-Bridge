@@ -410,7 +410,7 @@ describe("daemon sequential approvals", () => {
     runtime.emit({ type: "approval_required", request: first, timestamp: new Date().toISOString() });
     await tick(20);
     const message = { senderId: OPERATOR_ID };
-    await internal.confirmPendingApproval(message, internal.slots.get("claude"));
+    await internal.controls.confirmPendingApproval(message, internal.slots.get("claude"));
     await tick(20);
     expect(runtime.approvals).toEqual(["confirm"]);
     expect(runtime.state.pendingApprovals).toEqual([second]);
@@ -421,7 +421,7 @@ describe("daemon sequential approvals", () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]?.text).toContain("second command");
     expect(prompts[1]?.target.conversationId).toBe("parent-conversation");
-    await internal.denyPendingApproval(message, internal.slots.get("claude"));
+    await internal.controls.denyPendingApproval(message, internal.slots.get("claude"));
     expect(runtime.approvals).toEqual(["confirm", "deny"]);
     expect(slot.pendingConfirmations).toEqual([]);
     expect(slot.turns.activeTask).toBe(parentTask);
@@ -474,7 +474,7 @@ describe("daemon Claude questions", () => {
       runtime.emit({ type: "user_input_required", request: second, timestamp: new Date().toISOString() });
       return true;
     };
-    await internal.answerPendingUserInput({ senderId: OPERATOR_ID }, internal.slots.get("codex"), "dev");
+    await internal.controls.answerPendingUserInput({ senderId: OPERATOR_ID }, internal.slots.get("codex"), "dev");
     await tick(20);
     expect(answeredId).toBe("first");
     expect(runtime.userInput).toEqual([{ env: ["dev"] }]);
