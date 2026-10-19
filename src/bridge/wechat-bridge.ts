@@ -25,7 +25,6 @@ import {
   shouldSuppressCodexLocalThreadNotice,
   type WechatSendContext,
 } from "../channels/wechat/wechat-forwarding.ts";
-import { ensureWechatCredentials } from "../wechat/setup.ts";
 import { BridgeStateStore } from "./bridge-state.ts";
 import {
   getProcessRecordByPid,
@@ -48,23 +47,19 @@ import { handleLanguageControl } from "./language-control.ts";
 import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
-import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
-import { ensureWecomAccount } from "../channels/wecom/setup.ts";
-import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
-import { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
-import { TelegramChannelDriver } from "../channels/telegram/telegram-driver.ts";
-import { TelegramChannelPort } from "../channels/telegram/telegram-channel-port.ts";
-import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
-import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
-import { WecomChannelDriver } from "../channels/wecom/wecom-driver.ts";
-import { WechatChannelDriver } from "../channels/wechat/wechat-driver.ts";
+import type { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
+import type { WecomTransport } from "../channels/wecom/wecom-transport.ts";
+import {
+  createChannelPort,
+  createChannelRuntime,
+  setupChannel,
+} from "../channels/channel-registry.ts";
 import type {
   ChannelDriver,
   ChannelSendResult,
 } from "../core/channel-driver.ts";
 import type {
   BridgeChannelId,
-  BridgeChannelPort,
   ChannelConversationRef,
   ChannelInboundMessage,
   ChannelOutputKind,
@@ -81,8 +76,7 @@ import type {
   UserInputRequest,
 } from "./bridge-types.ts";
 import {
-  buildWechatInboundPrompt,
-  type WechatInboundPromptAttachment,
+  buildChannelInboundPrompt,
   buildOneTimeCode,
   formatApprovalMessage,
   formatPendingApprovalReminder,
@@ -92,7 +86,6 @@ import {
   formatSessionSwitchMessage,
   formatStatusReport,
   formatTaskFailedMessage,
-  formatThinkingForWechat,
   formatUserInputRequestMessage,
   MESSAGE_START_GRACE_MS,
   nowIso,
@@ -108,11 +101,7 @@ import {
   describeWechatTransportError,
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
-import {
-  getPendingChannelMessagesFile,
-  getPendingWechatMessagesFile,
-  PendingWechatMessageStore,
-} from "../channels/wechat/wechat-outbound-queue.ts";
+import { PendingWechatMessageStore } from "../channels/wechat/wechat-outbound-queue.ts";
 import {
   checkForUpdate,
   formatUpdateMessage,
@@ -394,75 +383,18 @@ async function main(): Promise<void> {
     clearDaemonEndpoint(daemonEndpoint.pid);
     log(`Cleared stale wechat-daemon endpoint for pid=${daemonEndpoint.pid}.`);
   }
-  const wecomAccount =
-    options.channelId === "wecom"
-      ? await ensureWecomAccount({ log })
-      : null;
-  const telegramAccount =
-    options.channelId === "telegram"
-      ? await ensureTelegramAccount({ log })
-      : null;
-  const credentials = wecomAccount
-    ? { userId: wecomAccount.operatorUserId }
-    : telegramAccount
-      ? { userId: telegramAccount.operatorUserId }
-      : await ensureWechatCredentials({
-          requireUserId: true,
-          validateExisting: true,
-          log,
-        });
-  if (!credentials.userId) {
-    throw new Error(
-      options.channelId === "wecom"
-        ? "Saved WeCom credentials are missing operatorUserId."
-        : options.channelId === "telegram"
-          ? "Saved Telegram credentials are missing operatorUserId."
-          : "Saved WeChat credentials are missing userId.",
-    );
-  }
-  const transport = new WeChatTransport({ log, logError });
-  const wecomTransport = wecomAccount
-    ? new WecomTransport({
-        account: wecomAccount,
-        logger: {
-          log: (message) => log(message),
-          error: (message) => logError(message),
-        },
-      })
-    : null;
-  const telegramTransport = telegramAccount
-    ? new TelegramTransport({
-        account: telegramAccount,
-        logger: {
-          log: (message) => log(message),
-          error: (message) => logError(message),
-        },
-      })
-    : null;
-  const channelDriver: ChannelDriver = wecomTransport
-    ? new WecomChannelDriver({
-        transport: wecomTransport,
-        accountId: wecomAccount?.botId,
-        operatorId: credentials.userId,
-        logError,
-      })
-    : telegramTransport
-      ? new TelegramChannelDriver({
-          transport: telegramTransport,
-          accountId: telegramAccount?.botUsername,
-          operatorId: credentials.userId,
-          logError,
-        })
-      : new WechatChannelDriver({
-          transport,
-          logError,
-          buildInboundPrompt: (text, attachments) =>
-            buildWechatInboundPrompt(
-              text,
-              attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
-                attachment.kind === "image" || attachment.kind === "file"),
-            ),
-        });
+  const setup = await setupChannel(options.channelId, {
+    cwd: options.cwd,
+    log,
+    logError,
+  });
+  const channel = createChannelRuntime(setup, {
+    buildWechatInboundPrompt: buildChannelInboundPrompt,
+    log,
+    logError,
+  });
+  const channelDriver = channel.driver;
+  const credentials = { userId: setup.operatorId };
 
   // 非阻塞地检查更新（不影响启动速度，也避免首次登录时打断二维码输出）
   // unref：不能让这个延迟检查把 event loop 挂活（如 --doctor 或快速退出场景），
@@ -548,9 +480,7 @@ async function main(): Promise<void> {
     codexAttachThreadId: options.codexAttachThreadId,
   });
   const pendingWechatMessages = new PendingWechatMessageStore(
-    options.channelId === "wechat"
-      ? getPendingWechatMessagesFile(options.cwd)
-      : getPendingChannelMessagesFile(options.cwd, options.channelId),
+    channel.pendingMessagesFile(options.cwd),
   );
   const resumeCoordinator = new ResumeSessionCoordinator({
     adapter: options.adapter,
@@ -850,11 +780,7 @@ async function main(): Promise<void> {
     } catch {
       // Best effort shutdown.
     }
-    try {
-      wecomTransport?.stop();
-    } catch {
-      // Best effort shutdown.
-    }
+    await channel.stop();
     try {
       await channelDriver.endAllTyping?.();
     } catch {
@@ -937,7 +863,7 @@ async function main(): Promise<void> {
       channelDriver,
       resumeCoordinator,
       options,
-      transport,
+      transport: setup.transports.wechat,
       stateStore,
       outputBatcher,
       queueWechatAttachmentAction,
@@ -957,8 +883,8 @@ async function main(): Promise<void> {
         controller.syncLocalClientEndpoint();
       },
       requestShutdown,
-      wecomTransport,
-      telegramTransport,
+      wecomTransport: setup.transports.wecom,
+      telegramTransport: setup.transports.telegram,
       getWecomTarget: () => turns.resolveTarget(operatorConversation),
     });
 
@@ -1148,9 +1074,12 @@ async function main(): Promise<void> {
         break;
       }
 
+      if (!channel.pollTransport) {
+        throw new Error(`The ${options.channelId} poll loop requires a long-poll transport.`);
+      }
       let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
       try {
-        pollResult = await transport.pollMessages({
+        pollResult = await channel.pollTransport.pollMessages({
           timeoutMs: DEFAULT_LONG_POLL_TIMEOUT_MS,
           minCreatedAtMs: stateStore.getState().bridgeStartedAtMs - MESSAGE_START_GRACE_MS,
         });
@@ -1334,7 +1263,7 @@ export function wireAdapterEvents(params: {
   resumeCoordinator: ResumeSessionCoordinator;
   options: BridgeCliOptions;
   channelDriver: ChannelDriver;
-  transport: WeChatTransport;
+  transport: WeChatTransport | null;
   stateStore: BridgeStateStore;
   outputBatcher: OutputBatcher;
   queueWechatAttachmentAction: <T>(action: () => Promise<T>) => Promise<T>;
@@ -1376,55 +1305,35 @@ export function wireAdapterEvents(params: {
     telegramTransport,
     getWecomTarget,
   } = params;
-  const remotePortCallbacks = {
-    sendText: (target: ChannelConversationRef, text: string, kind: ChannelOutputKind) =>
-      queueWechatMessage(
-        stateStore.getState().authorizedUserId,
-        text,
-        toWechatSendContext(kind),
-        target,
-      ),
-    onEmptyVisibleReply: (adapter: BridgeAdapterKind | undefined, rawText: string) => {
-      stateStore.appendLog(
-        `empty_visible_final_reply: adapter=${adapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
-      );
+  const channelPort = createChannelPort(
+    options.channelId,
+    {
+      wechat: transport,
+      wecom: wecomTransport ?? null,
+      telegram: telegramTransport ?? null,
+      localFiles: null,
     },
-  };
-  // Every remote channel must provide its own port; never fall back to WeChat.
-  const portFactories: Record<Exclude<BridgeChannelId, "local">, () => BridgeChannelPort> = {
-    wecom: () => {
-      if (!wecomTransport) {
-        throw new Error("The wecom channel port requires a WeCom transport.");
-      }
-      return new WecomChannelPort({ transport: wecomTransport, ...remotePortCallbacks });
-    },
-    telegram: () => {
-      if (!telegramTransport) {
-        throw new Error("The telegram channel port requires a Telegram transport.");
-      }
-      return new TelegramChannelPort({ transport: telegramTransport, ...remotePortCallbacks });
-    },
-    wechat: () => new WechatChannelPort({
-      sendText: (recipientId, text, context) =>
+    {
+      sendTextToTarget: (target, text, kind) =>
+        queueWechatMessage(
+          stateStore.getState().authorizedUserId,
+          text,
+          toWechatSendContext(kind),
+          target,
+        ),
+      sendTextToRecipient: (recipientId, text, context) =>
         queueWechatMessage(recipientId, text, context as WechatSendContext),
-      sendImage: (recipientId, filePath) =>
-        queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
-      sendFile: (recipientId, filePath) =>
-        queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
-      sendVoice: (recipientId, filePath) =>
-        queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
-      sendVideo: (recipientId, filePath) =>
-        queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
-      onEmptyVisibleReply: remotePortCallbacks.onEmptyVisibleReply,
+      queueAttachment: queueWechatAttachmentAction,
+      onEmptyVisibleReply: (currentAdapter, rawText) => {
+        stateStore.appendLog(
+          `empty_visible_final_reply: adapter=${currentAdapter ?? options.adapter} raw=${truncatePreview(rawText)}`,
+        );
+      },
       onTextSent: (_adapter, text) => {
         stateStore.appendLog(`final_reply_sent: chars=${Array.from(text).length}`);
       },
-    }),
-  };
-  if (options.channelId === "local") {
-    throw new Error("The local channel does not support standalone bridge output.");
-  }
-  const channelPort = portFactories[options.channelId]();
+    },
+  );
   let lastFinalReplyAtMs = 0;
   let eventForwardChain = Promise.resolve();
 
@@ -1485,24 +1394,6 @@ export function wireAdapterEvents(params: {
           trackWechatForwardTask(outputBatcher.flushNow().then(async () => {
             await queueWechatMessage(authorizedUserId, next.text, "notice", eventTarget);
           }));
-        }
-      },
-      thinking: (next) => {
-        if (next.text) {
-          const thinkingPreview = formatThinkingForWechat(next.text, 500);
-          if (thinkingPreview) {
-            stateStore.appendLog(`thinking: ${thinkingPreview}`);
-            trackWechatForwardTask((async () => {
-              await queueWechatMessage(
-                authorizedUserId,
-                channelDriver.id === "wecom"
-                  ? `Processing: ${thinkingPreview}`
-                  : `思考: ${thinkingPreview}`,
-                "thinking",
-                eventTarget,
-              );
-            })());
-          }
         }
       },
       approvalRequired: (next) => {

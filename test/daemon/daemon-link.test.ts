@@ -6,7 +6,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import { describe, expect, test } from "bun:test";
 
-import { isPidAlive } from "../../src/daemon/daemon-link.ts";
+import { isPidAlive, normalizeDaemonEndpoint } from "../../src/daemon/daemon-link.ts";
 
 describe("daemon-link isPidAlive", () => {
   test("rejects invalid pids", () => {
@@ -46,5 +46,26 @@ describe("daemon-link isPidAlive", () => {
     } finally {
       process.kill = originalKill;
     }
+  });
+});
+
+describe("daemon-link normalizeDaemonEndpoint", () => {
+  const base = {
+    protocolVersion: 1,
+    pid: 4321,
+    port: 50000,
+    token: "token",
+    cwd: "/tmp/project",
+    startedAt: "2026-10-19T00:00:00.000Z",
+  };
+
+  test("keeps every known channel id", () => {
+    for (const channelId of ["wechat", "wecom", "telegram", "local"]) {
+      expect(normalizeDaemonEndpoint({ ...base, channelId })?.channelId).toBe(channelId);
+    }
+  });
+
+  test("drops an unknown channel id", () => {
+    expect(normalizeDaemonEndpoint({ ...base, channelId: "slack" })).toEqual(base);
   });
 });

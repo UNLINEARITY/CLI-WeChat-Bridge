@@ -242,14 +242,6 @@ Claude CLI 执行 hook 脚本
   → 将 stdout 写回自身 stdout（Claude CLI 读取作为 hook 输出）
 ```
 
-**补充通道（Transcript 轮询）：**
-
-```
-Bridge 每 800ms 读取 Claude 的 JSONL transcript 文件增量
-  → 解析 assistant 消息中的 "thinking" content blocks
-  → 转发思考内容到微信
-```
-
 ### Hook 事件类型
 
 适配器注册了以下 Claude Code hook 事件：

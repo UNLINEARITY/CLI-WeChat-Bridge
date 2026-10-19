@@ -46,9 +46,8 @@ import type {
   UserInputRequest,
 } from "../bridge/bridge-types.ts";
 import {
+  buildChannelInboundPrompt,
   buildOneTimeCode,
-  buildWechatInboundPrompt,
-  type WechatInboundPromptAttachment,
   formatApprovalMessage,
   formatDuration,
   formatMirroredUserInputMessage,
@@ -83,9 +82,7 @@ import {
   BRIDGE_LOG_FILE,
   appendBoundedLog,
   ensureChannelDataDir,
-  migrateLegacyChannelFiles,
 } from "../wechat/channel-config.ts";
-import { ensureWechatCredentials } from "../wechat/setup.ts";
 import {
   formatBindCommandUsage,
   formatBindingsListMessage,
@@ -102,14 +99,10 @@ import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
   describeWechatTransportError,
-  WeChatTransport,
+  type WeChatTransport,
   type InboundWechatMessage,
 } from "../wechat/wechat-transport.ts";
-import {
-  getPendingChannelMessagesFile,
-  getPendingWechatMessagesFile,
-  PendingWechatMessageStore,
-} from "../channels/wechat/wechat-outbound-queue.ts";
+import { PendingWechatMessageStore } from "../channels/wechat/wechat-outbound-queue.ts";
 import {
   createRuntimeHost,
 } from "../runtime/create-runtime-host.ts";
@@ -127,20 +120,16 @@ import { resolveDaemonOutboundTarget } from "../core/outbound-target.ts";
 import { handleAdapterControl, invalidateModelSnapshot } from "../bridge/adapter-control.ts";
 import { forwardBridgeEvent } from "../core/bridge-event-forwarder.ts";
 import { isDirectModuleRun } from "../core/direct-run.ts";
-import { WechatChannelPort } from "../channels/wechat/wechat-channel-port.ts";
-import { ensureWecomAccount } from "../channels/wecom/setup.ts";
-import { ensureTelegramAccount } from "../channels/telegram/setup.ts";
-import { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
-import { TelegramChannelPort } from "../channels/telegram/telegram-channel-port.ts";
-import { WecomChannelPort } from "../channels/wecom/wecom-channel-port.ts";
-import { WecomTransport } from "../channels/wecom/wecom-transport.ts";
-import { createChannelDriver } from "../channels/channel-driver-factory.ts";
-import { LocalChannelPort } from "../channels/local/local-channel-port.ts";
+import type { TelegramTransport } from "../channels/telegram/telegram-transport.ts";
+import type { WecomTransport } from "../channels/wecom/wecom-transport.ts";
+import type { LocalChannelFiles } from "../channels/local/local-driver.ts";
 import {
-  getLocalChannelFiles,
-  LOCAL_CHANNEL_OPERATOR_ID,
-  type LocalChannelFiles,
-} from "../channels/local/local-driver.ts";
+  createChannelRuntime,
+  prepareChannel,
+  setupChannel,
+  type ChannelRuntime,
+  type ChannelSetup,
+} from "../channels/channel-registry.ts";
 import type {
   ChannelDriver,
   ChannelSendResult,
@@ -903,12 +892,9 @@ export class WechatDaemon {
   private readonly cwd: string;
   private readonly profile?: string;
   private readonly authorizedUserId: string;
-  private readonly transport: WeChatTransport | null;
+  private readonly channel: ChannelRuntime;
   private readonly channelDriver: ChannelDriver;
   private readonly channelId: BridgeChannelId;
-  private readonly wecomTransport: WecomTransport | null;
-  private readonly telegramTransport: TelegramTransport | null;
-  private readonly localFiles: LocalChannelFiles | null;
   private readonly inboundConversationContext =
     new InboundConversationContext();
   private readonly fallbackConversation: ChannelConversationRef;
@@ -934,49 +920,47 @@ export class WechatDaemon {
   constructor(params: {
     cwd: string;
     profile?: string;
-    authorizedUserId: string;
-    transport: WeChatTransport | null;
-    channelId?: BridgeChannelId;
-    accountId?: string;
-    wecomTransport?: WecomTransport | null;
-    telegramTransport?: TelegramTransport | null;
-    localFiles?: LocalChannelFiles | null;
     deps?: WechatDaemonDeps;
-  }) {
+  } & (
+    | { setup: ChannelSetup }
+    | {
+        authorizedUserId: string;
+        transport: WeChatTransport | null;
+        channelId?: BridgeChannelId;
+        accountId?: string;
+        wecomTransport?: WecomTransport | null;
+        telegramTransport?: TelegramTransport | null;
+        localFiles?: LocalChannelFiles | null;
+      }
+  )) {
+    const setup: ChannelSetup = "setup" in params
+      ? params.setup
+      : {
+          channelId: params.channelId ?? "wechat",
+          operatorId: params.authorizedUserId,
+          accountId: params.accountId,
+          transports: {
+            wechat: params.transport,
+            wecom: params.wecomTransport ?? null,
+            telegram: params.telegramTransport ?? null,
+            localFiles: params.localFiles ?? null,
+          },
+        };
     this.cwd = params.cwd;
     this.profile = params.profile;
-    this.authorizedUserId = params.authorizedUserId;
-    this.transport = params.transport;
-    this.channelId = params.channelId ?? "wechat";
-    this.wecomTransport = params.wecomTransport ?? null;
-    this.telegramTransport = params.telegramTransport ?? null;
-    this.localFiles = params.localFiles ?? null;
+    this.authorizedUserId = setup.operatorId;
+    this.channelId = setup.channelId;
     this.deps = params.deps ?? {};
-    this.channelDriver = createChannelDriver({
-      channelId: this.channelId,
-      authorizedUserId: params.authorizedUserId,
-      accountId: params.accountId,
-      wechatTransport: this.transport,
-      wecomTransport: this.wecomTransport,
-      telegramTransport: this.telegramTransport,
-      localFiles: this.localFiles,
-      buildWechatInboundPrompt: (text, attachments) =>
-        buildWechatInboundPrompt(
-          text,
-          attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
-            attachment.kind === "image" || attachment.kind === "file"),
-        ),
+    this.channel = createChannelRuntime(setup, {
+      buildWechatInboundPrompt: buildChannelInboundPrompt,
       log: (message) => this.daemonLog(message),
       logError,
     });
+    this.channelDriver = this.channel.driver;
     this.fallbackConversation = this.channelDriver.defaultConversation()
-      ?? this.channelDriver.directConversation(params.authorizedUserId);
+      ?? this.channelDriver.directConversation(this.authorizedUserId);
     this.pendingWechatMessages = this.deps.pendingWechatMessages ??
-      new PendingWechatMessageStore(
-        this.channelId === "wechat"
-          ? getPendingWechatMessagesFile(this.cwd)
-          : getPendingChannelMessagesFile(this.cwd, this.channelId),
-      );
+      new PendingWechatMessageStore(this.channel.pendingMessagesFile(this.cwd));
   }
 
   private daemonLog(message: string): void {
@@ -1159,13 +1143,14 @@ export class WechatDaemon {
       return;
     }
 
+    const pollTransport = this.channel.pollTransport;
+    if (!pollTransport) {
+      throw new Error(`The ${this.channelId} poll loop requires a long-poll transport.`);
+    }
     while (!this.shutdownPromise) {
-      if (!this.transport) {
-        throw new Error("The wechat poll loop requires a WeChat transport.");
-      }
       let pollResult: Awaited<ReturnType<WeChatTransport["pollMessages"]>>;
       try {
-        pollResult = await this.transport.pollMessages({
+        pollResult = await pollTransport.pollMessages({
           timeoutMs: DEFAULT_LONG_POLL_TIMEOUT_MS,
           minCreatedAtMs: this.bridgeStartedAtMs - MESSAGE_START_GRACE_MS,
         });
@@ -1277,23 +1262,9 @@ export class WechatDaemon {
     // waiting for queued sends or adapter disposal. Otherwise Ctrl+C can leave
     // the process alive until the 35-second poll timeout and retain the daemon
     // endpoint for the next startup to clean up.
-    try {
-      this.transport?.stop();
-    } catch {
-      // Best effort shutdown.
-    }
+    await this.channel.stop();
     try {
       await this.channelDriver.endAllTyping?.();
-    } catch {
-      // Best effort shutdown.
-    }
-    try {
-      this.wecomTransport?.stop();
-    } catch {
-      // Best effort shutdown.
-    }
-    try {
-      await this.telegramTransport?.stop();
     } catch {
       // Best effort shutdown.
     }
@@ -1960,78 +1931,18 @@ export class WechatDaemon {
     slot.controller.syncLocalClientEndpoint();
   }
 
-  private createWechatChannelPort(adapter: DaemonAdapterKind): BridgeChannelPort {
-    if (this.channelId === "wecom") {
-      return new WecomChannelPort({
-        transport: this.wecomTransport!,
-        sendText: (target, text, kind) =>
-          this.queueWechatMessage(
-            this.authorizedUserId,
-            text,
-            toWechatSendContext(kind),
-            target,
-          ),
-        prefixText: (currentAdapter, text) =>
-          prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
-        onEmptyVisibleReply: (currentAdapter, rawText) => {
-          appendDaemonLog(
-            `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
-          );
-        },
-      });
-    }
-    if (this.channelId === "telegram") {
-      return new TelegramChannelPort({
-        transport: this.telegramTransport!,
-        sendText: (target, text, kind) =>
-          this.queueWechatMessage(
-            this.authorizedUserId,
-            text,
-            toWechatSendContext(kind),
-            target,
-          ),
-        prefixText: (currentAdapter, text) =>
-          prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
-        onEmptyVisibleReply: (currentAdapter, rawText) => {
-          appendDaemonLog(
-            `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
-          );
-        },
-      });
-    }
-    if (this.channelId === "local") {
-      return new LocalChannelPort({
-        sendText: (recipientId, text, context) =>
-          this.queueWechatMessage(recipientId, text, context as WechatSendContext),
-        prefixText: (currentAdapter, text) =>
-          prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
-        onEmptyVisibleReply: (currentAdapter, rawText) => {
-          appendDaemonLog(
-            `empty_visible_final_reply: adapter=${currentAdapter ?? adapter} raw=${truncatePreview(rawText)}`,
-          );
-        },
-        onTextSent: (currentAdapter, text) => {
-          appendDaemonLog(
-            `final_reply_sent: adapter=${currentAdapter ?? adapter} chars=${Array.from(text).length}`,
-          );
-        },
-      });
-    }
-    if (!this.transport) {
-      throw new Error("The wechat channel port requires a WeChat transport.");
-    }
-    const transport = this.transport;
-    return new WechatChannelPort({
-      sendText: (recipientId, text, context) =>
+  private createChannelPort(adapter: DaemonAdapterKind): BridgeChannelPort {
+    return this.channel.createPort({
+      sendTextToTarget: (target, text, kind) =>
+        this.queueWechatMessage(
+          this.authorizedUserId,
+          text,
+          toWechatSendContext(kind),
+          target,
+        ),
+      sendTextToRecipient: (recipientId, text, context) =>
         this.queueWechatMessage(recipientId, text, context as WechatSendContext),
-      sendImage: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => transport.sendImage(filePath, { recipientId })),
-      sendFile: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => transport.sendFile(filePath, { recipientId })),
-      sendVoice: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => transport.sendVoice(filePath, recipientId)),
-      sendVideo: (recipientId, filePath) =>
-        this.queueWechatAttachmentAction(() => transport.sendVideo(filePath, { recipientId })),
+      queueAttachment: (action) => this.queueWechatAttachmentAction(action),
       prefixText: (currentAdapter, text) =>
         prefixDaemonAdapterMessage(currentAdapter ?? adapter, text),
       onEmptyVisibleReply: (currentAdapter, rawText) => {
@@ -2050,7 +1961,7 @@ export class WechatDaemon {
   private handleSlotEvent(slot: DaemonSlot, event: BridgeEvent): void {
     slot.controller.syncLocalClientEndpoint();
     const adapterState = slot.runtime.getState();
-    const channelPort = this.createWechatChannelPort(slot.adapter);
+    const channelPort = this.createChannelPort(slot.adapter);
     const eventTarget = this.channelDriver.capabilities.multiConversation
       ? this.resolveSlotOutputTarget(slot)
       : this.fallbackConversation;
@@ -2225,7 +2136,7 @@ export class WechatDaemon {
     return slot.turns.resolveTarget(this.fallbackConversation);
   }
 
-  private bindCurrentWecomConversation(slot: DaemonSlot | null): void {
+  private bindCurrentConversation(slot: DaemonSlot | null): void {
     const conversation = this.inboundConversationContext.get();
     if (!this.channelDriver.capabilities.multiConversation || !slot || !conversation) {
       return;
@@ -2257,7 +2168,7 @@ export class WechatDaemon {
           reuseExistingVisible: true,
         });
         if (result.activated) {
-          this.bindCurrentWecomConversation(this.getActiveSlot());
+          this.bindCurrentConversation(this.getActiveSlot());
           message = { ...message, text: emojiMatch.remainder };
         } else {
           const detail = formatDaemonSwitchResultDetail(result);
@@ -2289,7 +2200,7 @@ export class WechatDaemon {
         );
         return;
       }
-      this.bindCurrentWecomConversation(this.getActiveSlot());
+      this.bindCurrentConversation(this.getActiveSlot());
       if (switchDirective.remainder) {
         message = { ...message, text: switchDirective.remainder };
       } else {
@@ -2328,7 +2239,7 @@ export class WechatDaemon {
       await this.queueWechatMessage(message.senderId, formatNoActiveAdapterMessage());
       return;
     }
-    this.bindCurrentWecomConversation(slot);
+    this.bindCurrentConversation(slot);
 
     const routeCurrentMessage = async (
       currentSlot: DaemonSlot,
@@ -2426,7 +2337,7 @@ export class WechatDaemon {
       return;
     }
     slot = this.getActiveSlot() ?? slot;
-    this.bindCurrentWecomConversation(slot);
+    this.bindCurrentConversation(slot);
     await routeCurrentMessage(slot, null);
   }
 
@@ -3426,9 +3337,8 @@ export async function cleanupSingleBridgeBeforeDaemon(
 export async function runDaemon(
   options: DaemonCliOptions,
 ): Promise<void> {
-  if ((options.channelId ?? "wechat") === "wechat") {
-    migrateLegacyChannelFiles((message) => log(message));
-  }
+  const channelId = options.channelId ?? "wechat";
+  prepareChannel(channelId, (message) => log(message));
   loadEmojiBindings();
   await cleanupDaemonBeforeStart({ cwd: options.cwd });
   const cleanupResult = await cleanupSingleBridgeBeforeDaemon();
@@ -3444,67 +3354,16 @@ export async function runDaemon(
   if (reapedOpencodePids.length > 0) {
     log(`Cleaned ${reapedOpencodePids.length} orphaned OpenCode process(es): ${reapedOpencodePids.join(", ")}`);
   }
-  const wecomAccount =
-    options.channelId === "wecom"
-      ? await ensureWecomAccount({ log })
-      : null;
-  const telegramAccount =
-    options.channelId === "telegram"
-      ? await ensureTelegramAccount({ log })
-      : null;
-  const credentials = wecomAccount
-    ? { userId: wecomAccount.operatorUserId }
-    : telegramAccount
-      ? { userId: telegramAccount.operatorUserId }
-      : options.channelId === "local"
-        ? { userId: LOCAL_CHANNEL_OPERATOR_ID }
-        : await ensureWechatCredentials({
-            requireUserId: true,
-            validateExisting: true,
-            log,
-          });
-  if (!credentials.userId) {
-    throw new Error(
-      options.channelId === "wecom"
-        ? "Saved WeCom credentials are missing operatorUserId."
-        : options.channelId === "telegram"
-          ? "Saved Telegram credentials are missing operatorUserId."
-          : "Saved WeChat credentials are missing userId.",
-    );
-  }
+  const setup = await setupChannel(channelId, {
+    cwd: options.cwd,
+    log,
+    logError,
+  });
 
   const daemon = new WechatDaemon({
     cwd: options.cwd,
     profile: options.profile,
-    authorizedUserId: credentials.userId,
-    transport:
-      (options.channelId ?? "wechat") === "wechat"
-        ? new WeChatTransport({ log, logError })
-        : null,
-    channelId: options.channelId,
-    accountId: wecomAccount?.botId ?? telegramAccount?.botUsername,
-    wecomTransport: wecomAccount
-      ? new WecomTransport({
-          account: wecomAccount,
-          logger: {
-            log: (message) => log(message),
-            error: (message) => logError(message),
-          },
-        })
-      : null,
-    telegramTransport: telegramAccount
-      ? new TelegramTransport({
-          account: telegramAccount,
-          logger: {
-            log: (message) => log(message),
-            error: (message) => logError(message),
-          },
-        })
-      : null,
-    localFiles:
-      options.channelId === "local"
-        ? getLocalChannelFiles(options.cwd)
-        : null,
+    setup,
   });
   if (cleanupResult.action === "stopped" && isDaemonAdapterKind(cleanupResult.lock.adapter)) {
     daemon.takenOverAdapter = cleanupResult.lock.adapter;

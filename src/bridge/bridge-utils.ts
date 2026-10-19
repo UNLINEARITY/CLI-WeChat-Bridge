@@ -5,7 +5,6 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { t } from "../i18n/index.ts";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -24,6 +23,7 @@ import type {
   PendingUserInputRequest,
   UserInputRequestQuestion,
 } from "./bridge-types.ts";
+import type { ChannelAttachment } from "../core/channel-types.ts";
 import {
   parseBridgeControlCommand,
   type BridgeControlCommand,
@@ -195,34 +195,6 @@ export type CodexSessionAgentMessage = {
   phase?: string;
   message: string;
 };
-
-export function isThinkingForwardEnabled(): boolean {
-  if (process.env.CLI_BRIDGE_THINKING_FORWARD === "1") {
-    return true;
-  }
-  try {
-    const accountPath = process.env.CLI_BRIDGE_DATA_DIR
-      ? path.join(process.env.CLI_BRIDGE_DATA_DIR, "account.json")
-      : path.join(os.homedir(), ".cli-bridge", "account.json");
-    if (!fs.existsSync(accountPath)) return false;
-    const raw = fs.readFileSync(accountPath, "utf8");
-    const data = JSON.parse(raw) as { enableThinkingForward?: boolean };
-    return data.enableThinkingForward === true;
-  } catch {
-    return false;
-  }
-}
-
-export function formatThinkingForWechat(text: string, maxLength = 500): string {
-  const normalized = normalizeOutput(text).trim();
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxLength) {
-    return normalized;
-  }
-  return `${normalized.slice(0, Math.max(0, maxLength - 3))}...`;
-}
 
 export function parseSystemCommand(text: string): SystemCommand | null {
   return parseBridgeControlCommand(text);
@@ -406,6 +378,21 @@ export function buildWechatInboundPrompt(
     : baseText;
 
   return `${userPrompt.trim()}\n\n${formatWechatInboundAttachmentPrompt(trimmedAttachments)}`;
+}
+
+/**
+ * Inbound prompt builder injected into the WeChat channel driver. Only image
+ * and file attachments are described in the prompt.
+ */
+export function buildChannelInboundPrompt(
+  text: string,
+  attachments: ChannelAttachment[],
+): string {
+  return buildWechatInboundPrompt(
+    text,
+    attachments.filter((attachment): attachment is WechatInboundPromptAttachment =>
+      attachment.kind === "image" || attachment.kind === "file"),
+  );
 }
 
 export function parseWechatFinalReply(text: string): ParsedWechatFinalReply {

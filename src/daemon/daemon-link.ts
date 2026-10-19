@@ -13,7 +13,7 @@ import {
   ensureChannelDataDir,
 } from "../wechat/channel-config.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
-import type { BridgeChannelId } from "../core/channel-types.ts";
+import { isBridgeChannelId, type BridgeChannelId } from "../core/channel-types.ts";
 import type { WechatSendContext } from "../channels/wechat/wechat-forwarding.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
@@ -131,7 +131,7 @@ type DaemonIpcResponseFrame = {
   response: DaemonResponse;
 };
 
-function normalizeDaemonEndpoint(value: unknown): DaemonEndpoint | null {
+export function normalizeDaemonEndpoint(value: unknown): DaemonEndpoint | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -155,9 +155,7 @@ function normalizeDaemonEndpoint(value: unknown): DaemonEndpoint | null {
     token: record.token,
     cwd: record.cwd,
     startedAt: record.startedAt,
-    ...(record.channelId === "wechat" || record.channelId === "wecom"
-      ? { channelId: record.channelId }
-      : {}),
+    ...(isBridgeChannelId(record.channelId) ? { channelId: record.channelId } : {}),
   };
 }
 

@@ -56,7 +56,6 @@ export type AccountData = {
   accountId: string;
   userId?: string;
   savedAt: string;
-  enableThinkingForward?: boolean;
 };
 
 type ContextTokenState = Record<string, string>;

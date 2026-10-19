@@ -174,11 +174,6 @@ export type BridgeEvent =
       timestamp: string;
     }
   | {
-      type: "thinking";
-      text: string;
-      timestamp: string;
-    }
-  | {
       type: "approval_state_changed";
       requests: ApprovalRequest[];
       timestamp: string;
