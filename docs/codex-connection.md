@@ -14,7 +14,7 @@ node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 
 ### 使用
 
-在 Codex TUI 会话中调用 `$codex-bridge`,或在项目目录运行:
+在 Codex TUI 会话中调用 `$codex-bridge`,并说明要接入的通道。skill 会在项目目录替你运行下面的命令;一般不需要手动运行,这里列出供排查参考:
 
 ```bash
 <channel>-codex --attach-current-session           # 前缀选择通道:wechat | wecom | telegram
@@ -56,7 +56,7 @@ From a source checkout, run `node skills/codex-bridge/scripts/install.mjs`. The 
 
 ### Usage
 
-Invoke `$codex-bridge` inside a Codex TUI session, or run from the project directory:
+Invoke `$codex-bridge` inside a Codex TUI session and name the channel. The skill runs the command below in the project directory for you; you normally do not run it by hand, and it is listed here for troubleshooting:
 
 ```bash
 <channel>-codex --attach-current-session           # prefix selects the channel: wechat | wecom | telegram

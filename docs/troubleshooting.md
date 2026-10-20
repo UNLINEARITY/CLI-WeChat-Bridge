@@ -262,7 +262,7 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 ## 启动器被拒绝，或远程命令提示"当前模式下不可用"
 
-桥接按打开的窗口渐进升级（见 [README 渐进桥接模式](../README.md#渐进桥接模式)），以下提示都是模式规则，不是故障：
+桥接按打开的窗口渐进升级（见[渐进桥接模式](bridge-modes.md)），以下提示都是模式规则，不是故障：
 
 1. **`... is already running for <目录> in another terminal, and this bridge runs several CLI types`**：桥接处于多 CLI 模式，这个目录已经有同一种 CLI。多 CLI 模式下同一目录每种 CLI 只开一个；要同时跑两个，请在另一个目录运行，桥接会升级为多目录模式。
 2. **`The <通道> bridge is running several windows of one CLI type ...`**：桥接处于同类型多实例模式，这个目录只能再开同一种 CLI。要用其他 CLI，请在另一个目录运行，或先关闭这些窗口（临时 daemon 会随最后一个窗口退出，下次从单桥接开始）。

@@ -85,6 +85,7 @@
 - **窗口**：直接启动器在当前终端运行 CLI，并向 daemon 申请一个跟随窗口的 slot；窗口关闭后 slot 释放（daemon 巡检 companion 存活，四种 CLI 行为一致）。远程打开新窗口时使用当前选中窗口所在的目录；还没有窗口时使用 daemon 的主目录。
 - **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束；它在模式判断中视同一个 codex 窗口。
 - **输出**：前缀按上表的模式决定。审批和问题跨窗口时用 `/confirm <编号>`、`/answer #<编号>` 指定。
+- **审批**：Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理，本地终端已处理的请求会同步移除。子代理的权限请求由所属父任务接收，审批不会切换当前会话或改变回复目标。
 - **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`（编号实例为 `slot-session-<cli>-<n>.json`），供显式 `--session-start-mode restore` 恢复。
 - **出站**：`OutboundDispatcher`（`src/core`）串行发送文本与附件；目标会话失效时暂存到 `PendingMessageStore`，下一条入站消息到达后补发。
 
@@ -188,6 +189,10 @@ opencode serve --port <port> --hostname 127.0.0.1
 - `session.abort` — 中断当前执行
 - `tui.selectSession` — 同步本地 TUI 的可见会话
 
+### 模型与计划模式控制
+
+OpenCode 的控制不依赖可见 TUI 的输入框、菜单或当前面板。桥接通过 server 的会话 API 查询已连接模型、提交模型与 primary agent，并回读 session 确认结果，只有回读确认后才报告切换成功；微信、企业微信和 Telegram 消息直接通过 SDK 提交，并显式携带已生效的 agent、model 和 variant。`/plan` 选择 `plan` primary agent，缺少该 agent 时提示错误；`/plan off` 恢复进入前的 agent，没有历史记录时恢复 `build` 或首个非 plan primary agent。
+
 ### 为什么不需要 PTY
 
 OpenCode 的 server 模式提供了完整的结构化 API：输入通过 HTTP 发送，输出通过 SSE 接收，审批通过 HTTP 响应。整个通信链路不涉及终端模拟。
@@ -235,6 +240,8 @@ Claude companion 不需要额外插件：交互式 `/resume` 会先触发旧 ses
 ### 权限与交互
 
 Pi 适配器不增加 bridge 工具审批层，文件与命令工具直接继承启动用户的本地权限。`--approve` 用于信任当前项目的 Pi 配置与资源。因为运行的是原生 TUI，Pi 自己的主题、快捷键、模型选择以及其他 extension 的交互式 UI 都会正常保留。
+
+`/model` 通过已连接的原生 TUI extension 读取当前 scoped model 列表；没有 scoped models 时使用 model registry 中可用的模型，并调用 `pi.setModel()` 切换。Pi 的 `/plan` 由可选扩展定义，不作为 bridge 的通用控制命令。
 
 ## Claude Code 适配器（PTY + Hook TCP）
 
@@ -299,6 +306,14 @@ Claude CLI 执行 hook 脚本
    { "hookSpecificOutput": { "decision": { "behavior": "allow" } } }
 6. hook 脚本将决策输出到 stdout → Claude CLI 读取并继续/中止
 ```
+
+bridge 生成的 Claude 启动设置默认添加 `WebFetch(domain:*)` 权限规则，让常规联网请求直接通过；已有的拒绝规则和沙箱限制仍然生效。`CLI_BRIDGE_STRICT_APPROVAL=1` 关闭这条自动放行（见[运行配置](configuration.md)）。只有本地网络弹窗、不触发 `PermissionRequest` Hook 的请求无法远程处理，需要在终端操作。
+
+### 模型与计划模式控制
+
+Claude Code 的 `/model` 与 `/plan` 通过可见 PTY 驱动原生选择器完成：桥接短暂打开选择器，选中目标后等待 CLI 确认。因此要求可见 CLI 停在空闲的原生提示符，没有待审批、本地草稿或打开的弹窗；控制期间若本地键盘有输入，远程控制会取消，以免与用户操作冲突。模型切换使用选择器的 `s` 选项（仅当前会话），需要 CLI 支持该选项。原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端。`/plan off` 恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
+
+`AskUserQuestion` 经 Hook 转发题目、选项说明和文字预览，远程答案一次提交全部题目；Hook 超时或断开连接后，远程问题会被清除。
 
 ### 为什么需要 PTY
 

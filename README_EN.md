@@ -1,4 +1,4 @@
-# CLI WeChat Bridge
+# CLI Chat Bridge
 
 <p align="center">
   <a href="README.md">简体中文</a> · <strong>English</strong>
@@ -6,7 +6,7 @@
 
 <p align='center'><img src='docs/images/logo.png' width=90%></p>
 
-<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&duration=4000&pause=500&color=06C763&center=true&vCenter=true&width=660&lines=CLI+WeChat+Bridge+-+AI+CLI+bridge;Native+two-way+interaction%3A+terminal+and+chat"></p>
+<p align="center"><img alt="Typing SVG" src="https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=600&duration=4000&pause=500&color=06C763&center=true&vCenter=true&width=660&lines=CLI+Chat+Bridge+-+AI+CLI+bridge;Native+two-way+interaction%3A+terminal+and+chat"></p>
 
 <p align="center">
   <a href="https://unlinearity.github.io/CLI-WeChat-Bridge/en/"><img alt="Product website" src="https://img.shields.io/badge/Website-Visit-0284c7?style=for-the-badge&logo=data%3Aimage%2Fsvg%2Bxml%3Bbase64%2CPHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9IndoaXRlIiBzdHJva2Utd2lkdGg9IjEuNyI%2BPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iOSIvPjxlbGxpcHNlIGN4PSIxMiIgY3k9IjEyIiByeD0iNCIgcnk9IjkiLz48cGF0aCBkPSJNMyAxMmgxOCIvPjwvc3ZnPg%3D%3D&logoColor=white&labelColor=1c1917"></a>
@@ -28,10 +28,10 @@ The project is built around local workflows and preserves the **native terminal 
 
 ## Documentation
 
-- [Progressive bridge modes](#progressive-bridge-modes): start with a clean single bridge and grow into L1 several CLIs, L2 several windows of one CLI, or L3 several directories as you open windows, with diagrams.
-- [Telegram setup](#33-telegram-setup): create a bot, pair an operator, launch a CLI, or attach your current Codex session.
+- [Progressive bridge modes](docs/bridge-modes_EN.md): start with a clean single bridge and grow into L1 several CLIs, L2 several windows of one CLI, or L3 several directories as you open windows, with diagrams.
+- [Telegram setup](#33-telegram-setup): create a bot, pair an operator, and launch a CLI.
 - [Troubleshooting](docs/troubleshooting.md) (Chinese): context tokens, network proxies, local endpoints, and known limitations.
-- [Codex channel connection skill (experimental)](docs/codex-connection.md#english): use `$codex-bridge` or `--attach-current-session` to connect your current Codex session (0.162+ shared daemon mode) to WeChat, WeCom, or Telegram.
+- [Codex channel connection skill (experimental)](docs/codex-connection.md#english): invoke the `$codex-bridge` skill inside Codex to connect your current Codex session (0.162+ shared daemon mode) to WeChat, WeCom, or Telegram.
 - [Runtime configuration](docs/configuration.md) (Chinese): shared data directories, interface language, upload limits, and debug environment variables.
 - [Development guide](docs/development.md) (Chinese): source execution, tests, builds, packaging, and global installation smoke checks.
 - [Release notes](docs/releases/README.md): changes and upgrade instructions, with English and Chinese notes.
@@ -51,15 +51,9 @@ The local CLI remains the primary workspace:
 - **WeChat, WeCom, or Telegram is the remote entry point** into that local session.
 - Session consistency, thread state, and approvals stay centered on the **local session**.
 
-## Progressive bridge modes
+### Progressive bridge modes
 
-The bridge does not show every capability up front. It **grows with the windows you open on your computer**, through four levels: L0 single bridge, L1 several CLIs, L2 several windows of one CLI, and L3 several directories. There is no mode to choose and nothing to configure; opening a window is what moves the bridge to the next level.
-
-A few terms first:
-
-- **Window**: one CLI running in a local terminal, for example the Pi that `wechat-pi` opens in `~/app`.
-- **Anchor directory**: the project directory of the first window. L1 and L2 happen only there.
-- **Upgrade**: opening a window that moves the bridge up a level. Every upgrade sends a notice to the chat listing the commands it opened up.
+The bridge starts as a clean single bridge: with one CLI, replies carry no labels and the chat shows only single-CLI commands. It then grows with the windows you open on your computer: another CLI type in the same directory leads to L1 several CLIs, the same CLI again to L2 several windows of one CLI, and a window in another directory to L3 several directories; upgrades never step back down. See [Progressive bridge modes](docs/bridge-modes_EN.md) for each level's diagram, commands, and rules, and [section 6](#progressive-modes) for a quick reference.
 
 ```mermaid
 stateDiagram-v2
@@ -75,130 +69,6 @@ stateDiagram-v2
     L1 --> L3: another directory
     L2 --> L3: another directory
 ```
-
-The diagram shows three rules: L1 and L2 are two directions out of L0 and never turn into each other; any level moves to L3 once a window opens in another directory; every arrow points up, so there is no step down.
-
-### L0 single bridge
-
-**When**: the first window opens, for example `wechat-pi` in `~/app`.
-
-```mermaid
-flowchart LR
-    W["Chat"] <--> B["Bridge"]
-    B <--> P["~/app · Pi"]
-```
-
-This is the everyday state for most people: one project, one CLI. Plain messages go straight to Pi and its replies come back **without any label**. The welcome message lists only single-CLI commands (`/stop`, `/status`, `/model`, `/plan`, `/resume`, `/new`, `/confirm`, `/deny`, `/answer`, `/lang`); `/cd`, `/all`, and other CLI names do not appear.
-
-L0 upgrades when you run another launcher in the same directory, or from the chat: `/open` opens another window of the same CLI (L2), and `/codex` and the like open another CLI in the current directory (L1).
-
-### L1 several CLIs
-
-**When**: **another** CLI type opens in the anchor directory, for example `wechat-pi` and then `wechat-opencode` in `~/app`.
-
-```mermaid
-flowchart LR
-    W["Chat"] <--> B["Bridge"]
-    subgraph app["~/app"]
-        P["Pi"]
-        O["OpenCode"]
-    end
-    B <-->|"[pi]"| P
-    B <-->|"[opencode]"| O
-```
-
-Each CLI has its strengths, and L1 lets you pick from the chat which one handles the next message:
-
-| Chat command | Effect |
-| --- | --- |
-| `/pi`, `/opencode`, `/codex`, `/claude` | Switch to that CLI; if the current directory does not have it yet, open a new window on your computer |
-| `/opencode fix the failing test` | Switch, then send the rest of the message to OpenCode |
-| `/all <prompt>` | Send one prompt to every CLI |
-
-Replies are labeled `[pi]`, `[opencode]`, and so on. In L1 each CLI has one window in the anchor directory: a second Pi is refused, because in L1 `/pi` means "switch to Pi" and could not tell two Pis apart.
-
-### L2 several windows of one CLI
-
-**When**: the **same** CLI opens again in the anchor directory, for example `wechat-pi` twice in `~/app`, or `/open` sent from the chat in L0.
-
-```mermaid
-flowchart LR
-    W["Chat"] <--> B["Bridge"]
-    subgraph app["~/app"]
-        P1["Pi · 1"]
-        P2["Pi · 2"]
-    end
-    B <-->|"[pi-1]"| P1
-    B <-->|"[pi-2]"| P2
-```
-
-Useful for running several tasks in parallel on one CLI, such as building a feature in one window while another runs and fixes tests. Windows are told apart by number:
-
-| Chat command | Effect |
-| --- | --- |
-| `/1`, `/2` | Switch to that numbered window |
-| `/2 run the integration tests` | Switch, then send the rest of the message to window 2 |
-| `/open` | Open another window of the same CLI in the current directory, with the lowest free number |
-| `/pi` | Switch to the Pi window used most recently |
-| `/all <prompt>` | Send one prompt to every window |
-
-Replies are labeled `[pi-1]`, `[pi-2]`. Commands such as `/stop`, `/model`, and `/resume` act on the selected window. Closed numbers are freed: when `pi-2` closes, `pi-1` and `pi-3` keep their numbers and the next new window takes 2. In L2 the anchor directory runs only this CLI; opening another CLI there is refused.
-
-### L3 several directories
-
-**When**: from L0, L1, or L2, any CLI opens in **another directory**, for example `wechat-codex` in `~/lib` while you work with Pi in `~/app`.
-
-```mermaid
-flowchart LR
-    W["Chat"] <--> B["Bridge"]
-    subgraph app["~/app"]
-        P1["Pi · 1"]
-        P2["Pi · 2"]
-    end
-    subgraph lib["~/lib"]
-        C["Codex"]
-        CL["Claude Code"]
-    end
-    B <-->|"[app/pi-1]"| P1
-    B <-->|"[app/pi-2]"| P2
-    B <-->|"[lib/codex]"| C
-    B <-->|"[lib/claude]"| CL
-```
-
-L3 is the full management mode with **no restrictions**: any directory, any CLI, any number of windows, addressed by directory, CLI, and number. Windows opened in L1 or L2 stay as they are.
-
-| Chat command | Effect |
-| --- | --- |
-| `/cd` | List every directory and its windows |
-| `/cd 2`, `/cd lib` | Switch the current directory by number or name |
-| `/codex`, `/claude`, and so on | Switch CLI within the current directory, opening it there if needed |
-| `/1`, `/2`, `/open` | Switch between or open windows of the current CLI in the current directory |
-| `/all <prompt>` | Send to every window of the **current directory** only, so a prompt never lands in another project |
-
-Replies are labeled `[directory/CLI]`, with a number when one directory runs a CLI more than once, as in `[app/pi-2]`. Approvals and questions waiting in another directory can be handled with `/confirm <number>` and `/answer #<number>` without switching there first.
-
-### Upgrade rules
-
-**L1 and L2 exclude each other.** In the anchor directory, L1's `/pi` means "switch to Pi", while in L2 every window is Pi and only a number tells them apart. Mixing the two would give one command two meanings. So:
-
-| Current | Action in the anchor directory | Result |
-| --- | --- | --- |
-| L1 | Open a CLI the directory already has | Refused; the terminal suggests running it in another directory (L3) |
-| L2 | Open another CLI type | Refused; the terminal suggests another directory, or closing those windows first |
-| Any | Open a window in another directory | Allowed; moves to L3 |
-
-**One-way upgrades.** Closing windows never steps the bridge down, so the commands and labels you see in the chat do not keep changing. With one window left in L2, replies still read `[pi-1]`.
-
-**The lifecycle decides when to start over.**
-
-- A direct launcher (`wechat-pi` and the like) starts an ephemeral daemon when none is running. It exits once its last window closes, and the next launch starts at L0 again.
-- `wechat-daemon` is just a resident service and does not choose a level: it starts with no window, and the first window enters L0. Once every window closes it starts over, and sending `/codex` or the like from the chat opens a CLI in its startup directory. Running `wechat-daemon` while an ephemeral daemon is up makes that daemon resident and keeps its level.
-
-**Where remote windows open.** A window opened from the chat (`/codex`, `/open`, and so on) uses the directory of the selected window, or the daemon's startup directory while no window is open.
-
-**An attached Codex session counts as a window.** A session joined with `--attach-current-session` follows the same rules: next to a single Codex window it becomes `codex-2` (L2), next to another CLI the bridge enters L1, and in another directory it enters L3.
-
-Send `/status` from the chat to see the current level (the "Mode" line). The [troubleshooting guide](docs/troubleshooting.md) (Chinese) explains refusal and "not available in this mode" messages.
 
 ## 2. Quick start
 
@@ -317,7 +187,7 @@ WeCom uses the official smart-bot persistent connection and does not need a publ
 
 #### 3.3 Telegram setup
 
-Telegram uses official [Bot API long polling](https://core.telegram.org/bots/api#getupdates), so no public callback URL is required. Your computer must be able to reach `api.telegram.org`. Telegram commands are included starting with `1.2.3`. See the [source build instructions](docs/development.md#源码更新) (Chinese).
+Telegram uses official [Bot API long polling](https://core.telegram.org/bots/api#getupdates), so no public callback URL is required. Your computer must be able to reach `api.telegram.org`. See the [source build instructions](docs/development.md#源码更新) (Chinese).
 
 1. Open [@BotFather](https://t.me/BotFather) in Telegram, send `/newbot`, and follow the prompts to create a bot and obtain its Bot Token ([official instructions](https://core.telegram.org/bots/tutorial#obtain-your-bot-token)).
 2. Run `telegram-setup` in your local terminal and enter the Bot Token.
@@ -331,14 +201,6 @@ telegram-setup --check  # Check the configured Bot Token
 ```
 
 Run only one bridge or daemon per Bot Token at a time. Before pairing again with `telegram-setup`, stop any bridge already using that bot.
-
-To connect your **current Codex session** to Telegram, run this from its project directory:
-
-```bash
-telegram-codex --attach-current-session
-```
-
-This requires Codex >= 0.162 in shared daemon mode. Success prints `Attached Codex daemon thread <id>` without opening a new visible CLI. If several live sessions share the directory, append `--codex-thread-id <id>`. See the [Codex connection guide](docs/codex-connection.md#english).
 
 ### 4. Send a sync message from WeChat first (WeChat only)
 
@@ -366,9 +228,10 @@ Choose a launcher:
 
 A direct launcher runs the CLI in the current terminal and connects it to the bridge:
 
-- Without a running daemon, it starts an ephemeral daemon in the background, and the bridge begins as an [L0 single bridge](#l0-single-bridge); the ephemeral daemon exits once all its windows close.
-- With a running daemon, it joins it and the bridge grows by the [progressive bridge modes](#progressive-bridge-modes): another CLI type in the same directory leads to L1, the same CLI again to L2, and another directory to L3.
-- If the visible client is running but its worker is unhealthy (for example, `stopped` or `error`), the launcher restarts the bridge and reopens the visible client.
+- Without a running daemon, it starts an ephemeral daemon in the background, and the bridge begins as an [L0 single bridge](docs/bridge-modes_EN.md#l0-single-bridge); the ephemeral daemon exits once all its windows close.
+- With a running daemon, it joins it and the bridge grows by the [progressive bridge modes](docs/bridge-modes_EN.md): another CLI type in the same directory leads to L1, the same CLI again to L2, and another directory to L3.
+
+To connect an **already running Codex session** to WeChat, WeCom, or Telegram instead of opening a new one, invoke the `$codex-bridge` skill inside that Codex session and name the channel. This requires Codex >= 0.162 in shared daemon mode; see the [Codex connection guide](docs/codex-connection.md#english).
 
 ### 6. Persistent daemon mode
 
@@ -412,7 +275,7 @@ After starting the daemon, you can switch CLIs from the messaging channel. When 
 
 Daemon behavior:
 
-- The bridge grows with the windows you open (see [Progressive bridge modes](#progressive-bridge-modes)): with one CLI it is a clean single bridge, and the channel shows only single-CLI commands.
+- The bridge grows with the windows you open (see [Progressive bridge modes](docs/bridge-modes_EN.md)): with one CLI it is a clean single bridge, and the channel shows only single-CLI commands.
 - One daemon can manage several working directories: running a direct launcher (for example `wechat-claude`) in another directory runs the CLI in that terminal and adds the directory to the running daemon. Send `/cd` in the channel to list directories and `/cd <number>` or `/cd <name>` to switch. Only directories opened on this computer can be selected.
 - A single bridge sends output unlabeled; with several CLIs output is labeled like `[codex]`, with several windows of one CLI like `[pi-1]`, and across directories like `[directory/codex]`.
 - Startup takes over and cleans up old standalone bridge processes, stale locks, and old endpoints.
@@ -421,7 +284,7 @@ Daemon behavior:
 
 #### Progressive modes
 
-Quick reference below; see [Progressive bridge modes](#progressive-bridge-modes) for the diagram, commands, and upgrade rules of each level.
+Quick reference below; see [Progressive bridge modes](docs/bridge-modes_EN.md) for the diagram, commands, and upgrade rules of each level.
 
 | Mode | When it starts | Switching from the channel |
 | --- | --- | --- |
@@ -501,8 +364,6 @@ Run commands from the target project directory. `wechat-*` selects personal WeCh
 | OpenCode | `wechat-opencode` | `wecom-opencode` | `telegram-opencode` | Start or reuse a visible OpenCode terminal |
 | Pi | `wechat-pi` | `wecom-pi` | `telegram-pi` | Start or reuse the native Pi TUI |
 
-The deprecated `wechat-*-start` aliases were removed in 1.1.5. Use the entry points above. Public `wechat-bridge*` commands and the Shell adapter have also been removed; direct launchers and daemons manage the internal bridge runtime.
-
 ### 4.2 Persistent daemon
 
 | Option | Purpose | Example |
@@ -530,21 +391,19 @@ Shared options:
 | --- | --- | --- |
 | `--cwd <path>` | Set the runtime and visible CLI working directory | `wechat-claude --cwd D:\work\my-project` |
 | `--profile <name-or-path>` | Pass a profile to the internal runtime | `wechat-claude --profile work` |
-| `--timeout-ms <ms>` | Endpoint readiness timeout, default `15000` ms | `wechat-codex --timeout-ms 30000` |
+| `--timeout-ms <ms>` | How long to wait for the background daemon to start, default `15000` ms; it waits at least 20 seconds | `wechat-codex --timeout-ms 30000` |
 | `--session-start-mode <restore / new>` | Explicitly restore a session or create a new one | `wechat-pi --session-start-mode restore` |
-| `--attach-current-session` | Codex only: attach the selected channel to a live shared-daemon session in this directory without opening a visible CLI; requires Codex >= 0.162 | `wechat-codex --attach-current-session` |
-| `--codex-thread-id <id>` | Codex only: select the exact thread for attachment instead of automatic directory discovery | `wechat-codex --attach-current-session --codex-thread-id <id>` |
 | `--doctor` | Check the selected adapter and workspace without starting a CLI | `wechat-claude --doctor` |
 | Other arguments | Forward to the underlying visible CLI | `wechat-codex --model gpt-5.2 --yolo` |
 
-`--yolo` is forwarded to Codex; `--dangerously-skip-permissions` is forwarded to Claude Code. These options affect the visible CLI without overriding internal runtime settings, channel credentials, or workspace locks. Change the command prefix to `wecom-` or `telegram-` for the other channels.
+`--yolo` is forwarded to Codex; `--dangerously-skip-permissions` is forwarded to Claude Code. These options affect the visible CLI without overriding internal runtime settings or channel credentials. Change the command prefix to `wecom-` or `telegram-` for the other channels.
 
 ### 4.4 Updates
 
 | Action | Command | Notes |
 | --- | --- | --- |
 | Check for updates | `wechat-check-update` / `wecom-check-update` / `telegram-check-update` | Query the latest npm version |
-| Upgrade | `npm install -g cli-wechat-bridge@latest` | Restart active bridges, daemons, and companions after upgrading |
+| Upgrade | `npm install -g cli-wechat-bridge@latest` | Restart running daemons and visible CLI windows after upgrading |
 
 Direct launchers also accept `--doctor` to check the selected adapter and current workspace without starting the CLI.
 
@@ -585,19 +444,12 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 
 Send `/lang en` in the connected chat for English bridge messages, or `/lang zh` for Chinese. For startup environment-variable precedence, see [interface language](docs/configuration.md#界面语言) (Chinese).
 
-Claude's `AskUserQuestion` forwards questions, option descriptions, and text previews. For one question, reply with `/answer 1` or custom text. For multiple questions, use `/answer 1=Yes;2=2;3=1,2;4=1`; separate multiple selections with commas and answer all questions in one submission. When the hook times out or disconnects, the remote question is cleared and you are prompted to answer locally or use `/stop`. Restart the daemon and visible Claude window after upgrading.
+- **Answering questions:** Claude's `AskUserQuestion` forwards questions, option descriptions, and text previews. For one question, reply with `/answer 1` or custom text; for several, answer all at once, for example `/answer 1=Yes;2=2;3=1,2;4=1` (separate multiple selections with commas). When the hook times out or disconnects, the remote question is cleared; answer in the local terminal or use `/stop`.
+- **Approvals:** each `/confirm` or `/deny` resolves only the currently displayed request, then shows the next one; requests resolved in the local terminal are removed remotely too.
+- **Models and plan mode:** Claude Code's `/model` and `/plan` need the visible CLI at an idle native prompt with no pending approval, local draft, or popup; local keyboard input during the operation cancels it. OpenCode's `/plan off` falls back to `build` when there is no history; Pi's `/plan` is defined by optional extensions, not by the bridge. Model lists are bound to the session, CLI process, and operator; send `/model` again after changing the session or active CLI.
+- **Web access:** Claude Code allows ordinary web requests by default (`WebFetch(domain:*)`); set `CLI_BRIDGE_STRICT_APPROVAL=1` to turn this off. See [runtime configuration](docs/configuration.md) (Chinese).
 
-Claude Code model and plan controls require the visible CLI to be at an idle native prompt with no pending approvals, local draft, or popup. The bridge briefly opens the native selector and waits for confirmation; local keyboard input cancels the remote control operation. Model changes use the selector's `s` option (current session only), which must be supported by the CLI. `/plan off` restores the previous permission mode or `default` if no previous mode was recorded.
-
-OpenCode controls use the server's session API independently of the visible TUI's input field, menus, or panels. The bridge queries connected models, submits the model and primary agent, and reads the session back to verify the change. Input from all three channels goes through the SDK with the effective agent, model, and variant. `/plan` selects the `plan` primary agent and reports an error if it is unavailable; `/plan off` restores the previous agent, or `build` / the first non-plan primary agent when no history exists.
-
-Codex, Claude Code, and OpenCode approvals are handled in arrival order. Each `/confirm` or `/deny` resolves only the currently displayed request, then shows the next one. Requests resolved in the local terminal are removed remotely too. Subagent permissions remain attached to their parent task; approval does not switch sessions or change the reply target. Restart existing CLI windows after upgrading: older companions may still report status but require a restart for remote approvals.
-
-By default, Claude Code launch settings include `WebFetch(domain:*)` to allow ordinary web requests. Existing deny rules and sandbox restrictions still apply. Set `CLI_BRIDGE_STRICT_APPROVAL=1` to disable this automatic allowance. Network prompts that appear only in the local terminal without a `PermissionRequest` hook must be handled locally.
-
-Pi's `/model` reads scoped models from the connected native TUI extension. When no scoped models exist, it uses models available in the model registry and calls `pi.setModel()` to switch. Pi's `/plan` remains defined by optional extensions and is not a generic bridge control.
-
-Model lists are bound to the session, CLI process, and operator. Send `/model` again after changing the session or active daemon CLI.
+See the [communication architecture](docs/architecture.md) (Chinese) for how each adapter implements these controls.
 
 ### Typing indicators and reply delivery
 
@@ -609,7 +461,7 @@ Telegram tasks also keep the native typing indicator active, and long replies ar
 
 ### Daemon IPC for external integrations
 
-`wechat-daemon`, `wecom-daemon`, and `telegram-daemon` expose a local IPC interface with token authentication. External applications such as web panels, scripts, or custom bot frontends can dispatch input using the same rules as chat messages or send through the channel. Busy dispatches are rejected, pending approvals and questions pause dispatch, and input during a local Codex task is queued automatically. Replies retain their conversation target, and rejected or failed input rolls back state. See [development documentation](docs/development.md) (Chinese) for the interface. If Claude menu labels are truncated by terminal width or cannot be identified uniquely, the bridge asks you to refresh or enlarge the terminal. OpenCode reports a successful switch only after server readback confirms it.
+`wechat-daemon`, `wecom-daemon`, and `telegram-daemon` expose a local IPC interface with token authentication. External applications such as web panels, scripts, or custom bot frontends can dispatch input using the same rules as chat messages or send through the channel. Busy dispatches are rejected, pending approvals and questions pause dispatch, and input during a local Codex task is queued automatically. Replies retain their conversation target, and rejected or failed input rolls back state. See [development documentation](docs/development.md) (Chinese) for the interface.
 
 ### 5.2 Session restoration and local synchronization
 
