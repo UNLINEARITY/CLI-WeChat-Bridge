@@ -232,6 +232,7 @@ describe("isHighRiskShellCommand", () => {
     expect(isHighRiskShellCommand("Remove-Item -Recurse C:\\temp")).toBe(true);
     expect(isHighRiskShellCommand("git reset --hard HEAD~1")).toBe(true);
     expect(isHighRiskShellCommand("shutdown /s /t 0")).toBe(true);
+    expect(isHighRiskShellCommand("format C: /q")).toBe(true);
     expect(isHighRiskShellCommand("rm -rf /tmp/demo")).toBe(true);
     expect(isHighRiskShellCommand("rm /tmp/demo.txt")).toBe(true);
     expect(isHighRiskShellCommand("find /tmp/demo -type f -delete")).toBe(true);
@@ -243,6 +244,7 @@ describe("isHighRiskShellCommand", () => {
   test("allows low-risk commands", () => {
     expect(isHighRiskShellCommand("Get-ChildItem")).toBe(false);
     expect(isHighRiskShellCommand("git status")).toBe(false);
+    expect(isHighRiskShellCommand("git log --format=%H")).toBe(false);
   });
 });
 

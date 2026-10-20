@@ -46,6 +46,7 @@ import type {
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import { createOpenCodeV2CompatClient } from "./opencode-v2-compat.ts";
+import { evaluateApprovalPolicy, type ApprovalOperation } from "./approval-policy.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   OUTBOUND_ATTACHMENT_DENY_MESSAGE,
@@ -293,6 +294,36 @@ const OPENCODE_TUI_SELECT_RETRY_DELAYS_MS = [250, 750, 1_500] as const;
 const OPENCODE_MINIMUM_SUPPORTED_VERSION = "1.18.0";
 const OPENCODE_MAXIMUM_SUPPORTED_MAJOR = 3;
 const OPENCODE_VERSION_PROBE_TIMEOUT_MS = 5_000;
+
+const OPENCODE_READ_PERMISSIONS = new Set([
+  "read", "glob", "grep", "list", "codesearch", "lsp", "todoread", "todowrite", "skill", "task", "subagent", "question",
+]);
+const OPENCODE_EDIT_PERMISSIONS = new Set(["edit", "write", "patch", "apply_patch", "multiedit"]);
+
+/**
+ * Describes an OpenCode `permission.asked` event (v1 `permission`/`patterns`,
+ * or v2 `action`/`resources` after compat mapping). Built-in tools have fixed
+ * names; any other name is an MCP or plugin tool.
+ */
+export function describeOpenCodePermissionOperation(properties: Record<string, unknown>): ApprovalOperation {
+  const action = typeof properties.permission === "string" ? properties.permission : "";
+  const metadata = isRecord(properties.metadata) ? properties.metadata : {};
+  const patterns = Array.isArray(properties.patterns)
+    ? properties.patterns.filter((value): value is string => typeof value === "string")
+    : [];
+  if (action === "bash" || action === "shell") {
+    return { kind: "command", command: typeof metadata.command === "string" ? metadata.command : patterns.join("\n") };
+  }
+  if (OPENCODE_EDIT_PERMISSIONS.has(action)) {
+    const filePath = typeof metadata.filepath === "string" ? [metadata.filepath] : [];
+    return { kind: "file_write", paths: [...filePath, ...patterns] };
+  }
+  if (action === "external_directory") return { kind: "external_directory", paths: patterns };
+  if (action === "webfetch" || action === "websearch") return { kind: "network", target: patterns.join(", ") || undefined };
+  if (action === "doom_loop") return { kind: "user_decision", label: "repeated identical tool calls" };
+  if (OPENCODE_READ_PERMISSIONS.has(action)) return { kind: "read", target: action };
+  return action ? { kind: "mcp", tool: action } : { kind: "unknown", label: "permission" };
+}
 
 export function parseOpenCodeCliVersion(output: string): string | null {
   return /\bv?(\d+\.\d+\.\d+)\b/.exec(output)?.[1] ?? null;
@@ -2096,6 +2127,16 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     if (this.pendingPermissions.has(pendingPermission.permissionId) || this.settledPermissionIds.has(pendingPermission.permissionId)) return;
+    const verdict = evaluateApprovalPolicy(describeOpenCodePermissionOperation(properties), { workspace: this.options.cwd });
+    if (verdict.decision === "auto_allow") {
+      void this.autoApprovePermission(pendingPermission, verdict.reason);
+      return;
+    }
+    this.queuePendingPermission(pendingPermission);
+  }
+
+  private queuePendingPermission(pendingPermission: OpenCodePendingPermission): void {
+    if (this.pendingPermissions.has(pendingPermission.permissionId) || this.settledPermissionIds.has(pendingPermission.permissionId)) return;
     this.pendingPermissions.set(pendingPermission.permissionId, pendingPermission);
     this.syncPendingPermissions();
   }
@@ -2325,6 +2366,30 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       : null;
   }
 
+  /** Approve once; if the reply fails, hand the request to the operator. */
+  private async autoApprovePermission(pendingPermission: OpenCodePendingPermission, reason: string): Promise<void> {
+    try {
+      const result = await this.client?.permission.reply({
+        requestID: pendingPermission.permissionId,
+        sessionID: pendingPermission.sessionId,
+        directory: this.options.cwd,
+        workspace: this.activeWorkspaceId ?? undefined,
+        reply: "once",
+      });
+      if (!result || result.error !== undefined) {
+        throw new Error(result ? `SDK error: ${describeUnknownError(result.error)}` : "OpenCode client is not connected.");
+      }
+      this.rememberSettledPermission(pendingPermission.permissionId);
+      this.setStatus(
+        this.pendingPermissions.size ? "awaiting_approval" : "busy",
+        `OpenCode approval auto-approved: ${truncatePreview(reason, 180)}`,
+      );
+    } catch (err) {
+      this.logDebug(`[opencode-adapter:auto-approve] ${describeUnknownError(err)}`);
+      this.queuePendingPermission(pendingPermission);
+    }
+  }
+
   private rejectPermission(
     pendingPermission: OpenCodePendingPermission,
     denyMessage: string,
@@ -2381,9 +2446,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const toolName = this.extractPermissionToolName(properties);
+    // v1 events carry `title`; v2 events explain the request in `message`.
     const title =
       typeof properties.title === "string"
         ? properties.title
+        : typeof properties.message === "string" && properties.message.trim()
+          ? properties.message
         : typeof properties.permission === "string"
           ? `Permission request: ${properties.permission}`
           : undefined;

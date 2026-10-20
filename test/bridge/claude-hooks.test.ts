@@ -257,111 +257,45 @@ describe("getClaudeOutboundAttachmentDenyMessage", () => {
 });
 
 describe("getClaudePermissionAutoResponse", () => {
+  const context = { workspace: "/repo", env: {} };
+  const auto = (tool_name: string, tool_input: Record<string, unknown>, extra: Partial<ClaudeHookPayload> = {}) =>
+    getClaudePermissionAutoResponse({ tool_name, tool_input, ...extra }, context);
+
   test("forwards everything to WeChat when strict approval mode is enabled", () => {
-    expect(
-      getClaudePermissionAutoResponse(
-        {
-          tool_name: "Read",
-          tool_input: { file_path: "C:\\repo\\note.md" },
-        },
-        { CLI_BRIDGE_STRICT_APPROVAL: "1" },
-      ),
-    ).toBeNull();
-    expect(
-      getClaudePermissionAutoResponse(
-        {
-          tool_name: "Read",
-          tool_input: { file_path: "C:\\repo\\note.md" },
-        },
-        { CLI_BRIDGE_STRICT_APPROVAL: "" },
-      ),
-    ).toMatchObject({ action: "confirm" });
+    const payload = { tool_name: "Read", tool_input: { file_path: "/repo/note.md" } };
+    expect(getClaudePermissionAutoResponse(payload, { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "1" } })).toBeNull();
+    expect(getClaudePermissionAutoResponse(payload, { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "" } }))
+      .toMatchObject({ action: "confirm" });
   });
 
-  test("auto-approves low-risk Claude Bash searches and listings", () => {
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Bash",
-        tool_input: {
-          command:
-            'find /c/Nonlinear/ob/ -type f -name "*.md" 2>/dev/null | xargs grep -l -i -E "reinforcement|RL" 2>/dev/null | head -10',
-        },
-      }),
-    ).toMatchObject({
-      action: "confirm",
-    });
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Bash",
-        tool_input: {
-          command: "ls -la /c/Nonlinear/ob 2>/dev/null | head -30",
-        },
-      }),
-    ).toMatchObject({
-      action: "confirm",
-    });
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Bash",
-        tool_input: {
-          command:
-            "Get-ChildItem -Path C:\\Nonlinear\\ob -Recurse -File -Include *.png,*.jpg | Select-Object -First 20",
-        },
-      }),
-    ).toMatchObject({
-      action: "confirm",
-    });
+  test("auto-approves low-risk Bash searches and listings, even outside the workspace", () => {
+    expect(auto("Bash", {
+      command: 'find /c/Nonlinear/ob/ -type f -name "*.md" 2>/dev/null | xargs grep -l -i -E "reinforcement|RL" 2>/dev/null | head -10',
+    })).toMatchObject({ action: "confirm" });
+    expect(auto("Bash", { command: "ls -la /c/Nonlinear/ob 2>&1 | head -30" })).toMatchObject({ action: "confirm" });
+    expect(auto("Bash", { command: "cat ~/.ssh/config" })).toMatchObject({ action: "confirm" });
   });
 
-  test("auto-approves low-risk Claude read tools", () => {
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Read",
-        tool_input: {
-          file_path: "C:\\Nonlinear\\ob\\note.md",
-        },
-      }),
-    ).toEqual({
-      action: "confirm",
-      reason: "low-risk Read permission",
-    });
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Glob",
-        tool_input: {
-          pattern: "**/*.md",
-        },
-      }),
-    ).toMatchObject({
-      action: "confirm",
-    });
+  test("auto-approves read tools, web access, and edits inside the workspace", () => {
+    expect(auto("Read", { file_path: "/etc/hosts" })).toMatchObject({ action: "confirm" });
+    expect(auto("Glob", { pattern: "**/*.md" })).toMatchObject({ action: "confirm" });
+    expect(auto("WebFetch", { url: "https://example.com" })).toMatchObject({ action: "confirm" });
+    expect(auto("Write", { file_path: "/repo/src/note.md" })).toMatchObject({ action: "confirm" });
+    expect(auto("Edit", { file_path: "src/note.md" })).toMatchObject({ action: "confirm" });
   });
 
-  test("keeps high-risk and mutating Claude requests on the approval path", () => {
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Bash",
-        tool_input: {
-          command: "rm -rf /tmp/demo",
-        },
-      }),
-    ).toBeNull();
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Bash",
-        tool_input: {
-          command: 'find /tmp/demo -type f -delete',
-        },
-      }),
-    ).toBeNull();
-    expect(
-      getClaudePermissionAutoResponse({
-        tool_name: "Write",
-        tool_input: {
-          file_path: "C:\\tmp\\note.md",
-        },
-      }),
-    ).toMatchObject({ action: "confirm" });
+  test("keeps dangerous, outward, outside-workspace, MCP, and plan requests on the approval path", () => {
+    expect(auto("Bash", { command: "rm -rf /tmp/demo" })).toBeNull();
+    expect(auto("Bash", { command: "find /tmp/demo -type f -delete" })).toBeNull();
+    expect(auto("Bash", { command: "npm publish --access public" })).toBeNull();
+    expect(auto("Bash", { command: "echo hi > ~/.zshrc" })).toBeNull();
+    expect(auto("Bash", { command: "npm test" }, { cwd: "/elsewhere" })).toMatchObject({ action: "confirm" });
+    expect(auto("Bash", { command: "touch notes.txt" }, { cwd: "/elsewhere" })).toBeNull();
+    expect(auto("Write", { file_path: "/Users/me/.zshrc" })).toBeNull();
+    expect(auto("NotebookEdit", { notebook_path: "../other/n.ipynb" })).toBeNull();
+    expect(auto("mcp__github__create_pull_request", { title: "x" })).toBeNull();
+    expect(auto("ExitPlanMode", { plan: "do it" })).toBeNull();
+    expect(auto("AskUserQuestion", { questions: [] })).toBeNull();
   });
 });
 

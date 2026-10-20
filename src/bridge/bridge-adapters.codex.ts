@@ -3424,6 +3424,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           isRecord(params.item) && typeof params.item.id === "string"
             ? params.item.id
             : null;
+
         const finalText = extractCodexFinalTextFromItem(params.item);
         if (itemId && finalText) {
           this.getTurnFinalMessageMap(trackedTurn.turnId).set(itemId, finalText);
@@ -3581,7 +3582,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const autoResponse = getCodexApprovalAutoResponse(method, params);
+    const autoResponse = getCodexApprovalAutoResponse(method, params, { workspace: this.options.cwd });
     if (autoResponse) {
       this.sendRpcMessage({
         id: requestId,

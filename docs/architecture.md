@@ -85,7 +85,8 @@
 - **窗口**：直接启动器在当前终端运行 CLI，并向 daemon 申请一个跟随窗口的 slot；窗口关闭后 slot 释放（daemon 巡检 companion 存活，四种 CLI 行为一致）。远程打开新窗口时使用当前选中窗口所在的目录；还没有窗口时使用 daemon 的主目录。
 - **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束；它在模式判断中视同一个 codex 窗口。
 - **输出**：前缀按上表的模式决定。审批和问题跨窗口时用 `/confirm <编号>`、`/answer #<编号>` 指定。
-- **审批**：Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理，本地终端已处理的请求会同步移除。子代理的权限请求由所属父任务接收，审批不会切换当前会话或改变回复目标。
+- **审批**：Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理，本地终端已处理的请求会同步移除；`/confirm` 只处理用户已经看到的请求，没看到时先展示当前请求。子代理的权限请求由所属父任务接收，审批不会切换当前会话或改变回复目标。
+- **自动放行**：三个 adapter 把权限请求翻译成统一的操作描述，交给 `src/bridge/approval-policy.ts` 判断。危险命令、对外操作、工作区外写入、MCP 工具与需要操作者决定的请求转发确认，其余自动放行；`CLI_BRIDGE_STRICT_APPROVAL=1` 时全部转发。
 - **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`（编号实例为 `slot-session-<cli>-<n>.json`），供显式 `--session-start-mode restore` 恢复。
 - **出站**：`OutboundDispatcher`（`src/core`）串行发送文本与附件；目标会话失效时暂存到 `PendingMessageStore`，下一条入站消息到达后补发。
 
@@ -287,6 +288,7 @@ Claude CLI 执行 hook 脚本
 | `SessionStart` | 获取 session ID 和 transcript 路径 |
 | `UserPromptSubmit` | 检测本地终端输入（区分微信/本地来源） |
 | `PermissionRequest` | 权限审批（核心交互） |
+| `PreToolUse` / `PostToolUse` / `PostToolUseFailure` | AskUserQuestion 转发；工具运行后释放已在本地处理的审批 |
 | `Notification` (permission_prompt) | 自动审批失败时的回退 |
 | `Stop` | turn 完成，提取最终回复文本 |
 | `StopFailure` | turn 失败 |
@@ -297,15 +299,16 @@ Claude CLI 执行 hook 脚本
 ```
 1. Claude CLI 需要权限 → 触发 PermissionRequest hook
 2. hook 脚本 TCP 连接到 Bridge，发送审批请求
-3. Bridge 检查自动审批规则：
-   - 非 Bash 工具 → 自动放行
-   - 低风险 Bash 命令 → 自动放行
-   - 高风险操作 → 转发到微信等待用户决策
+3. Bridge 按统一规则判断：
+   - 读取、搜索、联网、工作区内的文件修改与普通命令 → 自动放行
+   - 危险或对外命令、工作区外写入、MCP 工具、ExitPlanMode → 转发到微信等待用户决策
 4. TCP socket 保持打开，等待用户回复
 5. 用户 /confirm 或 /deny → Bridge 写回决策到 socket：
    { "hookSpecificOutput": { "decision": { "behavior": "allow" } } }
 6. hook 脚本将决策输出到 stdout → Claude CLI 读取并继续/中止
 ```
+
+Claude Code 让本地权限对话框与 hook 并发竞速，先回复者生效。`PermissionRequest` 不带 `tool_use_id`，因此本地批准后由 `PostToolUse` / `PostToolUseFailure` 按工具名和参数释放对应的远程审批；本地拒绝不触发 hook，下一次 `UserPromptSubmit` 时释放剩余审批。Claude 等待 hook 最多 10 分钟，超时后回到本地对话框。
 
 bridge 生成的 Claude 启动设置默认添加 `WebFetch(domain:*)` 权限规则，让常规联网请求直接通过；已有的拒绝规则和沙箱限制仍然生效。`CLI_BRIDGE_STRICT_APPROVAL=1` 关闭这条自动放行（见[运行配置](configuration.md)）。只有本地网络弹窗、不触发 `PermissionRequest` Hook 的请求无法远程处理，需要在终端操作。
 

@@ -582,98 +582,44 @@ describe("buildCodexApprovalRequest", () => {
     });
   });
 
-  test("auto-approves only low-risk Codex approval requests", () => {
-    expect(
-      getCodexApprovalAutoResponse(
-        "item/commandExecution/requestApproval",
-        {
-          command: "rg \"TODO\" src",
-          cwd: "C:\\repo",
-          availableDecisions: ["accept", "cancel"],
-        },
-        { CLI_BRIDGE_STRICT_APPROVAL: "true" },
-      ),
-    ).toBeNull();
+  test("auto-approves Codex requests through the shared policy", () => {
+    const context = { workspace: "/repo", env: {} };
+    const command = (cmd: string, extra: Record<string, unknown> = {}) =>
+      getCodexApprovalAutoResponse("item/commandExecution/requestApproval",
+        { command: cmd, cwd: "/repo", availableDecisions: ["accept", "cancel"], ...extra }, context);
 
-    expect(
-      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
-        command: "rg \"TODO\" src",
-        cwd: "C:\\repo",
-        availableDecisions: ["accept", "cancel"],
-      })?.result,
-    ).toEqual({ decision: "accept" });
+    expect(getCodexApprovalAutoResponse("item/commandExecution/requestApproval",
+      { command: "rg \"TODO\" src", cwd: "/repo" }, { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "true" } })).toBeNull();
+    expect(command("rg \"TODO\" src")?.result).toEqual({ decision: "accept" });
+    expect(command("rm -rf build")).toBeNull();
+    expect(command("git push origin main")).toBeNull();
+    expect(command("git status", { availableDecisions: ["cancel"] })).toBeNull();
+    expect(command("npm test", { additionalPermissions: { fileSystem: { write: ["/etc/hosts"] } } })).toBeNull();
 
-    expect(
-      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
-        command: "rm -rf build",
-        cwd: "C:\\repo",
-        availableDecisions: ["accept", "cancel"],
-      }),
-    ).toBeNull();
-
-    expect(
-      getCodexApprovalAutoResponse("item/commandExecution/requestApproval", {
-        command: "git status",
-        cwd: "C:\\repo",
-        availableDecisions: ["cancel"],
-      }),
-    ).toBeNull();
+    // A patch request names no files; only a grant root inside the workspace is known to be safe.
+    expect(getCodexApprovalAutoResponse("item/fileChange/requestApproval", {}, context)).toBeNull();
+    expect(getCodexApprovalAutoResponse("item/fileChange/requestApproval", { grantRoot: "/repo/src" }, context)?.result)
+      .toEqual({ decision: "accept" });
+    expect(getCodexApprovalAutoResponse("item/fileChange/requestApproval", { grantRoot: "/Users/me" }, context)).toBeNull();
 
     expect(
       getCodexApprovalAutoResponse("item/permissions/requestApproval", {
-        permissions: {
-          network: {
-            enabled: true,
-          },
-          fileSystem: {
-            read: null,
-            write: ["C:\\repo\\generated"],
-          },
-        },
-      })?.result,
+        permissions: { network: { enabled: true }, fileSystem: { read: null, write: ["/repo/generated"] } },
+      }, context)?.result,
     ).toEqual({
-      permissions: {
-        network: {
-          enabled: true,
-        },
-        fileSystem: {
-          read: null,
-          write: ["C:\\repo\\generated"],
-        },
-      },
+      permissions: { network: { enabled: true }, fileSystem: { read: null, write: ["/repo/generated"] } },
       scope: "turn",
       strictAutoReview: true,
     });
-
-    expect(
-      getCodexApprovalAutoResponse("item/permissions/requestApproval", {
-        permissions: {
-          fileSystem: {
-            write: ["/"],
-          },
-        },
-      }),
-    ).toBeNull();
-
-    expect(
-      getCodexApprovalAutoResponse("item/permissions/requestApproval", {
-        permissions: {
-          fileSystem: {
-            entries: [
-              {
-                path: {
-                  type: "special",
-                  value: {
-                    kind: "root",
-                  },
-                },
-                access: "write",
-              },
-            ],
-          },
-        },
-      }),
-    ).toBeNull();
+    expect(getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+      permissions: { fileSystem: { write: ["/Users/me/other-project"] } },
+    }, context)).toBeNull();
+    expect(getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+      permissions: { fileSystem: { write: ["/"] } },
+    }, context)).toBeNull();
+    expect(getCodexApprovalAutoResponse("item/permissions/requestApproval", {
+      permissions: { fileSystem: { entries: [{ path: { type: "special", value: { kind: "root" } }, access: "write" }] } },
+    }, context)).toBeNull();
   });
 
   test("formats Codex request_user_input prompts for WeChat", () => {

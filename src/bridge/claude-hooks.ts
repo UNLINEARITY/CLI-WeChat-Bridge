@@ -11,7 +11,11 @@ import {
   containsOutboundAttachmentPath,
   isOutboundAttachmentWriteCommand,
 } from "./outbound-attachments.ts";
-import { isHighRiskShellCommand, isStrictApprovalModeEnabled } from "./approval-detection.ts";
+import {
+  evaluateApprovalPolicy,
+  type ApprovalOperation,
+  type ApprovalPolicyContext,
+} from "./approval-policy.ts";
 import { normalizeOutput, truncatePreview } from "./bridge-utils.ts";
 
 export type ClaudeHookEventName =
@@ -357,35 +361,39 @@ export function getClaudeOutboundAttachmentDenyMessage(
   return null;
 }
 
+export function describeClaudePermissionOperation(payload: ClaudeHookPayload): ApprovalOperation {
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
+  if (toolName === "Bash" || toolName === "PowerShell") {
+    return {
+      kind: "command",
+      command: getClaudeToolInputString(payload, "command"),
+      cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
+    };
+  }
+  if (FILE_MUTATION_TOOL_NAMES.has(toolName)) {
+    const filePath = getClaudeToolInputString(payload, "file_path") || getClaudeToolInputString(payload, "notebook_path");
+    return { kind: "file_write", paths: filePath ? [filePath] : [] };
+  }
+  if (toolName.startsWith("mcp__")) return { kind: "mcp", tool: toolName };
+  if (toolName === "WebFetch" || toolName === "WebSearch") {
+    return { kind: "network", target: getClaudeToolInputString(payload, "url") || undefined };
+  }
+  // Approving a plan is the operator's call, like answering a question.
+  if (toolName === "ExitPlanMode") return { kind: "user_decision", label: "plan approval" };
+  return { kind: "read", target: toolName };
+}
+
 export function getClaudePermissionAutoResponse(
   payload: ClaudeHookPayload,
-  env: NodeJS.ProcessEnv = process.env,
+  context: ApprovalPolicyContext,
 ): ClaudePermissionAutoResponse | null {
-  if (isStrictApprovalModeEnabled(env)) {
-    return null;
-  }
-
   const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
   if (!toolName || toolName === "AskUserQuestion") {
     return null;
   }
 
-  if (toolName !== "Bash") {
-    return {
-      action: "confirm",
-      reason: `low-risk ${toolName} permission`,
-    };
-  }
-
-  const command = getClaudeToolInputString(payload, "command").trim();
-  if (!command || isHighRiskShellCommand(command)) {
-    return null;
-  }
-
-  return {
-    action: "confirm",
-    reason: `low-risk command ${truncatePreview(command, 120)}`,
-  };
+  const verdict = evaluateApprovalPolicy(describeClaudePermissionOperation(payload), context);
+  return verdict.decision === "auto_allow" ? { action: "confirm", reason: verdict.reason } : null;
 }
 
 export function buildClaudePermissionDecisionHookOutput(

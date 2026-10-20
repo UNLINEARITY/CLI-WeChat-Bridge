@@ -1889,7 +1889,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const autoResponse = getClaudePermissionAutoResponse(payload);
+    const autoResponse = getClaudePermissionAutoResponse(payload, { workspace: this.options.cwd });
     if (autoResponse) {
       if (!this.pendingApproval && !this.state.pendingApproval && !this.state.pendingUserInput) {
         this.setStatus(

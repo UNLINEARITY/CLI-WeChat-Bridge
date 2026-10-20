@@ -79,7 +79,7 @@ describe("Claude AskUserQuestion", () => {
   test("single Yes/No, custom text and missing answers are handled without auto-approval", async () => {
     const { adapter, ask } = claude();
     const single = { ...payload, tool_input: { questions: [payload.tool_input.questions[0]] } };
-    expect(getClaudePermissionAutoResponse(single as unknown as ClaudeHookPayload, {})).toBeNull();
+    expect(getClaudePermissionAutoResponse(single as unknown as ClaudeHookPayload, { workspace: process.cwd(), env: {} })).toBeNull();
     ask("first", single);
     expect(await adapter.submitUserInput({}, "first")).toBe(false);
     expect(await adapter.submitUserInput({ q1: ["Yes", "No"] }, "first")).toBe(false);

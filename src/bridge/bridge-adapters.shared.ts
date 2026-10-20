@@ -33,7 +33,11 @@ import {
   containsOutboundAttachmentPathDeep,
   isOutboundAttachmentWriteCommand,
 } from "./outbound-attachments.ts";
-import { isHighRiskShellCommand, isStrictApprovalModeEnabled } from "./approval-detection.ts";
+import {
+  evaluateApprovalPolicy,
+  type ApprovalOperation,
+  type ApprovalPolicyContext,
+} from "./approval-policy.ts";
 import { normalizeOutput, truncatePreview } from "../core/text-utils.ts";
 import {
   getNotificationThreadId,
@@ -503,60 +507,68 @@ function containsHighRiskPermissionTarget(value: unknown): boolean {
   return paths.some(isHighRiskPermissionPath);
 }
 
+/** Paths a Codex permission profile would make writable. */
+function collectCodexWritePaths(value: unknown): string[] {
+  if (!isRecord(value) || !isRecord(value.fileSystem)) return [];
+  const paths = collectStringValues(value.fileSystem.write);
+  if (Array.isArray(value.fileSystem.entries)) {
+    for (const entry of value.fileSystem.entries) {
+      if (isRecord(entry) && entry.access === "write") collectPermissionPaths(entry.path, paths);
+    }
+  }
+  return paths;
+}
+
+export function describeCodexApprovalOperation(
+  method: CodexPendingApprovalRequest["method"],
+  params: Record<string, unknown>,
+): ApprovalOperation {
+  if (method === "item/commandExecution/requestApproval") {
+    return {
+      kind: "command",
+      command: typeof params.command === "string" ? params.command : "",
+      cwd: typeof params.cwd === "string" ? params.cwd : undefined,
+      writePaths: collectCodexWritePaths(params.additionalPermissions),
+    };
+  }
+  if (method === "item/fileChange/requestApproval") {
+    // The request names no files: Codex announces the patch only after the
+    // decision. It asks when the patch leaves its writable roots, so without
+    // a grantRoot inside the workspace the policy asks.
+    return { kind: "file_write", paths: typeof params.grantRoot === "string" ? [params.grantRoot] : [] };
+  }
+  return {
+    kind: "permissions",
+    writePaths: collectCodexWritePaths(params.permissions),
+    touchesRoot: containsHighRiskPermissionTarget(params.permissions),
+  };
+}
+
 export function getCodexApprovalAutoResponse(
   method: CodexPendingApprovalRequest["method"],
   params: Record<string, unknown>,
-  env: NodeJS.ProcessEnv = process.env,
+  context: ApprovalPolicyContext,
 ): CodexApprovalAutoResponse | null {
-  if (isStrictApprovalModeEnabled(env)) {
+  if (method === "item/commandExecution/requestApproval") {
+    if (!commandApprovalAllowsAccept(params.availableDecisions)) return null;
+    if (containsHighRiskPermissionTarget(params.additionalPermissions)) return null;
+  }
+  if (method === "item/fileChange/requestApproval" && containsHighRiskPermissionTarget(params.grantRoot)) {
     return null;
   }
 
-  if (method === "item/commandExecution/requestApproval") {
-    const command = typeof params.command === "string" ? params.command : "";
-    if (!commandApprovalAllowsAccept(params.availableDecisions)) {
-      return null;
-    }
-    if (command && isHighRiskShellCommand(command)) {
-      return null;
-    }
-    if (containsHighRiskPermissionTarget(params.additionalPermissions)) {
-      return null;
-    }
+  const verdict = evaluateApprovalPolicy(
+    describeCodexApprovalOperation(method, params),
+    context,
+  );
+  if (verdict.decision !== "auto_allow") return null;
 
-    return {
-      result: { decision: "accept" },
-      reason: command
-        ? `low-risk command ${truncatePreview(command, 120)}`
-        : "low-risk command approval",
-    };
-  }
-
-  if (method === "item/fileChange/requestApproval") {
-    if (containsHighRiskPermissionTarget(params.grantRoot)) {
-      return null;
-    }
-
-    return {
-      result: { decision: "accept" },
-      reason: "low-risk file change approval",
-    };
-  }
-
-  if (method === "item/permissions/requestApproval") {
-    if (containsHighRiskPermissionTarget(params.permissions)) {
-      return null;
-    }
-
-    return {
-      result: buildCodexPermissionsRequestApprovalResponse(params, "confirm", {
-        strictAutoReview: true,
-      }),
-      reason: "low-risk permission grant",
-    };
-  }
-
-  return null;
+  return {
+    result: method === "item/permissions/requestApproval"
+      ? buildCodexPermissionsRequestApprovalResponse(params, "confirm", { strictAutoReview: true })
+      : { decision: "accept" },
+    reason: verdict.reason,
+  };
 }
 
 function collectStringValues(value: unknown): string[] {
