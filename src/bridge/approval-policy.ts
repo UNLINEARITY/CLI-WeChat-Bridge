@@ -129,6 +129,8 @@ function expandHome(value: string): string {
 export function isPathInsideWorkspace(target: string, workspace: string, base = workspace): boolean {
   const trimmed = target.trim();
   if (!trimmed) return true;
+  // Git Bash also uses POSIX devices; Windows resolution would add a drive.
+  if (DEVICE_PATHS.has(path.posix.normalize(trimmed))) return true;
   const resolved = path.resolve(base, expandHome(trimmed));
   if (DEVICE_PATHS.has(resolved)) return true;
   const relative = path.relative(path.resolve(workspace), resolved);

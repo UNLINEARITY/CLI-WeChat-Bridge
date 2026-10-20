@@ -11,6 +11,7 @@ import path from "node:path";
 import { describe, expect, test } from "bun:test";
 
 import {
+  appendBoundedLog,
   buildWorkspaceKey,
   getWorkspaceChannelPaths,
   migrateLegacyChannelFiles,
@@ -30,6 +31,20 @@ function writeTextFile(filePath: string, content: string): void {
 function readTextFile(filePath: string): string {
   return fs.readFileSync(filePath, "utf8");
 }
+
+describe("bounded bridge log", () => {
+  test("creates the log directory before the first append", () => {
+    const root = makeTempDir();
+    try {
+      const logFile = path.join(root, "fresh", "state", "bridge.log");
+      appendBoundedLog(logFile, "first\n");
+      appendBoundedLog(logFile, "second\n");
+      expect(readTextFile(logFile)).toBe("first\nsecond\n");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("workspace channel paths", () => {
   test("normalizes a workspace path to an absolute path", () => {

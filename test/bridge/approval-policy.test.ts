@@ -11,6 +11,7 @@ import { formatApprovalMessage, formatAutoApprovalSummary } from "../../src/brid
 import { appendBeforeAttachmentBlock } from "../../src/bridge/outbound-attachments.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
 import os from "node:os";
+import path from "node:path";
 import {
   evaluateApprovalPolicy,
   getAutoApprovalOverride,
@@ -82,6 +83,24 @@ describe("approval policy", () => {
     expect(isPathInsideWorkspace("/repo-other/a", "/repo")).toBe(false);
     expect(isPathInsideWorkspace("/dev/null", "/repo")).toBe(true);
     expect(isPathInsideWorkspace("~/x", os.homedir())).toBe(true);
+  });
+
+  test("allows shell device redirections without allowing device-like files outside the workspace", () => {
+    for (const device of ["/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"]) {
+      expect(command(`echo x > ${device}`)).toBe("auto_allow");
+    }
+    for (const target of ["/dev/null.txt", "/dev/null/../outside", "/tmp/null"]) {
+      expect(command(`echo x > ${target}`)).toBe("ask");
+    }
+  });
+
+  test("checks native absolute paths against the actual workspace", () => {
+    const workspace = path.resolve("policy-workspace");
+    const verdict = (target: string) => evaluateApprovalPolicy(
+      { kind: "permissions", writePaths: [target] }, { workspace, env: {} },
+    ).decision;
+    expect(verdict(path.join(workspace, "generated"))).toBe("auto_allow");
+    expect(verdict(path.resolve(workspace, "..", "other-project", "generated"))).toBe("ask");
   });
 });
 

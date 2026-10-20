@@ -61,6 +61,7 @@ export function appendBoundedLog(filePath: string, line: string): void {
   } catch {
     // File missing or unreadable: fall through to a plain append.
   }
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, line);
 }
 export const BRIDGE_LOCK_FILE = path.join(CHANNEL_DATA_DIR, "bridge.lock.json");

@@ -2561,6 +2561,7 @@ describe("Codex panel completion recovery", () => {
   });
 
   test("auto-approves low-risk Codex permissions with strict auto review", () => {
+    const generatedPath = path.join(process.cwd(), "generated");
     const adapter = createBridgeAdapter({
       kind: "codex",
       command: "codex",
@@ -2589,7 +2590,7 @@ describe("Codex panel completion recovery", () => {
         threadId: "thread_1",
         turnId: "turn_1",
         itemId: "call_1",
-        cwd: "C:\\repo",
+        cwd: process.cwd(),
         reason: "Need generated asset access.",
         permissions: {
           network: {
@@ -2597,7 +2598,7 @@ describe("Codex panel completion recovery", () => {
           },
           fileSystem: {
             read: null,
-            write: ["C:\\repo\\generated"],
+            write: [generatedPath],
           },
         },
       },
@@ -2613,7 +2614,7 @@ describe("Codex panel completion recovery", () => {
             },
             fileSystem: {
               read: null,
-              write: ["C:\\repo\\generated"],
+              write: [generatedPath],
             },
           },
           scope: "turn",
