@@ -197,6 +197,54 @@ describe("WechatChannelDriver basics", () => {
     expect(fake.typingCalls).toHaveLength(0);
   });
 
+  test("an end that arrives during the ticket fetch leaves no indicator running", async () => {
+    const fake = new FakeWechatTransport();
+    let releaseTicket!: () => void;
+    fake.fetchTypingTicket = () => new Promise<string>((resolve) => { releaseTicket = () => resolve("ticket-1"); });
+    const driver = new WechatChannelDriver({
+      transport: fake as unknown as WeChatTransport,
+      logError: () => undefined,
+      buildInboundPrompt: (text) => text,
+      typingKeepaliveMs: 10,
+    });
+
+    const begin = driver.beginTyping("wx-1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const end = driver.endTyping("wx-1");
+    releaseTicket();
+    await Promise.all([begin, end]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Nothing was sent: the begin step saw the end before sending typing.
+    expect(fake.typingCalls.filter((call) => call.status === 1)).toEqual([]);
+  });
+
+  test("a cancel is sent only after an in-flight typing send completes", async () => {
+    const fake = new FakeWechatTransport();
+    const order: string[] = [];
+    let releaseTyping!: () => void;
+    fake.sendTyping = async (recipientId: string, ticket: string, status: 1 | 2) => {
+      if (status === 1) await new Promise<void>((resolve) => { releaseTyping = resolve; });
+      order.push(status === 1 ? "typing" : "cancel");
+      fake.typingCalls.push({ recipientId, ticket, status });
+      return true;
+    };
+    const driver = new WechatChannelDriver({
+      transport: fake as unknown as WeChatTransport,
+      logError: () => undefined,
+      buildInboundPrompt: (text) => text,
+      typingKeepaliveMs: 10,
+    });
+
+    const begin = driver.beginTyping("wx-1");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const end = driver.endTyping("wx-1");
+    releaseTyping();
+    await Promise.all([begin, end]);
+    expect(order).toEqual(["typing", "cancel"]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(order).toEqual(["typing", "cancel"]);
+  });
+
   test("endAllTyping cancels every active indicator", async () => {
     const fake = new FakeWechatTransport();
     const driver = new WechatChannelDriver({

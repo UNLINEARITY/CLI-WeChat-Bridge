@@ -32,6 +32,7 @@ import type {
   ChannelOutputKind,
 } from "../core/channel-types.ts";
 import { log, logError } from "./daemon-shared.ts";
+import type { TypingTracker } from "./typing-tracker.ts";
 import type { OutboundDispatcher } from "../core/outbound-dispatcher.ts";
 import {
   type DaemonSlot,
@@ -40,6 +41,7 @@ import {
 } from "./daemon-slot.ts";
 
 const FATAL_NOTICE_GRACE_MS = 1_000;
+const STOPPED_TYPING_STATUSES = new Set(["idle", "stopped", "error"]);
 
 function toChannelSendKind(kind: ChannelOutputKind): ChannelSendKind {
   if (kind === "mirrored_input") {
@@ -54,6 +56,7 @@ function toChannelSendKind(kind: ChannelOutputKind): ChannelSendKind {
 export type SlotEventHost = {
   channel: ChannelRuntime;
   driver: ChannelDriver;
+  typing: TypingTracker;
   operatorId: string;
   fallbackConversation: ChannelConversationRef;
   outbound: OutboundDispatcher;
@@ -145,7 +148,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }
     },
     finalReply: (next) => {
-      void host.driver.endTyping?.(host.operatorId);
+      host.typing.stop(slot, "final_reply");
       slot.lastFinalReplyAtMs = Date.now();
       host.daemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
       const autoSummary = formatAutoApprovalSummary(slot.autoApprovals);
@@ -165,6 +168,11 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
         log(`${slot.adapter} ${next.status}: ${next.message}`);
         host.daemonLog(`${slot.adapter}_${next.status}: ${next.message}`);
       }
+      // A turn can end without task events (an interrupt, a crash); an idle,
+      // stopped, or failed CLI is not typing. The live check skips a stale event.
+      if (STOPPED_TYPING_STATUSES.has(next.status) && STOPPED_TYPING_STATUSES.has(slot.runtime.getState().status)) {
+        host.typing.stop(slot, `status_${next.status}`);
+      }
     },
     notice: (next) => {
       slot.lastOutputAt = Date.now();
@@ -180,6 +188,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       host.daemonLog(`approval_auto_resolved: adapter=${slot.adapter} kind=${next.kind}`);
     },
     approvalRequired: (next) => {
+      host.typing.pause(slot);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         const liveState = slot.runtime.getState();
         if (liveState.pendingApprovals !== undefined && liveState.pendingApproval?.requestId !== next.request.requestId) return;
@@ -195,6 +204,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }));
     },
     userInputRequired: (next) => {
+      host.typing.pause(slot);
       if (next.request.requestId !== undefined && slot.runtime.getState().pendingUserInput?.requestId !== next.request.requestId) return;
       const pending = toPendingUserInput(next.request);
       slot.pendingUserInput = pending;
@@ -246,7 +256,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }
     },
     taskComplete: () => {
-      void host.driver.endTyping?.(host.operatorId);
+      host.typing.stop(slot, "task_complete");
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(() => {
         slot.pendingConfirmations = [];
         slot.autoApprovals = {};
@@ -258,7 +268,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }));
     },
     taskFailed: (next) => {
-      void host.driver.endTyping?.(host.operatorId);
+      host.typing.stop(slot, "task_failed");
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         slot.pendingConfirmations = [];
         slot.autoApprovals = {};
@@ -271,7 +281,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       }));
     },
     fatalError: (next) => {
-      void host.driver.endTyping?.(host.operatorId);
+      host.typing.stop(slot, "fatal_error");
       logError(`${slot.adapter}: ${next.message}`);
       host.daemonLog(`fatal_error: adapter=${slot.adapter} message=${next.message}`);
       slot.pendingConfirmations = [];

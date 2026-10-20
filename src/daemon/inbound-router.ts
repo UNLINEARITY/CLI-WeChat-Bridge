@@ -30,6 +30,7 @@ import {
 } from "../core/bridge-defer.ts";
 import type { InboundConversationContext } from "../core/conversation-routing.ts";
 import type { TurnDispatchResult } from "../core/turn-coordinator.ts";
+import type { TypingTracker } from "./typing-tracker.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
 import type { DaemonForwardInputResult, DaemonRequest } from "./daemon-link.ts";
@@ -53,6 +54,7 @@ import { modeAllowsCommand } from "./bridge-mode.ts";
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
 
 export type InboundRouterHost = {
+  typing: TypingTracker;
   cwd: string;
   channelId: BridgeChannelId;
   operatorId: string;
@@ -625,7 +627,7 @@ export class InboundRouter {
       },
     });
     if (dispatchResult.status === "dispatched") {
-      void this.host.driver.beginTyping?.(message.senderId);
+      this.host.typing.start(slot, message.senderId);
     }
     return dispatchResult;
   }

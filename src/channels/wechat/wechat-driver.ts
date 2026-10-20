@@ -134,6 +134,10 @@ export class WechatChannelDriver implements ChannelDriver {
   private readonly typingKeepaliveMs: number;
   private readonly typingTickets: TypingTicketCache;
   private readonly typingTimers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Recipients that should currently see "typing…". */
+  private readonly typingWanted = new Set<string>();
+  /** Per-recipient chain so a cancel can never be overtaken by an earlier typing send. */
+  private readonly typingChains = new Map<string, Promise<void>>();
 
   constructor(options: WechatChannelDriverOptions) {
     this.transport = options.transport;
@@ -246,40 +250,57 @@ export class WechatChannelDriver implements ChannelDriver {
     return this.buildInboundPromptImpl(text, attachments);
   }
 
+  private enqueueTyping(recipientId: string, step: () => Promise<void>): Promise<void> {
+    const next = (this.typingChains.get(recipientId) ?? Promise.resolve())
+      .then(step)
+      .catch((error: unknown) => this.logError(`[typing] ${error instanceof Error ? error.message : String(error)}`));
+    this.typingChains.set(recipientId, next);
+    return next;
+  }
+
+  /**
+   * Start "typing…". The ticket fetch and the first send are awaited in
+   * order with any cancel; if the indicator was ended meanwhile, nothing is
+   * left running and the queued cancel clears what was sent.
+   */
   async beginTyping(recipientId: string): Promise<void> {
-    if (this.typingTimers.has(recipientId)) {
+    if (this.typingWanted.has(recipientId)) {
       return;
     }
-    const ticket = await this.typingTickets.getFor(recipientId);
-    if (!ticket) {
-      return;
-    }
-    const sent = await this.transport.sendTyping(recipientId, ticket, 1);
-    if (!sent) {
-      return;
-    }
-    const timer = setInterval(() => {
-      void this.transport.sendTyping(recipientId, ticket, 1);
-    }, this.typingKeepaliveMs);
-    timer.unref?.();
-    this.typingTimers.set(recipientId, timer);
+    this.typingWanted.add(recipientId);
+    await this.enqueueTyping(recipientId, async () => {
+      if (!this.typingWanted.has(recipientId) || this.typingTimers.has(recipientId)) return;
+      const ticket = await this.typingTickets.getFor(recipientId);
+      if (!ticket || !this.typingWanted.has(recipientId)) return;
+      const sent = await this.transport.sendTyping(recipientId, ticket, 1);
+      if (!sent || !this.typingWanted.has(recipientId)) return;
+      const timer = setInterval(() => {
+        void this.enqueueTyping(recipientId, async () => {
+          if (this.typingWanted.has(recipientId)) await this.transport.sendTyping(recipientId, ticket, 1);
+        });
+      }, this.typingKeepaliveMs);
+      timer.unref?.();
+      this.typingTimers.set(recipientId, timer);
+    });
   }
 
   async endTyping(recipientId: string): Promise<void> {
+    this.typingWanted.delete(recipientId);
     const timer = this.typingTimers.get(recipientId);
     if (timer) {
       clearInterval(timer);
       this.typingTimers.delete(recipientId);
     }
-    const ticket = this.typingTickets.peekCached(recipientId);
-    if (!ticket) {
-      return;
-    }
-    await this.transport.sendTyping(recipientId, ticket, 2);
+    await this.enqueueTyping(recipientId, async () => {
+      // Started again before this cancel ran: leave the new indicator alone.
+      if (this.typingWanted.has(recipientId)) return;
+      const ticket = this.typingTickets.peekCached(recipientId);
+      if (ticket) await this.transport.sendTyping(recipientId, ticket, 2);
+    });
   }
 
   async endAllTyping(): Promise<void> {
-    for (const recipientId of [...this.typingTimers.keys()]) {
+    for (const recipientId of new Set([...this.typingWanted, ...this.typingTimers.keys()])) {
       await this.endTyping(recipientId);
     }
   }

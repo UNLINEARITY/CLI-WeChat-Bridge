@@ -457,7 +457,7 @@ See the [communication architecture](docs/architecture.md) (Chinese) for how eac
 
 ### Typing indicators and reply delivery
 
-Tasks dispatched from WeChat show its native typing indicator, refreshed every 5 seconds until delivery, task failure, or daemon shutdown. Typing credentials are fetched per recipient from the official WeChat configuration endpoint and refreshed automatically. If fetching fails, typing indicators are silently disabled without affecting messages.
+Tasks dispatched from WeChat show its native typing indicator, refreshed every 5 seconds until delivery, task failure, the CLI going idle, or daemon shutdown; it pauses while an approval or question waits for you and resumes once you answer. Tasks started in the local terminal show no indicator. Typing credentials are fetched per recipient from the official WeChat configuration endpoint and refreshed automatically. If fetching fails, typing indicators are silently disabled without affecting messages.
 
 Long WeChat replies are sent as a complete message rather than split at a fixed length. If the server rejects an oversized reply, the existing retry and pending-message mechanisms record the failure so it is not silently lost.
 

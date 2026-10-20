@@ -603,6 +603,59 @@ describe("daemon questions answered one at a time", () => {
   });
 });
 
+describe("daemon typing indicator", () => {
+  function spyTyping(daemon: BridgeDaemon): string[] {
+    const calls: string[] = [];
+    const typing = (daemon as any).typing;
+    for (const method of ["start", "pause", "resume", "stop"]) {
+      const original = typing[method].bind(typing);
+      typing[method] = (slot: { adapter: string }, ...rest: unknown[]) => {
+        calls.push(`${method}:${slot.adapter}`);
+        return original(slot, ...rest);
+      };
+    }
+    return calls;
+  }
+
+  test("types for remote turns, pauses for approvals, and stops when the CLI goes idle", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    const calls = spyTyping(daemon);
+    await forwardInput(daemon, { adapter: "codex", text: "task", conversationId: "conv-1" });
+    expect(calls).toEqual(["start:codex"]);
+
+    const runtime = env.runtime("codex");
+    const request = { ...pendingApproval, requestId: "r1" };
+    runtime.state.pendingApproval = request;
+    runtime.state.pendingApprovals = [request];
+    runtime.state.status = "awaiting_approval";
+    runtime.emit({ type: "approval_required", request, timestamp: new Date().toISOString() });
+    await tick(20);
+    expect(calls.at(-1)).toBe("pause:codex");
+
+    await (daemon as any).controls.confirmPendingApproval({ senderId: OPERATOR_ID }, (daemon as any).slots.get("codex"));
+    expect(calls.slice(-2)).toEqual(["resume:codex", "start:codex"]);
+
+    // An interrupted turn may end with only an idle status.
+    runtime.state.status = "idle";
+    runtime.emit({ type: "status", status: "idle", timestamp: new Date().toISOString() });
+    await tick(20);
+    expect(calls.at(-1)).toBe("stop:codex");
+  });
+
+  test("ignores a stale idle status once the CLI is busy again", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    const calls = spyTyping(daemon);
+    await forwardInput(daemon, { adapter: "codex", text: "task", conversationId: "conv-1" });
+    const runtime = env.runtime("codex");
+    runtime.state.status = "busy";
+    runtime.emit({ type: "status", status: "idle", timestamp: new Date().toISOString() });
+    await tick(20);
+    expect(calls).toEqual(["start:codex"]);
+  });
+});
+
 describe("daemon approval decisions", () => {
   const send = (daemon: BridgeDaemon, text: string) => (daemon as unknown as {
     handleInboundMessage(message: BridgeInboundMessage): Promise<void>;

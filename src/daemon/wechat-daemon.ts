@@ -6,6 +6,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { fileSlotSessionStore, type SlotSessionStore } from "./slot-session-store.ts";
+import { TypingTracker } from "./typing-tracker.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
 import { t } from "../i18n/index.ts";
@@ -175,6 +176,7 @@ export class BridgeDaemon {
   private backlogNoticeSent = false;
   private readonly outbound: OutboundDispatcher;
   private readonly slotEventHost: SlotEventHost;
+  private readonly typing: TypingTracker;
   private readonly controls: DaemonControlCommands;
   private readonly slotManager: SlotManager;
   private readonly inbound: InboundRouter;
@@ -224,6 +226,7 @@ export class BridgeDaemon {
       logError,
     });
     this.channelDriver = this.channel.driver;
+    this.typing = new TypingTracker(this.channelDriver, (message) => this.daemonLog(message));
     this.fallbackConversation = this.channelDriver.defaultConversation()
       ?? this.channelDriver.directConversation(this.authorizedUserId);
     this.outbound = new OutboundDispatcher({
@@ -261,6 +264,7 @@ export class BridgeDaemon {
     this.slotEventHost = {
       channel: this.channel,
       driver: this.channelDriver,
+      typing: this.typing,
       operatorId: this.authorizedUserId,
       fallbackConversation: this.fallbackConversation,
       outbound: this.outbound,
@@ -297,6 +301,7 @@ export class BridgeDaemon {
     });
     this.controls = new DaemonControlCommands({
       driver: this.channelDriver,
+      typing: this.typing,
       localeSettingsFile: this.deps.localeSettingsFile,
       slotManager: this.slotManager,
       queueMessage: (senderId, text, context, targetOverride) =>
@@ -311,6 +316,7 @@ export class BridgeDaemon {
       channelId: this.channelId,
       operatorId: this.authorizedUserId,
       driver: this.channelDriver,
+      typing: this.typing,
       fallbackConversation: this.fallbackConversation,
       inboundConversationContext: this.inboundConversationContext,
       slotManager: this.slotManager,

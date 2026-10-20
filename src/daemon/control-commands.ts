@@ -31,6 +31,7 @@ import {
 import type { BridgeInboundMessage } from "../core/channel-types.ts";
 import { handleAdapterControl } from "../bridge/adapter-control.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
+import type { TypingTracker } from "./typing-tracker.ts";
 import type { ChannelConversationRef } from "../core/channel-types.ts";
 import type { DaemonAdapterKind, DaemonStatus } from "./daemon-link.ts";
 import { DAEMON_ADAPTERS } from "./daemon-shared.ts";
@@ -50,6 +51,7 @@ import {
 } from "./daemon-slot.ts";
 
 export type ControlCommandHost = {
+  typing: TypingTracker;
   driver: ChannelDriver;
   localeSettingsFile?: string;
   slotManager: SlotManager;
@@ -434,6 +436,9 @@ export class DaemonControlCommands {
     const adapterState = slot.runtime.getState();
     slot.pendingConfirmations = (adapterState.pendingApprovals ?? (adapterState.pendingApproval ? [adapterState.pendingApproval] : []))
       .map((request) => toPendingApproval({ type: "approval_required", request, timestamp: nowIso() }));
+    // The CLI works again unless the turn was stopped.
+    if (action === "abort") this.host.typing.stop(slot, "approval_abort");
+    else this.host.typing.resume(slot);
     this.host.daemonLog(
       `approval_resolved: adapter=${slot.adapter} decision=${action} reason=${reason ? (nativeReason ? "native" : "deferred") : "none"}`
         + ` command=${truncatePreview(request.commandPreview)}`,
@@ -536,6 +541,7 @@ export class DaemonControlCommands {
     }
 
     if (slot.pendingUserInput?.requestId === pending.requestId) slot.pendingUserInput = null;
+    this.host.typing.resume(slot);
     this.host.daemonLog(
       `user_input_answered: adapter=${slot.adapter} preview=${parsed.preview}`,
     );
