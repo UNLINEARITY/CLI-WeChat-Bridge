@@ -57,7 +57,6 @@ import {
   isOutboundAttachmentWriteCommand,
 } from "./outbound-attachments.ts";
 import {
-  buildOneTimeCode,
   normalizeOutput,
   nowIso,
   truncatePreview,
@@ -253,7 +252,6 @@ type OpenCodePendingPermission = {
   origin?: BridgeTurnOrigin;
   sessionId: string;
   permissionId: string;
-  code: string;
   createdAt: string;
   request: ApprovalRequest;
 };
@@ -928,14 +926,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     } finally {
       this.resolvingPermissions.delete(pending.permissionId);
     }
-  }
-
-  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    let count = 0;
-    for (const id of Array.from(this.pendingPermissions.keys())) {
-      if (await this.resolveApproval(action, id)) count++;
-    }
-    return count;
   }
 
   async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
@@ -2438,7 +2428,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private toPendingApproval(pendingPermission: OpenCodePendingPermission): PendingApproval {
     return {
       ...pendingPermission.request,
-      code: pendingPermission.code,
       createdAt: pendingPermission.createdAt,
     };
   }
@@ -2476,7 +2465,6 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       origin: this.state.activeTurnOrigin,
       sessionId,
       permissionId,
-      code: buildOneTimeCode(),
       createdAt: nowIso(),
       request: {
         source: "cli",

@@ -37,7 +37,6 @@ export const messages: Record<string, string> = {
   "adapter.claude.notReady": "Claude is not running yet.",
   "adapter.claude.switching": "Claude is already switching sessions.",
   "adapter.claude.switchBusy": "Claude is still working. Wait for the current reply or use /stop.",
-  "adapter.claude.approvalLocal": "Remote approval is not safely available for this Claude prompt. Approve it in the local Claude terminal.",
   "adapter.codex.notRunning": "codex adapter is not running.",
   "adapter.codex.panelNotRunning": "codex panel is not running.",
   "adapter.codex.busy": "codex is still working. Wait for the current reply or use /stop.",
@@ -107,7 +106,6 @@ export const messages: Record<string, string> = {
   "daemon.switchResult.reused": "Reused the existing visible CLI.",
 
   // === Approval ===
-  "approval.prompt": "{adapter} permission request.\n{summary}\n\nReply /confirm or /deny.",
   "approval.resolved.confirm": "Approval confirmed. Continuing...",
   "approval.resolved.always": "Allowed. Similar requests will not ask again in this session.",
   "approval.resolved.deny": "Approval denied.",
@@ -396,7 +394,6 @@ export const messages: Record<string, string> = {
   "status.label.last_activity_at": "last_activity_at",
   "status.label.last_input_at": "last_input_at",
   "status.label.last_output_at": "last_output_at",
-  "status.label.pending_confirmation": "pending_confirmation",
   "status.label.pending_user_input": "pending_user_input",
   "status.label.active": "active",
   "status.label.started_at": "started_at",

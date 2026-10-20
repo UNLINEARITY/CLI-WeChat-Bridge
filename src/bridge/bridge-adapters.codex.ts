@@ -720,16 +720,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
   }
 
-  override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    if (!this.pendingApprovalRequests.length) return await super.resolveAllApprovals(action);
-    let count = 0;
-    const ids = this.pendingApprovalRequests.map((request) => this.rpcRequestKey(request.requestId));
-    for (const id of ids) {
-      if (await this.resolveApproval(action, id)) count++;
-    }
-    return count;
-  }
-
   override async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
     if (!this.pendingUserInputRequest) {
       return false;

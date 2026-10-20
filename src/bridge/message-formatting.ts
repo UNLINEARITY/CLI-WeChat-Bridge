@@ -24,7 +24,6 @@ export function formatStatusReport(
   bridgeState: BridgeState,
   adapterState: BridgeAdapterState,
 ): string {
-  const pending = bridgeState.pendingConfirmation;
   const pendingUserInput = bridgeState.pendingUserInput;
   const persistedSharedSessionId =
     bridgeState.sharedSessionId ?? bridgeState.sharedThreadId;
@@ -64,7 +63,6 @@ export function formatStatusReport(
     `${t("status.label.last_activity_at")}: ${bridgeState.lastActivityAt ?? t("status.none")}`,
     `${t("status.label.last_input_at")}: ${adapterState.lastInputAt ?? t("status.none")}`,
     `${t("status.label.last_output_at")}: ${adapterState.lastOutputAt ?? t("status.none")}`,
-    `${t("status.label.pending_confirmation")}: ${pending ? `${pending.source}:${pending.code}` : t("status.none")}`,
     `${t("status.label.pending_user_input")}: ${pendingUserInput ? t("status.questions", { count: pendingUserInput.questions.length }) : t("status.none")}`,
   ].join("\n");
 }

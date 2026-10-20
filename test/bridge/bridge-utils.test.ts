@@ -703,7 +703,6 @@ describe("formatStatusReport", () => {
       ignoredBacklogCount: 0,
       sharedSessionId: "thread_persisted",
       sharedThreadId: "thread_persisted",
-      pendingConfirmation: null,
       lastActivityAt: "2026-03-23T12:00:00.000Z",
     };
     const adapterState: BridgeAdapterState = {

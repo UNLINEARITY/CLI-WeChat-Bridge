@@ -37,7 +37,6 @@ export const messages: Record<string, string> = {
   "adapter.claude.notReady": "Claude 尚未启动。",
   "adapter.claude.switching": "Claude 正在切换会话。",
   "adapter.claude.switchBusy": "Claude 仍在运行，请等待当前回复或使用 /stop。",
-  "adapter.claude.approvalLocal": "当前 Claude 提示无法通过远程审批，请在本地 Claude 终端中批准。",
   "adapter.codex.notRunning": "Codex 适配器未运行。",
   "adapter.codex.panelNotRunning": "Codex 本地面板未运行。",
   "adapter.codex.busy": "Codex 仍在运行，请等待当前回复或使用 /stop。",
@@ -107,7 +106,6 @@ export const messages: Record<string, string> = {
   "daemon.switchResult.reused": "已复用现有的可见 CLI。",
 
   // === 审批 ===
-  "approval.prompt": "{adapter} 权限请求。\n{summary}\n\n回复 /confirm 或 /deny。",
   "approval.resolved.confirm": "已确认审批，继续执行...",
   "approval.resolved.always": "已允许，本会话内同类操作不再询问。",
   "approval.resolved.deny": "已拒绝审批。",
@@ -396,7 +394,6 @@ export const messages: Record<string, string> = {
   "status.label.last_activity_at": "最近活动时间",
   "status.label.last_input_at": "最近输入时间",
   "status.label.last_output_at": "最近输出时间",
-  "status.label.pending_confirmation": "待审批",
   "status.label.pending_user_input": "待回答",
   "status.label.active": "当前 CLI",
   "status.label.started_at": "启动时间",

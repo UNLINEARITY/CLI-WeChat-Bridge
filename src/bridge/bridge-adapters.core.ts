@@ -35,7 +35,6 @@ import type {
   BridgeLifecycleMode,
   BridgeResumeSessionCandidate,
 } from "./bridge-types.ts";
-import { detectCliApproval } from "./approval-detection.ts";
 import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import * as shared from "./bridge-adapters.shared.ts";
 import { LOCAL_CLIENT_PROTOCOL_VERSION } from "../runtime/runtime-types.ts";
@@ -306,11 +305,6 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       ...(options.reason && this.state.supportsApprovalDecisions ? { reason: options.reason } : {}),
     });
     return Boolean(result);
-  }
-
-  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    const ok = await this.resolveApproval(action);
-    return ok ? 1 : 0;
   }
 
   async submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean> {
@@ -1050,11 +1044,6 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     return true;
   }
 
-  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    const ok = await this.resolveApproval(action);
-    return ok ? 1 : 0;
-  }
-
   async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
     return false;
   }
@@ -1189,21 +1178,6 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     this.state.lastOutputAt = nowIso();
     if (!this.hasAcceptedInput) {
       return;
-    }
-
-    if (!this.pendingApproval) {
-      const approval = detectCliApproval(text);
-      if (approval) {
-        this.pendingApproval = approval;
-        this.state.pendingApproval = approval;
-        this.setStatus("awaiting_approval", "CLI approval is required.");
-        this.emit({
-          type: "approval_required",
-          request: approval,
-          timestamp: nowIso(),
-        });
-        return;
-      }
     }
 
     this.emit({

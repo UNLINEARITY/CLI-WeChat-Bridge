@@ -369,7 +369,6 @@ describe("approval queues", () => {
   test("Pi has no remote tool approval queue", async () => {
     const adapter = createBridgeAdapter({ kind: "pi", command: "pi", cwd: process.cwd(), renderMode: "companion" });
     expect(await adapter.resolveApproval("confirm", "missing")).toBe(false);
-    expect(await adapter.resolveAllApprovals("deny")).toBe(0);
   });
 });
 

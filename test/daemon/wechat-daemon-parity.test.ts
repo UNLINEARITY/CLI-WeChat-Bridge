@@ -117,10 +117,6 @@ class FakeRuntime implements BridgeAdapter {
     return true;
   }
 
-  async resolveAllApprovals(): Promise<number> {
-    return 0;
-  }
-
   async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
     this.answers.push(answers);
     this.state = { ...this.state, pendingUserInput: null, status: "busy" };

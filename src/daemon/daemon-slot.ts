@@ -17,7 +17,7 @@ import type {
   PendingUserInputRequest,
   UserInputRequest,
 } from "../bridge/bridge-types.ts";
-import { buildOneTimeCode, nowIso, OutputBatcher } from "../bridge/bridge-utils.ts";
+import { nowIso, OutputBatcher } from "../bridge/bridge-utils.ts";
 import { ResumeSessionCoordinator } from "../bridge/bridge-session-resume.ts";
 import type { BridgeInboundMessage } from "../core/channel-types.ts";
 import { TurnCoordinator } from "../core/turn-coordinator.ts";
@@ -77,13 +77,12 @@ export type DeferredDaemonInput = {
 
 export function toPendingApproval(request: BridgeEvent & { type: "approval_required" }): PendingApproval {
   const rawRequest = request.request;
-  if (typeof (rawRequest as PendingApproval).code === "string") {
+  if (typeof (rawRequest as PendingApproval).createdAt === "string") {
     return rawRequest as PendingApproval;
   }
 
   return {
     ...rawRequest,
-    code: buildOneTimeCode(),
     createdAt: nowIso(),
   };
 }

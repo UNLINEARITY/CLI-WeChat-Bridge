@@ -167,7 +167,7 @@ describe("auto-approval switch and summary", () => {
   });
 
   test("approval prompts say how many requests wait behind the shown one", () => {
-    const pending = { source: "cli" as const, summary: "s", commandPreview: "git push", code: "c", createdAt: "now" };
+    const pending = { source: "cli" as const, summary: "s", commandPreview: "git push", createdAt: "now" };
     const state = { kind: "codex" as const, status: "awaiting_approval" as const, cwd: "/repo", command: "codex",
       pendingApprovals: [pending, pending, pending] };
     expect(formatApprovalMessage(pending, state)).toContain("2 more approval(s) waiting.");

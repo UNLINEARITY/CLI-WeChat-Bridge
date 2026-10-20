@@ -1146,7 +1146,7 @@ describe("OpenCode session.idle handling", () => {
   test("clears pending permission after session idle", async () => {
     const { events, internal } = createBusyAdapter();
     internal.state.status = "awaiting_approval";
-    internal.pendingPermission = { code: "TESTCODE" };
+    internal.pendingPermission = { permissionId: "perm_test" };
 
     internal.handleSseEvent({
       type: "session.idle",
@@ -1447,7 +1447,7 @@ describe("OpenCode permission.asked handling", () => {
     return { adapter, events, internal };
   }
 
-  test("emits approval_required with one-time code", () => {
+  test("emits approval_required for a permission request", () => {
     const { events, internal } = createPermissionAdapter();
 
     // Real SDK: EventPermissionAsked = { type: "permission.asked", properties: Permission }
@@ -1470,7 +1470,6 @@ describe("OpenCode permission.asked handling", () => {
     expect(internal.pendingPermission).not.toBeNull();
     expect(internal.pendingPermission?.sessionId).toBe("session_perm_1");
     expect(internal.pendingPermission?.permissionId).toBe("perm_123");
-    expect(internal.pendingPermission?.code).toMatch(/^[A-Z2-9]+$/);
     expect(internal.pendingPermission?.request).toMatchObject({
       source: "cli",
       toolName: "bash",

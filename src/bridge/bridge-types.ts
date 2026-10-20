@@ -64,7 +64,6 @@ export type ApprovalRequest = {
 };
 
 export type PendingApproval = ApprovalRequest & {
-  code: string;
   createdAt: string;
 };
 
@@ -125,7 +124,6 @@ export type BridgeState = {
   sharedThreadId?: string;
   resumeConversationId?: string;
   transcriptPath?: string;
-  pendingConfirmation?: PendingApproval | null;
   pendingUserInput?: PendingUserInputRequest | null;
   lastActivityAt?: string;
   channelId?: "wechat" | "wecom" | "telegram" | "local";
@@ -275,7 +273,6 @@ export interface BridgeAdapter {
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: ApprovalDecision, requestId?: string, options?: ApprovalResolveOptions): Promise<boolean>;
-  resolveAllApprovals(action: "confirm" | "deny"): Promise<number>;
   submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean>;
   dispose(): Promise<void>;
   getState(): BridgeAdapterState;

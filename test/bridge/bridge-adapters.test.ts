@@ -1123,9 +1123,9 @@ describe("Claude CLI compatibility", () => {
     expect(adapter.pendingApproval).toMatchObject({
       summary: "Claude permission is required for Bash.",
       commandPreview: "Bash: rm -rf build",
-      confirmInput: "y\r",
-      denyInput: "n\r",
     });
+    // Approvals are answered through the hook only, never as terminal keystrokes.
+    expect(adapter.pendingApproval.confirmInput).toBeUndefined();
 
     adapter.flushPendingClaudeHookApprovals();
   });

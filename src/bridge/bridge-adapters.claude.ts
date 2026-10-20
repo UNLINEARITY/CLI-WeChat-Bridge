@@ -37,7 +37,6 @@ import {
 } from "./claude-hooks.ts";
 import type {
   ApprovalDecision,
-  ApprovalRequest,
   ApprovalResolveOptions,
   BridgeNoticeLevel,
   BridgeModelOption,
@@ -47,7 +46,6 @@ import type {
   BridgeTurnOrigin,
   UserInputRequest,
 } from "./bridge-types.ts";
-import { detectCliApproval } from "./approval-detection.ts";
 import { normalizeOutput, nowIso, truncatePreview } from "../core/text-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import * as shared from "./bridge-adapters.shared.ts";
@@ -477,9 +475,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   private runtimeSessionId: string | null;
   private resumeConversationId: string | null;
   private transcriptPath: string | null;
-  private pendingCliApprovalHints:
-    | Pick<ApprovalRequest, "confirmInput" | "denyInput">
-    | null = null;
   private pendingInjectedInputs: PendingInjectedClaudePrompt[] = [];
   private localTerminalInputListener: ((chunk: string | Buffer) => void) | null = null;
   private resizeListener: (() => void) | null = null;
@@ -639,7 +634,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.currentPreview = truncatePreview(text);
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "wechat";
-    this.pendingCliApprovalHints = null;
     this.clearRemoteWorkingNotice(true);
     this.setStatus("busy");
     this.writeToPty(this.buildRemoteInputPayload(text));
@@ -779,7 +773,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     if (this.pendingApproval) {
       // The flush above answered the pending hook approval with an empty
@@ -805,7 +798,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (this.terminalControl.active) throw new Error(t("adapter.claude.sessionControlActive"));
     this.rejectPendingResume(new Error("Claude was reset during session switching."));
     this.clearRemoteWorkingNotice(true);
-    this.pendingCliApprovalHints = null;
     this.runtimeSessionId = null;
     this.resumeConversationId = null;
     this.transcriptPath = null;
@@ -835,29 +827,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       }
       return handled;
     }
-    if (!this.pendingApproval || (requestId !== undefined && requestId !== this.pendingApproval.requestId)) return false;
-    // Hook requests never fall through to keystrokes after their socket expires.
-    if (this.pendingApproval.requestId || (action !== "confirm" && action !== "deny")) return false;
-    const input = action === "confirm" ? this.pendingApproval.confirmInput : this.pendingApproval.denyInput;
-    if (!input) {
-      throw new Error(t("adapter.claude.approvalLocal"));
-    }
-    this.writeToPty(input);
-    this.pendingCliApprovalHints = null;
-    this.pendingApproval = null;
-    this.state.pendingApproval = null;
-    this.state.pendingApprovalOrigin = undefined;
-    this.setStatus("busy");
-    return true;
-  }
-
-  override async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    if (!this.pendingHookApprovals.size) return await this.resolveApproval(action) ? 1 : 0;
-    let count = 0;
-    for (const id of Array.from(this.pendingHookApprovals.keys())) {
-      if (await this.resolveApproval(action, id)) count++;
-    }
-    return count;
+    // Claude approvals arrive only through the PermissionRequest hook; one
+    // whose hook expired is answered in the local terminal.
+    return false;
   }
 
   override async dispose(): Promise<void> {
@@ -867,7 +839,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
     this.rejectInteractiveReadiness(new Error("Claude is shutting down."));
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     await super.dispose();
     await this.stopHookServer();
@@ -942,28 +913,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    const approval = detectCliApproval(text);
-    if (approval) {
-      this.clearRemoteWorkingNotice();
-      if (this.pendingApproval) {
-        this.pendingApproval = {
-          ...this.pendingApproval,
-          confirmInput: this.pendingApproval.confirmInput ?? approval.confirmInput,
-          denyInput: this.pendingApproval.denyInput ?? approval.denyInput,
-        };
-        this.state.pendingApproval = this.pendingApproval;
-      } else {
-        this.pendingCliApprovalHints = {
-          confirmInput: approval.confirmInput,
-          denyInput: approval.denyInput,
-        };
-      }
-      return;
-    }
-
-    if (!this.hasAcceptedInput) {
-      return;
-    }
   }
 
   private maybeAutoConfirmWorkspaceTrustPrompt(text: string): boolean {
@@ -988,7 +937,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.detachLocalTerminal();
     this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
-    this.pendingCliApprovalHints = null;
     this.rejectPendingResume(
       new Error("Claude exited before the requested session switch completed."),
     );
@@ -1494,7 +1442,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearCompletionTimer();
     this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -1542,7 +1489,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.clearCompletionTimer();
     this.clearRemoteWorkingNotice(true);
     this.clearRemoteSubmitRetry();
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -1820,7 +1766,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     this.currentPreview = truncatePreview(prompt);
     this.state.lastInputAt = nowIso();
     this.state.activeTurnOrigin = "local";
-    this.pendingCliApprovalHints = null;
     this.clearRemoteWorkingNotice(true);
     this.setStatus("busy");
     this.emit({
@@ -1838,7 +1783,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     this.recoveringInvalidResume = true;
     this.clearRemoteWorkingNotice(true);
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;
@@ -1916,8 +1860,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     const request = {
       ...buildClaudePermissionApprovalRequest(payload),
       requestId,
-      confirmInput: this.pendingCliApprovalHints?.confirmInput,
-      denyInput: this.pendingCliApprovalHints?.denyInput,
     };
     this.pendingHookApprovals.set(requestId, {
       requestId,
@@ -1927,7 +1869,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       permissionSuggestions: payload.permission_suggestions,
       origin: this.state.activeTurnOrigin,
     });
-    this.pendingCliApprovalHints = null;
     this.syncPendingHookApprovals();
   }
 
@@ -2017,7 +1958,6 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
     this.clearRemoteSubmitRetry();
     this.clearRemoteWorkingNotice(true);
-    this.pendingCliApprovalHints = null;
     this.flushPendingClaudeHookApprovals();
     this.pendingApproval = null;
     this.state.pendingApproval = null;

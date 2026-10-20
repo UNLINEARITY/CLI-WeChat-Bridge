@@ -217,11 +217,6 @@ class FakeBridgeRuntime implements BridgeAdapter {
     return true;
   }
 
-  async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
-    this.approvals.push(action);
-    return 1;
-  }
-
   readonly autoApprovalUpdates: boolean[] = [];
 
   async setAutoApproval(enabled: boolean): Promise<boolean> {
@@ -383,7 +378,6 @@ const pendingApproval: PendingApproval = {
   source: "cli",
   summary: "Run the deploy script?",
   commandPreview: "npm run deploy",
-  code: "APPROVE-1",
   createdAt: "2026-06-01T00:00:00.000Z",
 };
 
