@@ -85,15 +85,12 @@ describe("daemon-attach rpc params", () => {
     ).toEqual({ threadId: "t1", excludeTurns: true });
   });
 
-  test("owned resume keeps the full override set", () => {
+  test("owned resume sends only the workspace, never approval or sandbox overrides", () => {
     expect(
       buildCodexThreadResumeParams({ threadId: "t1", cwd, attachDaemon: false }),
     ).toEqual({
       threadId: "t1",
       cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
       excludeTurns: true,
     });
   });
@@ -104,14 +101,12 @@ describe("daemon-attach rpc params", () => {
     ).toEqual({ threadId: "t1", input: [{ type: "text", text: "hi" }] });
   });
 
-  test("owned turn keeps cwd and approval routing", () => {
+  test("owned turn sends only the workspace, inheriting approval and sandbox settings", () => {
     expect(
       buildCodexTurnStartParams({ threadId: "t1", text: "hi", cwd, attachDaemon: false }),
     ).toEqual({
       threadId: "t1",
       cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
       input: [{ type: "text", text: "hi" }],
     });
   });

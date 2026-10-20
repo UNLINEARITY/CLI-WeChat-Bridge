@@ -126,7 +126,7 @@ Headless 和 Panel 模式（占绝大多数使用场景）完全通过 WebSocket
 | app-server 归属 | Bridge 拥有子进程与 token | Codex 共享 daemon 拥有 |
 | 可见客户端 | Bridge 以 `--remote` 拉起并托管 | 用户的 TUI，Bridge 不接管 |
 | 线程获取 | `thread/start` / 以 writer 身份 resume | `thread/list`（cwd 过滤 + `status != notLoaded`）发现后 `thread/resume` **rejoin** 活线程 |
-| 设置策略 | `turn/start` 携带 approvalPolicy/sandbox 覆盖 | 不携带任何覆盖，完整继承会话自身设置（避免改写共享线程配置） |
+| 设置策略 | 只携带 cwd，不带 approvalPolicy / approvalsReviewer / sandbox：新线程取用户 Codex 配置的默认值，resume 与 turn 沿用线程自身设置 | 不携带任何覆盖（连 cwd 也不带），完整继承会话自身设置 |
 | 生命周期 | Bridge 关闭 app-server 与可见客户端 | Bridge 仅断开连接；daemon、TUI 与线程不受影响 |
 
 rejoin 语义：对运行中的线程调用 `thread/resume` 会返回历史并原子订阅后续事件，不夺取原客户端持有的 rollout writer 锁。因此微信消息注入同一线程后会实时出现在用户的 TUI 中；审批与 `request_user_input` 仍按连接路由，由发起 turn 的连接处理。daemon 意外断连时 Bridge 自动重连并重新 rejoin。

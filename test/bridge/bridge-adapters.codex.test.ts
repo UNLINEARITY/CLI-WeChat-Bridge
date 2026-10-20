@@ -107,9 +107,6 @@ describe("Codex visible client preparation", () => {
         method: "thread/start",
         params: {
           cwd: process.cwd(),
-          approvalPolicy: "on-request",
-          approvalsReviewer: "user",
-          sandbox: "workspace-write",
           serviceName: "wechat-bridge",
         },
       },

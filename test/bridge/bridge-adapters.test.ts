@@ -2285,16 +2285,16 @@ describe("Codex panel completion recovery", () => {
     ]);
     expect(requests[0]!.params).toMatchObject({
       threadId: "thread_local",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
       excludeTurns: true,
     });
     expect(requests[1]!.params).toMatchObject({
       threadId: "thread_local",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
     });
+    // The thread keeps the user's own Codex approval and sandbox settings.
+    for (const request of requests) {
+      expect(request.params).not.toHaveProperty("approvalPolicy");
+      expect(request.params).not.toHaveProperty("sandbox");
+    }
     expect(adapter.subscribedThreadIds.has("thread_local")).toBe(true);
     expect(adapter.activeTurn).toEqual({
       threadId: "thread_local",
@@ -2848,9 +2848,6 @@ describe("Codex panel completion recovery", () => {
       method: "thread/start",
       params: {
         cwd: process.cwd(),
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-        sandbox: "workspace-write",
         serviceName: "wechat-bridge",
       },
     });

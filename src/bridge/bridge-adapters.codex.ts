@@ -160,10 +160,11 @@ export function selectCodexDaemonAttachCandidates(
 }
 
 /**
- * Resume params for the bridge's app-server client. In daemon-attach mode the
- * thread already has an owner with its own settings; sending cwd/approval/
- * sandbox overrides would rewrite the shared thread's settings
- * (`thread/settings/updated`), so attach mode resumes without overrides.
+ * Resume params for the bridge's app-server client. The bridge never sends
+ * approval or sandbox overrides: the thread keeps the user's own Codex
+ * settings, and an override would also rewrite them for the visible client
+ * (`thread/settings/updated`). In daemon-attach mode the thread already has
+ * an owner, so not even the cwd is sent.
  */
 export function buildCodexThreadResumeParams(params: {
   threadId: string;
@@ -176,14 +177,11 @@ export function buildCodexThreadResumeParams(params: {
   return {
     threadId: params.threadId,
     cwd: params.cwd,
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
-    sandbox: "workspace-write",
     excludeTurns: true,
   };
 }
 
-/** Turn params; daemon-attach mode inherits the thread's existing settings. */
+/** Turn params; every turn inherits the thread's own approval and sandbox settings. */
 export function buildCodexTurnStartParams(params: {
   threadId: string;
   text: string;
@@ -197,8 +195,6 @@ export function buildCodexTurnStartParams(params: {
   return {
     threadId: params.threadId,
     cwd: params.cwd,
-    approvalPolicy: "on-request",
-    approvalsReviewer: "user",
     input,
   };
 }
@@ -2211,11 +2207,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return this.sharedThreadId;
     }
 
+    // A new thread takes the approval and sandbox defaults from the user's Codex config.
     const response = await this.sendRpcRequest("thread/start", {
       cwd: this.options.cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
       serviceName: "wechat-bridge",
     });
 
@@ -2421,9 +2415,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.setStatus("starting", `Codex resume requesting thread ${targetThreadId.slice(0, 12)}.`);
       const resumeResponse = await this.sendRpcRequest("thread/resume", {
         threadId: targetThreadId,
-        approvalPolicy: "on-request",
-        approvalsReviewer: "user",
-        sandbox: "workspace-write",
         excludeTurns: true,
       });
       targetSubscribed = true;
@@ -2515,9 +2506,6 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const response = await this.sendRpcRequest("thread/resume", {
       threadId: trimmedThreadId,
       cwd: this.options.cwd,
-      approvalPolicy: "on-request",
-      approvalsReviewer: "user",
-      sandbox: "workspace-write",
       excludeTurns: true,
     });
 

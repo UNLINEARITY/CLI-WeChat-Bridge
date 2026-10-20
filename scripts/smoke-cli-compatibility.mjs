@@ -227,7 +227,7 @@ async function smokePi(tempDir) {
 
 export function assertCodexSchemaCapabilities(schemaDir) {
   const contracts = {
-    "v2/ThreadStartParams.json": ["cwd", "approvalPolicy", "approvalsReviewer", "sandbox"],
+    "v2/ThreadStartParams.json": ["cwd", "serviceName"],
     "v2/ThreadResumeParams.json": ["threadId"],
     "v2/TurnStartParams.json": ["threadId", "input"],
     "v2/TurnCompletedNotification.json": ["threadId", "turn"],

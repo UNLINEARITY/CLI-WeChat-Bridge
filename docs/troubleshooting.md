@@ -303,7 +303,7 @@ Codex 会先校验目标 thread 的 cwd、root 和 active 状态，再执行 `th
 
 ## 审批与权限请求
 
-bridge 只处理 CLI 自己发起的权限请求：CLI 以完全权限或免审批模式运行时不会询问，bridge 也不会另加审批。Codex、Claude Code 和 OpenCode 发来的请求按同一套规则判断，以下情况转发到远程通道确认，其余自动放行（包括普通联网）：
+bridge 只处理 CLI 自己发起的权限请求：CLI 以完全权限或免审批模式运行时不会询问，bridge 也不会另加审批。bridge 也不改写 CLI 的审批与沙箱设置：Codex 线程沿用你本地 Codex 配置（`approval_policy`、`sandbox_mode`、自动审查等），从远程通道发起的任务同样按这些设置运行。Codex、Claude Code 和 OpenCode 发来的请求按同一套规则判断，以下情况转发到远程通道确认，其余自动放行（包括普通联网）：
 
 - 删除、提权、关机、强制重置或丢弃改动等危险命令；
 - `git push`、`npm publish`、`docker push`、`gh release`、`gh pr merge`、部署类命令以及 `ssh`/`scp` 等对外操作；

@@ -104,10 +104,10 @@ describe("Codex bridge protocol probe", () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), "codex-schema-probe-"));
     fs.mkdirSync(path.join(directory, "v2"));
     fs.writeFileSync(path.join(directory, "v2/ThreadStartParams.json"), JSON.stringify({
-      properties: { cwd: {}, approvalPolicy: {}, sandbox: {} },
+      properties: { cwd: {} },
     }));
     try {
-      expect(() => assertCodexSchemaCapabilities(directory)).toThrow("approvalsReviewer");
+      expect(() => assertCodexSchemaCapabilities(directory)).toThrow("serviceName");
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });
     }
