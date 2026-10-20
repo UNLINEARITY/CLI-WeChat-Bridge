@@ -11,6 +11,7 @@ import { createBridgeAdapter } from "../../src/bridge/bridge-adapters.ts";
 import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
 import { buildClaudeUserInputRequest, getClaudePermissionAutoResponse } from "../../src/bridge/claude-hooks.ts";
 import {
+  formatUserInputQuestionMessage,
   formatUserInputRequestMessage,
   parsePendingUserInputAnswerCommand,
 } from "../../src/bridge/user-input-messages.ts";
@@ -61,7 +62,8 @@ describe("Claude AskUserQuestion", () => {
     const pending = { ...request, createdAt: "now" };
     const message = formatUserInputRequestMessage(pending, adapter.getState());
     expect(message).toContain("批准这个操作");
-    expect(message).toContain("│ 预览 │");
+    expect(message).toContain("Question 1/4");
+    expect(formatUserInputQuestionMessage(pending, 3, adapter.getState())).toContain("│ 预览 │");
     const parsed = parsePendingUserInputAnswerCommand("1=Yes;2=2;3=1,2;4=自定义界面", pending);
     expect(parsed).not.toHaveProperty("error");
     if ("error" in parsed) throw new Error(parsed.error);

@@ -61,25 +61,27 @@ export function parseControlCommand(
     return systemCommand;
   }
 
-  if (!options.hasPendingConfirmation) {
+  const trimmed = text.trim();
+  if (!trimmed) {
     return null;
   }
 
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) {
-    return null;
+  if (options.hasPendingConfirmation) {
+    switch (trimmed.toLowerCase()) {
+      case "confirm":
+      case "yes":
+        return { type: "confirm" };
+      case "deny":
+      case "no":
+        return { type: "deny" };
+    }
   }
 
-  switch (normalized) {
-    case "confirm":
-    case "yes":
-      return { type: "confirm" };
-    case "deny":
-    case "no":
-      return { type: "deny" };
-    default:
-      return null;
+  // While a question waits, a plain reply is its answer; "/" stays a command.
+  if (options.hasPendingUserInput && !trimmed.startsWith("/")) {
+    return { type: "answer", raw: trimmed };
   }
+  return null;
 }
 
 export function parseCodexSessionAgentMessage(

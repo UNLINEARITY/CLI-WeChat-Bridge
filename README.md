@@ -441,14 +441,14 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `confirm`、`yes` | 有待审批时 | `/confirm` 的文本别名 |
 | `deny`、`no` | 有待审批时 | `/deny` 的文本别名 |
 | `/auto`、`/auto on`、`/auto off` | 直接启动、daemon | 查看、开启或关闭自动放行；作用于所有窗口，daemon 重启后恢复默认 |
-| `/answer <key>=<value>` | 有待回答问题时 | 提交 Codex、Claude、OpenCode 的结构化回答 |
+| 直接回复、`/answer <回答>` | 有待回答问题时 | 回答 Codex、Claude、OpenCode 的提问，`/answer` 前缀可省略；多题时逐题推送，也可用 `/answer 1=…; 2=…` 一次答完 |
 | `/answer`、`/answer #<编号> <回答>` | daemon | 列出所有待回答的问题，或回答列表中对应编号的问题 |
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信、Telegram 配置 | 在 `wecom-setup` 或 `telegram-setup` 提示后完成操作者配对 |
 
 语言切换及启动环境变量的优先级见 [界面语言](docs/configuration.md#界面语言)。
 
-- **回答问题**：Claude 的 `AskUserQuestion` 会转发题目、选项说明和文字预览。单题回复 `/answer 1` 或自定义文本；多题一次回复全部，例如 `/answer 1=Yes;2=2;3=1,2;4=1`（多选值用逗号分隔）。hook 超时或断开后，远程问题会清除，需在本地终端作答或使用 `/stop`。
+- **回答问题**：提问会转发题目、选项说明和文字预览，bridge 不会替你作答或预选。有问题等待时直接回复即可：数字或选项全名选择对应选项，多选用逗号、顿号或空格分隔（如 `1 3`）；"编号 + 文字"（如 `2 先别部署`）选择该项并附说明；其他文字作为你自己的答案，题目不允许自定义时会提示重答。多道题逐题推送（标出 1/3），全部答完一起提交；也可以 `/answer 1=Yes; 2=1,2` 一次答完。Claude 的 hook 超时或断开后，远程问题会清除，需在本地终端作答或使用 `/stop`。
 - **审批**：每次 `/confirm` 或 `/deny` 只处理当前显示的一项，再提示下一项，消息中注明后面还有几项；本地终端已处理的请求会同步移除。哪些请求自动放行见[问题排查](docs/troubleshooting.md#审批与权限请求)，本轮自动放行的操作会在最终回复末尾列出。
 - **模型与计划模式**：Claude Code 的 `/model`、`/plan` 需要可见 CLI 停在空闲的原生提示符，且没有待审批、本地草稿或弹窗；操作期间按本地键盘会取消远程控制。OpenCode 的 `/plan off` 没有历史记录时回到 `build`；Pi 的 `/plan` 由可选扩展定义，桥接不提供。模型列表绑定当前会话、CLI 进程和操作者，切换会话或当前 CLI 后请重新发送 `/model`。
 - **联网放行**：Claude Code 默认放行常规联网请求（`WebFetch(domain:*)`），设置 `CLI_BRIDGE_STRICT_APPROVAL=1` 可关闭，见[运行配置](docs/configuration.md)。

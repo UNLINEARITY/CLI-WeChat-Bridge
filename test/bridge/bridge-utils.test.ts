@@ -109,9 +109,8 @@ describe("user input request helpers", () => {
       command: "opencode",
     });
 
-    expect(message).toContain("multiple selections: allowed");
-    expect(message).toContain("custom answer: allowed");
-    expect(message).toContain("separate option values with commas");
+    expect(message).toContain("choose several separated by commas or spaces");
+    expect(message).toContain("sent as your own answer");
     expect(message).not.toContain("user_note");
   });
 });

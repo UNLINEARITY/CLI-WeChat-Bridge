@@ -186,3 +186,43 @@ describe("auto-approval switch and summary", () => {
     expect(requests).toEqual([{ command: "set_auto_approval", enabled: false }]);
   });
 });
+
+describe("question answers", () => {
+  beforeEach(() => setLocale("en"));
+
+  test("plain replies answer a waiting question; commands stay commands", async () => {
+    const { parseControlCommand } = await import("../../src/bridge/bridge-utils.ts");
+    const options = { adapter: "claude" as const, hasPendingConfirmation: false, hasPendingUserInput: true };
+    expect(parseControlCommand("2 先别部署", options)).toEqual({ type: "answer", raw: "2 先别部署" });
+    expect(parseControlCommand("/stop", options)).toEqual({ type: "stop" });
+    expect(parseControlCommand("yes", { ...options, hasPendingConfirmation: true })).toEqual({ type: "confirm" });
+    expect(parseControlCommand("2", { ...options, hasPendingUserInput: false })).toBeNull();
+  });
+
+  test("numbers, labels, notes, and custom text", async () => {
+    const { parseUserInputQuestionAnswer } = await import("../../src/bridge/user-input-messages.ts");
+    const options = [{ label: "Yes", description: "" }, { label: "No", description: "" }, { label: "Not sure", description: "" }];
+    const single = { id: "q", header: "Go?", question: "Go?", isOther: true, isSecret: false, customAnswerMode: "value" as const, options };
+    const multi = { ...single, multiple: true };
+    const codex = { ...single, customAnswerMode: "note" as const };
+    const strict = { ...single, isOther: false };
+
+    expect(parseUserInputQuestionAnswer(single, "2")).toEqual({ answers: ["No"] });
+    expect(parseUserInputQuestionAnswer(single, "yes")).toEqual({ answers: ["Yes"] });
+    expect(parseUserInputQuestionAnswer(single, "not sure")).toEqual({ answers: ["Not sure"] });
+    expect(parseUserInputQuestionAnswer(single, "2 但是先别部署")).toEqual({ answers: ["No (但是先别部署)"] });
+    expect(parseUserInputQuestionAnswer(codex, "2 | later")).toEqual({ answers: ["No", "user_note: later"] });
+    expect(parseUserInputQuestionAnswer(single, "明天再说")).toEqual({ answers: ["明天再说"] });
+    expect(parseUserInputQuestionAnswer(codex, "明天再说")).toEqual({ answers: ["user_note: 明天再说"] });
+    expect(parseUserInputQuestionAnswer(single, "3天")).toEqual({ answers: ["3天"] });
+
+    for (const reply of ["1 3", "1,3", "1，3", "1、3", "yes, not sure"]) {
+      expect(parseUserInputQuestionAnswer(multi, reply)).toEqual({ answers: ["Yes", "Not sure"] });
+    }
+    expect(parseUserInputQuestionAnswer(multi, "1 3 先别")).toEqual({ answers: ["Yes", "Not sure", "先别"] });
+
+    expect(parseUserInputQuestionAnswer(strict, "maybe")).toEqual({ error: expect.stringContaining("accepts only an option") });
+    expect(parseUserInputQuestionAnswer(strict, "1 maybe")).toEqual({ error: expect.stringContaining("without a note") });
+    expect(parseUserInputQuestionAnswer(strict, "1")).toEqual({ answers: ["Yes"] });
+  });
+});

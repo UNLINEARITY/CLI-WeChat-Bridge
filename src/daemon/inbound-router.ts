@@ -43,6 +43,7 @@ import {
   type ActiveTask,
   type DaemonSlot,
   type EnsureSlotResult,
+  currentUserInputIndex,
   formatInboundMessagePreview,
 } from "./daemon-slot.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
@@ -129,7 +130,7 @@ export class InboundRouter {
         routeMessage = this.host.slotManager.prefix(
           slot,
           slot.pendingUserInput
-            ? formatPendingUserInputReminder(slot.pendingUserInput)
+            ? formatPendingUserInputReminder(slot.pendingUserInput, currentUserInputIndex(slot))
             : t("bridge.input.waiting", { adapter: slot.adapter }),
         );
         reason = "pending_user_input";
@@ -517,7 +518,7 @@ export class InboundRouter {
             this.host.slotManager.prefix(
               currentSlot,
               currentSlot.pendingUserInput
-                ? formatPendingUserInputReminder(currentSlot.pendingUserInput)
+                ? formatPendingUserInputReminder(currentSlot.pendingUserInput, currentUserInputIndex(currentSlot))
                 : t("bridge.input.waiting", { adapter: currentSlot.adapter }),
             ),
           );

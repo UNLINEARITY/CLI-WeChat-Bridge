@@ -558,6 +558,57 @@ describe("daemon auto-approval visibility and switch", () => {
   });
 });
 
+describe("daemon questions answered one at a time", () => {
+  const send = (daemon: BridgeDaemon, text: string) => (daemon as unknown as {
+    handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
+  }).handleInboundMessage({
+    senderId: OPERATOR_ID, sender: OPERATOR_ID, sessionId: OPERATOR_ID, text, attachments: [],
+    createdAt: new Date().toISOString(), createdAtMs: Date.now(),
+  });
+  const request = {
+    requestId: "q",
+    summary: "Codex needs two answers.",
+    questions: [
+      { id: "env", header: "Environment", question: "Which environment?", isOther: false, isSecret: false,
+        options: [{ label: "dev", description: "" }, { label: "prod", description: "" }] },
+      { id: "features", header: "Features", question: "Which features?", isOther: true, isSecret: false, multiple: true,
+        customAnswerMode: "value" as const, options: [{ label: "A", description: "" }, { label: "B", description: "" }, { label: "C", description: "" }] },
+    ],
+  };
+
+  async function asked() {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "task", conversationId: "conv-1" });
+    const runtime = env.runtime("codex");
+    runtime.state.pendingUserInput = request;
+    runtime.state.status = "awaiting_input";
+    runtime.emit({ type: "user_input_required", request, timestamp: new Date().toISOString() });
+    await tick(20);
+    return { env, daemon, runtime };
+  }
+
+  test("shows the first question, takes plain replies, and submits once all are answered", async () => {
+    const { env, daemon, runtime } = await asked();
+    expect(env.wecom.sent.at(-1)?.text).toContain("Question 1/2");
+    expect(env.wecom.sent.at(-1)?.text).not.toContain("Which features?");
+    await send(daemon, "staging");
+    expect(env.wecom.sent.at(-1)?.text).toContain("accepts only an option");
+    await send(daemon, "2");
+    expect(runtime.userInput).toEqual([]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("Question 2/2");
+    await send(daemon, "1、3");
+    expect(runtime.userInput).toEqual([{ env: ["prod"], features: ["A", "C"] }]);
+    expect(runtime.inputs).toEqual(["task"]);
+  });
+
+  test("still accepts every answer at once in the keyed form", async () => {
+    const { daemon, runtime } = await asked();
+    await send(daemon, "/answer 1=dev; 2=B, my own");
+    expect(runtime.userInput).toEqual([{ env: ["dev"], features: ["B", "my own"] }]);
+  });
+});
+
 describe("daemon approval decisions", () => {
   const send = (daemon: BridgeDaemon, text: string) => (daemon as unknown as {
     handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
@@ -1032,7 +1083,7 @@ describe("wechat-daemon handlers: state machine", () => {
 
     expect(result.forwarded).toBe(false);
     expect(result.reason).toBe("pending_user_input");
-    expect(result.message).toContain("waiting for user input for Environment");
+    expect(result.message).toContain("waiting for an answer to Environment");
     expect(env.runtime("codex").inputs).toHaveLength(1);
     // sent[0] is the user-input event itself (slot's conversation); the
     // reminder reaches the requesting conversation.

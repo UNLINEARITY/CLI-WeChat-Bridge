@@ -59,6 +59,8 @@ export type DaemonSlot = {
   /** Requests approved automatically since the last final reply. */
   autoApprovals: Partial<Record<AutoApprovalKind, number>>;
   pendingUserInput: PendingUserInputRequest | null;
+  /** Answers collected so far while a multi-question request is answered one by one. */
+  userInputProgress?: { request: PendingUserInputRequest; index: number; answers: Record<string, string[]> };
   resumeCoordinator: ResumeSessionCoordinator;
   turns: TurnCoordinator<ActiveTask>;
   lastOutputAt: number;
@@ -84,6 +86,13 @@ export function toPendingApproval(request: BridgeEvent & { type: "approval_requi
     code: buildOneTimeCode(),
     createdAt: nowIso(),
   };
+}
+
+/** The question the operator is on within a multi-question request. */
+export function currentUserInputIndex(slot: DaemonSlot): number {
+  return slot.userInputProgress && slot.userInputProgress.request === slot.pendingUserInput
+    ? slot.userInputProgress.index
+    : 0;
 }
 
 export function toPendingUserInput(request: UserInputRequest | PendingUserInputRequest): PendingUserInputRequest {

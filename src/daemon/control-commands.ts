@@ -9,9 +9,15 @@ import { t } from "../i18n/index.ts";
 import { handleLanguageControl } from "../bridge/language-control.ts";
 import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { nowIso, parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
-import { parsePendingUserInputAnswerCommand } from "../bridge/user-input-messages.ts";
+import {
+  formatUserInputAnswerPreview,
+  formatUserInputQuestionMessage,
+  isKeyedUserInputAnswer,
+  parsePendingUserInputAnswerCommand,
+  parseUserInputQuestionAnswer,
+} from "../bridge/user-input-messages.ts";
 import { formatApprovalMessage } from "../bridge/message-formatting.ts";
-import type { ApprovalDecision } from "../bridge/bridge-types.ts";
+import type { ApprovalDecision, PendingUserInputRequest } from "../bridge/bridge-types.ts";
 import { isAutoApprovalEnabled, setAutoApprovalOverride } from "../bridge/approval-policy.ts";
 import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
@@ -500,7 +506,9 @@ export class DaemonControlCommands {
     }
 
     const pending = slot.pendingUserInput!;
-    const parsed = parsePendingUserInputAnswerCommand(reply, pending);
+    const parsed = pending.questions.length > 1 && !isKeyedUserInputAnswer(reply, pending)
+      ? this.answerNextQuestion(slot, pending, reply)
+      : parsePendingUserInputAnswerCommand(reply, pending);
     if ("error" in parsed) {
       await this.host.queueMessage(
         message.senderId,
@@ -508,6 +516,15 @@ export class DaemonControlCommands {
       );
       return;
     }
+    if ("next" in parsed) {
+      await this.host.queueMessage(
+        message.senderId,
+        this.host.slotManager.prefix(slot, formatUserInputQuestionMessage(pending, parsed.next, slot.runtime.getState())),
+        "user_input_required",
+      );
+      return;
+    }
+    slot.userInputProgress = undefined;
 
     const submitted = await slot.runtime.submitUserInput(parsed.answers, pending.requestId);
     if (!submitted) {
@@ -526,6 +543,28 @@ export class DaemonControlCommands {
       message.senderId,
       this.host.slotManager.prefix(slot, t("bridge.answer.sent")),
     );
+  }
+
+  /**
+   * Record the answer to the question the operator is on; returns the next
+   * question's index, or every answer once the last one is answered.
+   */
+  private answerNextQuestion(
+    slot: DaemonSlot,
+    pending: PendingUserInputRequest,
+    reply: string,
+  ): { next: number } | { answers: Record<string, string[]>; preview: string } | { error: string } {
+    const progress = slot.userInputProgress?.request === pending
+      ? slot.userInputProgress
+      : { request: pending, index: 0, answers: {} };
+    const question = pending.questions[progress.index]!;
+    const parsed = parseUserInputQuestionAnswer(question, reply);
+    if ("error" in parsed) return parsed;
+    progress.answers[question.id] = parsed.answers;
+    progress.index++;
+    slot.userInputProgress = progress;
+    if (progress.index < pending.questions.length) return { next: progress.index };
+    return { answers: progress.answers, preview: formatUserInputAnswerPreview(pending, progress.answers) };
   }
 
   private isSlotBusyForBroadcast(slot: DaemonSlot): boolean {

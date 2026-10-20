@@ -321,7 +321,7 @@ bridge 生成的 Claude 启动设置默认添加 `WebFetch(domain:*)` 权限规�
 
 Claude Code 的 `/model` 与 `/plan` 通过可见 PTY 驱动原生选择器完成：桥接短暂打开选择器，选中目标后等待 CLI 确认。因此要求可见 CLI 停在空闲的原生提示符，没有待审批、本地草稿或打开的弹窗；控制期间若本地键盘有输入，远程控制会取消，以免与用户操作冲突。模型切换使用选择器的 `s` 选项（仅当前会话），需要 CLI 支持该选项。原生菜单名称被终端宽度截断或无法唯一识别时，桥接会提示刷新或扩大终端。`/plan off` 恢复进入计划模式前的 permission mode，没有记录时恢复 `default`。
 
-`AskUserQuestion` 经 Hook 转发题目、选项说明和文字预览，远程答案一次提交全部题目；Hook 超时或断开连接后，远程问题会被清除。
+`AskUserQuestion` 经 Hook 转发题目、选项说明和文字预览；多题时 daemon 逐题推送并记录进度（`DaemonSlot.userInputProgress`），全部答完后一次提交；Hook 超时或断开连接后，远程问题会被清除。
 
 ### 为什么需要 PTY
 
