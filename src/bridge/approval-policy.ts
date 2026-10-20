@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { isHighRiskShellCommand, isStrictApprovalModeEnabled } from "./approval-detection.ts";
 import { truncatePreview } from "../core/text-utils.ts";
+import type { AutoApprovalKind } from "./bridge-types.ts";
 
 /**
  * One permission request, described independently of the CLI that raised it.
@@ -25,6 +26,14 @@ export type ApprovalOperation =
   | { kind: "user_decision"; label: string }
   | { kind: "unknown"; label: string };
 
+export type ApprovalOperationKind = ApprovalOperation["kind"];
+
+export function toAutoApprovalKind(kind: ApprovalOperationKind): AutoApprovalKind {
+  return kind === "command" || kind === "file_write" || kind === "permissions" || kind === "network" || kind === "read"
+    ? kind
+    : "other";
+}
+
 export type ApprovalVerdict =
   | { decision: "auto_allow"; reason: string }
   | { decision: "ask"; reason: string };
@@ -34,6 +43,25 @@ export type ApprovalPolicyContext = {
   workspace: string;
   env?: NodeJS.ProcessEnv;
 };
+
+/**
+ * Runtime switch set by `/auto on|off`; `null` follows
+ * CLI_BRIDGE_STRICT_APPROVAL. Each process (daemon, companion) holds its own
+ * copy, synchronized by the daemon.
+ */
+let autoApprovalOverride: boolean | null = null;
+
+export function setAutoApprovalOverride(enabled: boolean | null): void {
+  autoApprovalOverride = enabled;
+}
+
+export function getAutoApprovalOverride(): boolean | null {
+  return autoApprovalOverride;
+}
+
+export function isAutoApprovalEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return autoApprovalOverride ?? !isStrictApprovalModeEnabled(env);
+}
 
 /** Operations that publish, deploy, or otherwise act outside this machine. */
 const OUTWARD_PATTERNS = [
@@ -133,8 +161,8 @@ export function evaluateApprovalPolicy(
   operation: ApprovalOperation,
   context: ApprovalPolicyContext,
 ): ApprovalVerdict {
-  if (isStrictApprovalModeEnabled(context.env ?? process.env)) {
-    return { decision: "ask", reason: "strict approval mode" };
+  if (!isAutoApprovalEnabled(context.env ?? process.env)) {
+    return { decision: "ask", reason: "auto-approval is off" };
   }
 
   switch (operation.kind) {

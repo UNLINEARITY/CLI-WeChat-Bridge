@@ -5,7 +5,8 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { setLocale } from "../../src/i18n/index.ts";
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { isAutoApprovalEnabled, setAutoApprovalOverride } from "../../src/bridge/approval-policy.ts";
 
 import type {
   BridgeAdapter,
@@ -215,6 +216,13 @@ class FakeBridgeRuntime implements BridgeAdapter {
   async resolveAllApprovals(action: "confirm" | "deny"): Promise<number> {
     this.approvals.push(action);
     return 1;
+  }
+
+  readonly autoApprovalUpdates: boolean[] = [];
+
+  async setAutoApproval(enabled: boolean): Promise<boolean> {
+    this.autoApprovalUpdates.push(enabled);
+    return true;
   }
 
   async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
@@ -496,6 +504,55 @@ describe("daemon sequential approvals", () => {
   });
 });
 
+
+describe("daemon auto-approval visibility and switch", () => {
+  const send = (daemon: BridgeDaemon, text: string) => (daemon as unknown as {
+    handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
+  }).handleInboundMessage({
+    senderId: OPERATOR_ID, sender: OPERATOR_ID, sessionId: OPERATOR_ID, text, attachments: [],
+    createdAt: new Date().toISOString(), createdAtMs: Date.now(),
+  });
+
+  afterEach(() => setAutoApprovalOverride(null));
+
+  test("lists the turn's automatic approvals under the final reply, before attachments", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "task", conversationId: "conv-1" });
+    const runtime = env.runtime("codex");
+    const timestamp = new Date().toISOString();
+    for (const kind of ["command", "command", "file_write", "network"] as const) {
+      runtime.emit({ type: "approval_auto_resolved", kind, timestamp });
+    }
+    runtime.emit({ type: "final_reply", text: "done\n```wechat-attachments\n/repo/a.png\n```", timestamp });
+    await tick(20);
+    const reply = env.wecom.sent.find((message) => message.kind === "final_reply");
+    expect(reply?.text).toContain("Auto-approved this turn: 2 command(s), 1 file change(s), 1 network request(s)");
+    expect(reply?.text.indexOf("Auto-approved")).toBeLessThan(reply!.text.indexOf("wechat-attachments"));
+
+    runtime.emit({ type: "task_complete", timestamp });
+    await forwardInput(daemon, { adapter: "codex", text: "next", conversationId: "conv-1" });
+    runtime.emit({ type: "final_reply", text: "plain", timestamp });
+    await tick(20);
+    expect(env.wecom.sent.filter((message) => message.kind === "final_reply").at(-1)?.text).not.toContain("Auto-approved");
+  });
+
+  test("/auto switches every window and reports the state", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "task", conversationId: "conv-1" });
+    await send(daemon, "/auto");
+    expect(env.wecom.sent.at(-1)?.text).toContain("Auto-approval: on");
+    await send(daemon, "/auto off");
+    expect(isAutoApprovalEnabled({})).toBe(false);
+    expect(env.runtime("codex").autoApprovalUpdates).toEqual([false]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("Auto-approval is off");
+    await send(daemon, "/auto maybe");
+    expect(env.wecom.sent.at(-1)?.text).toContain("Usage: /auto on");
+    await send(daemon, "/auto on");
+    expect(isAutoApprovalEnabled({ CLI_BRIDGE_STRICT_APPROVAL: "1" })).toBe(true);
+  });
+});
 
 describe("daemon Claude questions", () => {
   test("answers the originating slot, preserves its parent and promotes the next question", async () => {

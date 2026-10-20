@@ -6,6 +6,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import { t } from "../i18n/index.ts";
 import type {
+  AutoApprovalKind,
   BridgeAdapterKind,
   BridgeAdapterState,
   BridgeResumeSessionCandidate,
@@ -175,6 +176,23 @@ export function formatTaskFailedMessage(
   return t("session.taskFailed", { adapter: label, text });
 }
 
+const AUTO_APPROVAL_KINDS: AutoApprovalKind[] = ["command", "file_write", "permissions", "network", "read", "other"];
+
+/** One line listing what was approved automatically, or null if nothing was. */
+export function formatAutoApprovalSummary(counts: Partial<Record<AutoApprovalKind, number>>): string | null {
+  const items = AUTO_APPROVAL_KINDS.flatMap((kind) => {
+    const count = counts[kind] ?? 0;
+    return count > 0 ? [t(`approval.auto.kind.${kind}`, { count })] : [];
+  });
+  return items.length ? t("approval.auto.summary", { items: items.join(t("approval.auto.separator")) }) : null;
+}
+
+/** "N more waiting" for the requests queued behind the one shown. */
+function formatQueuedApprovals(adapterState: BridgeAdapterState): string[] {
+  const queued = (adapterState.pendingApprovals?.length ?? 0) - 1;
+  return queued > 0 ? [t("approval.queued", { count: queued })] : [];
+}
+
 export function formatApprovalMessage(
   pending: PendingApproval,
   adapterState: BridgeAdapterState,
@@ -196,6 +214,7 @@ export function formatApprovalMessage(
           : []),
       t("approval.confirmInstructions"),
       t("approval.denyInstructions"),
+      ...formatQueuedApprovals(adapterState),
     ].join("\n");
   }
 
@@ -204,7 +223,9 @@ export function formatApprovalMessage(
     `${t("approval.adapter")}: ${adapterState.kind}`,
     `${t("approval.summary")}: ${pending.summary}`,
     `${t("approval.target")}: ${pending.commandPreview}`,
-    t("approval.instructions"),
+    t("approval.confirmInstructions"),
+    t("approval.denyInstructions"),
+    ...formatQueuedApprovals(adapterState),
   ].join("\n");
 }
 

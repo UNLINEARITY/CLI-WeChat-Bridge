@@ -1902,6 +1902,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         requestId,
         buildClaudePermissionDecisionHookOutput(autoResponse.action),
       );
+      this.emit({ type: "approval_auto_resolved", kind: autoResponse.kind, timestamp: nowIso() });
       return;
     }
 

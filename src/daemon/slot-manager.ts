@@ -660,6 +660,7 @@ export class SlotManager {
         );
       }),
       pendingConfirmations: [],
+      autoApprovals: {},
       pendingUserInput: null,
       resumeCoordinator: new ResumeSessionCoordinator({
         adapter,

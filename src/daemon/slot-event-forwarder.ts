@@ -11,7 +11,9 @@ import {
   formatMirroredUserInputMessage,
   formatSessionSwitchMessage,
   formatTaskFailedMessage,
+  formatAutoApprovalSummary,
 } from "../bridge/message-formatting.ts";
+import { appendBeforeAttachmentBlock } from "../bridge/outbound-attachments.ts";
 import { formatUserInputRequestMessage } from "../bridge/user-input-messages.ts";
 import { nowIso, truncatePreview } from "../bridge/bridge-utils.ts";
 import { shouldForwardSessionSwitchEvent } from "../bridge/bridge-session-resume.ts";
@@ -146,11 +148,14 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       void host.driver.endTyping?.(host.operatorId);
       slot.lastFinalReplyAtMs = Date.now();
       host.daemonLog(`final_reply: adapter=${slot.adapter} text=${truncatePreview(next.text)}`);
+      const autoSummary = formatAutoApprovalSummary(slot.autoApprovals);
+      slot.autoApprovals = {};
+      const text = autoSummary ? appendBeforeAttachmentBlock(next.text, autoSummary) : next.text;
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         await channelPort.send({
           target: eventTarget,
           kind: "final_reply",
-          text: next.text,
+          text,
           adapter: slot.adapter,
         });
       }));
@@ -169,6 +174,10 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
           await host.queueMessage(host.operatorId, host.prefix(slot, next.text), "notice", eventTarget);
         }));
       }
+    },
+    approvalAutoResolved: (next) => {
+      slot.autoApprovals[next.kind] = (slot.autoApprovals[next.kind] ?? 0) + 1;
+      host.daemonLog(`approval_auto_resolved: adapter=${slot.adapter} kind=${next.kind}`);
     },
     approvalRequired: (next) => {
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
@@ -240,6 +249,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       void host.driver.endTyping?.(host.operatorId);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(() => {
         slot.pendingConfirmations = [];
+        slot.autoApprovals = {};
         slot.pendingUserInput = null;
         if (eventTask) {
           slot.turns.complete(eventTask);
@@ -251,6 +261,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       void host.driver.endTyping?.(host.operatorId);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         slot.pendingConfirmations = [];
+        slot.autoApprovals = {};
         slot.pendingUserInput = null;
         if (eventTask) {
           slot.turns.complete(eventTask);
@@ -264,6 +275,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       logError(`${slot.adapter}: ${next.message}`);
       host.daemonLog(`fatal_error: adapter=${slot.adapter} message=${next.message}`);
       slot.pendingConfirmations = [];
+      slot.autoApprovals = {};
       slot.pendingUserInput = null;
       if (eventTask) {
         slot.turns.complete(eventTask);

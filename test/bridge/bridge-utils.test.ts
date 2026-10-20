@@ -877,10 +877,10 @@ describe("adapter-aware message formatting", () => {
       "Bash (npm test)",
     );
     expect(formatApprovalMessage(pending, codexAdapterState)).toContain(
-      "/confirm or /yes",
+      "/confirm, confirm, or yes",
     );
     expect(formatPendingApprovalReminder(pending, codexAdapterState)).toContain(
-      "/confirm or /deny",
+      "/deny, deny, or no",
     );
   });
 });

@@ -215,6 +215,7 @@ standalone 模式按以下顺序处理：
 | bare `deny` | 仅在有待审批时 | 等价 `/deny` | 便利别名 |
 | bare `no` | 仅在有待审批时 | 等价 `/deny` | 便利别名 |
 | `/answer <answer>` | 有待处理的结构化问题时 | 解析单选、多选、自定义回答并提交给 Codex/Claude/OpenCode adapter | 核心保留 |
+| `/auto`、`/auto on`、`/auto off` | 任何时候 | 查看或切换自动放行，作用于全部窗口，daemon 重启后恢复 `CLI_BRIDGE_STRICT_APPROVAL` 决定的默认值 | 核心保留 |
 
 注意：当前 parser 对 `/confirm` 后面的参数不做一次性 code 校验；`/confirm ABC123` 与 `/confirm` 都会解析为相同的确认命令。一次性 code 目前主要出现在提示文本和旧兼容流程中。如果希望 code 真正承担授权校验，需要单独修复，而不是仅调整文档。
 

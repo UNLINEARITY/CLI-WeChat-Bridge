@@ -33,6 +33,7 @@ import {
 } from "./bridge-adapters.shared.ts";
 import type {
   ApprovalRequest,
+  AutoApprovalKind,
   BridgeAdapter,
   BridgeAdapterState,
   BridgeModelOption,
@@ -46,7 +47,7 @@ import type {
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import { createOpenCodeV2CompatClient } from "./opencode-v2-compat.ts";
-import { evaluateApprovalPolicy, type ApprovalOperation } from "./approval-policy.ts";
+import { evaluateApprovalPolicy, toAutoApprovalKind, type ApprovalOperation } from "./approval-policy.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   OUTBOUND_ATTACHMENT_DENY_MESSAGE,
@@ -2127,9 +2128,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     if (this.pendingPermissions.has(pendingPermission.permissionId) || this.settledPermissionIds.has(pendingPermission.permissionId)) return;
-    const verdict = evaluateApprovalPolicy(describeOpenCodePermissionOperation(properties), { workspace: this.options.cwd });
+    const operation = describeOpenCodePermissionOperation(properties);
+    const verdict = evaluateApprovalPolicy(operation, { workspace: this.options.cwd });
     if (verdict.decision === "auto_allow") {
-      void this.autoApprovePermission(pendingPermission, verdict.reason);
+      void this.autoApprovePermission(pendingPermission, verdict.reason, toAutoApprovalKind(operation.kind));
       return;
     }
     this.queuePendingPermission(pendingPermission);
@@ -2367,7 +2369,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   }
 
   /** Approve once; if the reply fails, hand the request to the operator. */
-  private async autoApprovePermission(pendingPermission: OpenCodePendingPermission, reason: string): Promise<void> {
+  private async autoApprovePermission(
+    pendingPermission: OpenCodePendingPermission,
+    reason: string,
+    kind: AutoApprovalKind,
+  ): Promise<void> {
     try {
       const result = await this.client?.permission.reply({
         requestID: pendingPermission.permissionId,
@@ -2380,6 +2386,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         throw new Error(result ? `SDK error: ${describeUnknownError(result.error)}` : "OpenCode client is not connected.");
       }
       this.rememberSettledPermission(pendingPermission.permissionId);
+      this.emit({ type: "approval_auto_resolved", kind, timestamp: nowIso() });
       this.setStatus(
         this.pendingPermissions.size ? "awaiting_approval" : "busy",
         `OpenCode approval auto-approved: ${truncatePreview(reason, 180)}`,

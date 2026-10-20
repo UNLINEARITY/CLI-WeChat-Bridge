@@ -11,6 +11,7 @@ import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { nowIso, parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
 import { parsePendingUserInputAnswerCommand } from "../bridge/user-input-messages.ts";
 import { formatApprovalMessage } from "../bridge/message-formatting.ts";
+import { isAutoApprovalEnabled, setAutoApprovalOverride } from "../bridge/approval-policy.ts";
 import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 import {
@@ -112,6 +113,9 @@ export class DaemonControlCommands {
         return;
       case "broadcast":
         await this.handleBroadcastCommand(message, command.text);
+        return;
+      case "auto":
+        await this.handleAutoApprovalCommand(message.senderId, command);
         return;
       case "confirm":
         await this.confirmPendingApproval(message, activeSlot, command.index);
@@ -326,6 +330,32 @@ export class DaemonControlCommands {
       t("daemon.approval.pendingElsewhere", { list: list.join("\n") }),
     );
     return null;
+  }
+
+  /** `/auto on|off` switches auto-approval for every window until the daemon exits. */
+  private async handleAutoApprovalCommand(
+    senderId: string,
+    command: { enabled?: boolean; invalid?: boolean },
+  ): Promise<void> {
+    if (command.invalid) {
+      await this.host.queueMessage(senderId, t("approval.auto.usage"));
+      return;
+    }
+    if (command.enabled === undefined) {
+      await this.host.queueMessage(senderId, t(isAutoApprovalEnabled() ? "approval.auto.statusOn" : "approval.auto.statusOff"));
+      return;
+    }
+    setAutoApprovalOverride(command.enabled);
+    const results = await Promise.allSettled(
+      this.slotsWhere(() => true).map((slot) => slot.runtime.setAutoApproval?.(command.enabled!) ?? true),
+    );
+    const needsRestart = results.some((result) => result.status === "rejected" || result.value === false);
+    this.host.daemonLog(`auto_approval: enabled=${command.enabled} needs_restart=${needsRestart}`);
+    await this.host.queueMessage(
+      senderId,
+      t(command.enabled ? "approval.auto.enabled" : "approval.auto.disabled")
+        + (needsRestart ? `\n${t("approval.auto.companionRestart")}` : ""),
+    );
   }
 
   async confirmPendingApproval(

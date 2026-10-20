@@ -52,6 +52,13 @@ const WECHAT_ATTACHMENT_PROMPT_PREFIX = [
 const WECHAT_ATTACHMENT_BLOCK_RE =
   /\n```wechat-attachments[ \t]*\n([\s\S]*?)\n```[ \t]*$/;
 
+/** Add a line to a reply while keeping its trailing attachment block last. */
+export function appendBeforeAttachmentBlock(text: string, line: string): string {
+  const match = WECHAT_ATTACHMENT_BLOCK_RE.exec(text);
+  if (!match) return `${text.trimEnd()}\n\n${line}`;
+  return `${text.slice(0, match.index).trimEnd()}\n\n${line}${text.slice(match.index)}`;
+}
+
 export const OUTBOUND_ATTACHMENT_DENY_MESSAGE =
   "The WeChat bridge does not use outbound attachment directories. Do not create or copy files under .claude/channels/wechat/outbound-attachments or .cli-bridge/outbound-attachments. To send a file, put the original absolute local file path in the final ```wechat-attachments``` block.";
 

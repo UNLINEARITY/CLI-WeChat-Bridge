@@ -16,6 +16,7 @@ export type BridgeEventForwarderHandlers = {
   notice?: (event: EventOf<"notice">) => void | Promise<void>;
   approvalStateChanged?: (event: EventOf<"approval_state_changed">) => void | Promise<void>;
   approvalRequired?: (event: EventOf<"approval_required">) => void | Promise<void>;
+  approvalAutoResolved?: (event: EventOf<"approval_auto_resolved">) => void | Promise<void>;
   userInputRequired?: (event: EventOf<"user_input_required">) => void | Promise<void>;
   mirroredUserInput?: (event: EventOf<"mirrored_user_input">) => void | Promise<void>;
   sessionSwitched?: (event: EventOf<"session_switched">) => void | Promise<void>;
@@ -52,6 +53,9 @@ export async function forwardBridgeEvent(
       return;
     case "approval_required":
       await handlers.approvalRequired?.(event);
+      return;
+    case "approval_auto_resolved":
+      await handlers.approvalAutoResolved?.(event);
       return;
     case "user_input_required":
       await handlers.userInputRequired?.(event);

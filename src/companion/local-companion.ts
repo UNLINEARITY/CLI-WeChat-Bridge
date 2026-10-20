@@ -8,6 +8,7 @@
 import net from "node:net";
 import path from "node:path";
 import { parseLocale, setLocale, t } from "../i18n/index.ts";
+import { setAutoApprovalOverride } from "../bridge/approval-policy.ts";
 
 import { createBridgeAdapter } from "../bridge/bridge-adapters.ts";
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
@@ -239,7 +240,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
 
     sendLocalCompanionMessage(activeSocket, {
       type: "state",
-      state: { ...adapter.getState(), supportsLocaleUpdates: true },
+      state: { ...adapter.getState(), supportsLocaleUpdates: true, supportsAutoApprovalUpdates: true },
     });
   };
 
@@ -307,6 +308,10 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           sendResponse(socket, message.id, true);
           break;
         }
+        case "set_auto_approval":
+          setAutoApprovalOverride(message.payload.enabled);
+          sendResponse(socket, message.id, true);
+          break;
         case "send_input":
           await adapter.sendInput(message.payload.text);
           sendResponse(socket, message.id, true);
@@ -431,6 +436,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
                   setLocale(locale);
                   process.env.CLI_BRIDGE_LANG = locale;
                 }
+                if (typeof message.autoApproval === "boolean") setAutoApprovalOverride(message.autoApproval);
                 helloAcknowledged = true;
                 closeReason = null;
                 activeSocket = socket;
@@ -496,6 +502,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           token: endpoint.token,
           companionPid: process.pid,
           supportsLocaleUpdates: true,
+          supportsAutoApprovalUpdates: true,
         });
       });
 

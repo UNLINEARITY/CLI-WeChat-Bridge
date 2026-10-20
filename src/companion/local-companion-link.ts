@@ -27,6 +27,7 @@ import {
 
 export type LocalCompanionCommand =
   | { command: "set_locale"; locale: "zh" | "en" }
+  | { command: "set_auto_approval"; enabled: boolean }
   | { command: "send_input"; text: string }
   | { command: "list_resume_sessions"; limit?: number }
   | { command: "list_resume_threads"; limit?: number }
@@ -68,10 +69,13 @@ export type LocalCompanionMessage =
       companionPid?: number;
       panelPid?: number;
       supportsLocaleUpdates?: boolean;
+      supportsAutoApprovalUpdates?: boolean;
     }
   | {
       type: "hello_ack";
       locale?: "zh" | "en";
+      /** The daemon's `/auto` switch, when the operator has set one. */
+      autoApproval?: boolean;
     }
   | {
       type: "closing";

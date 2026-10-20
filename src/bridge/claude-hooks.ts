@@ -5,7 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { t } from "../i18n/index.ts";
-import type { ApprovalRequest, UserInputRequest } from "./bridge-types.ts";
+import type { ApprovalRequest, AutoApprovalKind, UserInputRequest } from "./bridge-types.ts";
 import {
   OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsOutboundAttachmentPath,
@@ -13,6 +13,7 @@ import {
 } from "./outbound-attachments.ts";
 import {
   evaluateApprovalPolicy,
+  toAutoApprovalKind,
   type ApprovalOperation,
   type ApprovalPolicyContext,
 } from "./approval-policy.ts";
@@ -64,6 +65,7 @@ export type ClaudePermissionDecisionAction = "confirm" | "deny";
 export type ClaudePermissionAutoResponse = {
   action: ClaudePermissionDecisionAction;
   reason: string;
+  kind: AutoApprovalKind;
 };
 
 export const CLAUDE_OUTBOUND_ATTACHMENT_DENY_MESSAGE =
@@ -392,8 +394,11 @@ export function getClaudePermissionAutoResponse(
     return null;
   }
 
-  const verdict = evaluateApprovalPolicy(describeClaudePermissionOperation(payload), context);
-  return verdict.decision === "auto_allow" ? { action: "confirm", reason: verdict.reason } : null;
+  const operation = describeClaudePermissionOperation(payload);
+  const verdict = evaluateApprovalPolicy(operation, context);
+  return verdict.decision === "auto_allow"
+    ? { action: "confirm", reason: verdict.reason, kind: toAutoApprovalKind(operation.kind) }
+    : null;
 }
 
 export function buildClaudePermissionDecisionHookOutput(

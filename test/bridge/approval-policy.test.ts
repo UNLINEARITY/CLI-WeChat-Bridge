@@ -4,9 +4,21 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import { parseBridgeControlCommand } from "../../src/core/bridge-control.ts";
+import { formatApprovalMessage, formatAutoApprovalSummary } from "../../src/bridge/message-formatting.ts";
+import { appendBeforeAttachmentBlock } from "../../src/bridge/outbound-attachments.ts";
+import { LocalCompanionProxyAdapter } from "../../src/bridge/bridge-adapters.core.ts";
 import os from "node:os";
-import { evaluateApprovalPolicy, isPathInsideWorkspace, type ApprovalOperation } from "../../src/bridge/approval-policy.ts";
+import {
+  evaluateApprovalPolicy,
+  getAutoApprovalOverride,
+  isAutoApprovalEnabled,
+  isPathInsideWorkspace,
+  setAutoApprovalOverride,
+  type ApprovalOperation,
+} from "../../src/bridge/approval-policy.ts";
 import { describeOpenCodePermissionOperation, OpenCodeServerAdapter } from "../../src/bridge/bridge-adapters.opencode.ts";
 
 const context = { workspace: "/repo", env: {} };
@@ -119,5 +131,58 @@ describe("OpenCode auto-approval", () => {
     adapter.handleSseEvent({ type: "permission.asked", properties: { id: "per_c", sessionID: "s1", permission: "read" } });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(adapter.getState().pendingApproval?.requestId).toBe("per_c");
+  });
+});
+
+describe("auto-approval switch and summary", () => {
+  beforeEach(() => setLocale("en"));
+  afterEach(() => setAutoApprovalOverride(null));
+
+  test("the /auto override wins over CLI_BRIDGE_STRICT_APPROVAL until cleared", () => {
+    expect(isAutoApprovalEnabled({})).toBe(true);
+    setAutoApprovalOverride(false);
+    expect(decide({ kind: "read" })).toBe("ask");
+    setAutoApprovalOverride(true);
+    expect(isAutoApprovalEnabled({ CLI_BRIDGE_STRICT_APPROVAL: "1" })).toBe(true);
+    setAutoApprovalOverride(null);
+    expect(getAutoApprovalOverride()).toBeNull();
+    expect(isAutoApprovalEnabled({ CLI_BRIDGE_STRICT_APPROVAL: "1" })).toBe(false);
+  });
+
+  test("parses /auto", () => {
+    expect(parseBridgeControlCommand("/auto")).toEqual({ type: "auto" });
+    expect(parseBridgeControlCommand("/auto ON")).toEqual({ type: "auto", enabled: true });
+    expect(parseBridgeControlCommand("/auto 关")).toEqual({ type: "auto", enabled: false });
+    expect(parseBridgeControlCommand("/auto later")).toEqual({ type: "auto", invalid: true });
+  });
+
+  test("summarizes counts and keeps attachment blocks last", () => {
+    expect(formatAutoApprovalSummary({})).toBeNull();
+    expect(formatAutoApprovalSummary({ read: 3, command: 1 })).toBe("Auto-approved this turn: 1 command(s), 3 read(s)");
+    setLocale("zh");
+    expect(formatAutoApprovalSummary({ file_write: 2, other: 1 })).toBe("本轮自动放行：2 个文件修改、1 项其他操作");
+    expect(appendBeforeAttachmentBlock("done", "x")).toBe("done\n\nx");
+    expect(appendBeforeAttachmentBlock("done\n```wechat-attachments\n/a.png\n```", "x"))
+      .toBe("done\n\nx\n```wechat-attachments\n/a.png\n```");
+  });
+
+  test("approval prompts say how many requests wait behind the shown one", () => {
+    const pending = { source: "cli" as const, summary: "s", commandPreview: "git push", code: "c", createdAt: "now" };
+    const state = { kind: "codex" as const, status: "awaiting_approval" as const, cwd: "/repo", command: "codex",
+      pendingApprovals: [pending, pending, pending] };
+    expect(formatApprovalMessage(pending, state)).toContain("2 more approval(s) waiting.");
+    expect(formatApprovalMessage(pending, { ...state, pendingApprovals: [pending] })).not.toContain("more approval");
+  });
+
+  test("companion proxies forward the switch only when the companion supports it", async () => {
+    const adapter = new LocalCompanionProxyAdapter({ kind: "claude", command: "claude", cwd: "/repo" }) as any;
+    expect(await adapter.setAutoApproval(false)).toBe(true);
+    const requests: unknown[] = [];
+    adapter.socket = {};
+    adapter.sendRequest = async (payload: unknown) => { requests.push(payload); return true; };
+    expect(await adapter.setAutoApproval(false)).toBe(false);
+    adapter.state.supportsAutoApprovalUpdates = true;
+    expect(await adapter.setAutoApproval(false)).toBe(true);
+    expect(requests).toEqual([{ command: "set_auto_approval", enabled: false }]);
   });
 });

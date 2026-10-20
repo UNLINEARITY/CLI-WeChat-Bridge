@@ -11,6 +11,7 @@ export type BridgeControlCommand =
   | { type: "new_session" }
   | { type: "stop" }
   | { type: "reset" }
+  | { type: "auto"; enabled?: boolean; invalid?: boolean }
   | { type: "confirm"; index?: number }
   | { type: "deny"; index?: number }
   | { type: "answer"; raw: string }
@@ -57,6 +58,13 @@ export function parseBridgeControlCommand(
       return { type: "stop" };
     case "/reset":
       return { type: "reset" };
+    case "/auto": {
+      const value = argument.toLowerCase();
+      if (!value) return { type: "auto" };
+      if (["on", "开", "开启"].includes(value)) return { type: "auto", enabled: true };
+      if (["off", "关", "关闭"].includes(value)) return { type: "auto", enabled: false };
+      return { type: "auto", invalid: true };
+    }
     case "/confirm":
     case "/yes":
       return withPendingIndex({ type: "confirm" }, argument);

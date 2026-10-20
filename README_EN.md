@@ -437,6 +437,7 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/deny`, `/no` | Direct launch, daemon | Reject the current pending permission request |
 | `confirm`, `yes` | Pending approval | Text aliases for `/confirm` |
 | `deny`, `no` | Pending approval | Text aliases for `/deny` |
+| `/auto`, `/auto on`, `/auto off` | Direct launch, daemon | View, enable, or disable auto-approval for every window; the default returns when the daemon restarts |
 | `/answer <key>=<value>` | Pending question | Submit structured answers for Codex, Claude Code, or OpenCode |
 | `/answer`, `/answer #<number> <answer>` | Daemon | List every waiting question, or answer the one with that number |
 | `/daemon-stop` | Daemon | Stop the persistent daemon |
@@ -445,7 +446,7 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 Send `/lang en` in the connected chat for English bridge messages, or `/lang zh` for Chinese. For startup environment-variable precedence, see [interface language](docs/configuration.md#界面语言) (Chinese).
 
 - **Answering questions:** Claude's `AskUserQuestion` forwards questions, option descriptions, and text previews. For one question, reply with `/answer 1` or custom text; for several, answer all at once, for example `/answer 1=Yes;2=2;3=1,2;4=1` (separate multiple selections with commas). When the hook times out or disconnects, the remote question is cleared; answer in the local terminal or use `/stop`.
-- **Approvals:** each `/confirm` or `/deny` resolves only the currently displayed request, then shows the next one; requests resolved in the local terminal are removed remotely too.
+- **Approvals:** each `/confirm` or `/deny` resolves only the currently displayed request, then shows the next one and says how many are still waiting; requests resolved in the local terminal are removed remotely too. See [troubleshooting](docs/troubleshooting.md#审批与权限请求) (Chinese) for what is approved automatically; the final reply lists what was approved automatically in that turn.
 - **Models and plan mode:** Claude Code's `/model` and `/plan` need the visible CLI at an idle native prompt with no pending approval, local draft, or popup; local keyboard input during the operation cancels it. OpenCode's `/plan off` falls back to `build` when there is no history; Pi's `/plan` is defined by optional extensions, not by the bridge. Model lists are bound to the session, CLI process, and operator; send `/model` again after changing the session or active CLI.
 - **Web access:** Claude Code allows ordinary web requests by default (`WebFetch(domain:*)`); set `CLI_BRIDGE_STRICT_APPROVAL=1` to turn this off. See [runtime configuration](docs/configuration.md) (Chinese).
 

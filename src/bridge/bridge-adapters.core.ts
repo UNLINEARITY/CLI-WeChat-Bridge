@@ -9,6 +9,7 @@ import path from "node:path";
 import { spawn as spawnPty } from "node-pty";
 import type { IPty } from "node-pty";
 import { getLocale, t } from "../i18n/index.ts";
+import { getAutoApprovalOverride } from "./approval-policy.ts";
 import {
   attachLocalCompanionMessageListener,
   buildLocalCompanionToken,
@@ -268,6 +269,13 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     return true;
   }
 
+  async setAutoApproval(enabled: boolean): Promise<boolean> {
+    if (!this.socket) return true;
+    if (!this.state.supportsAutoApprovalUpdates) return false;
+    await this.sendRequest({ command: "set_auto_approval", enabled });
+    return true;
+  }
+
   async interrupt(): Promise<boolean> {
     const result = await this.sendRequest({
       command: "interrupt",
@@ -381,6 +389,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
 
         authenticated = true;
         this.state.supportsLocaleUpdates = message.supportsLocaleUpdates;
+        this.state.supportsAutoApprovalUpdates = message.supportsAutoApprovalUpdates;
         this.clearReconnectShutdownTimer();
         this.expectedCloseReason = null;
         this.socket = socket;
@@ -399,7 +408,12 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           this.endpoint?.instanceId,
           { adapter: this.options.kind, instance: this.options.slotInstance },
         );
-        sendLocalCompanionMessage(socket, { type: "hello_ack", locale: getLocale() });
+        const autoApproval = getAutoApprovalOverride();
+        sendLocalCompanionMessage(socket, {
+          type: "hello_ack",
+          locale: getLocale(),
+          ...(autoApproval === null ? {} : { autoApproval }),
+        });
         return;
       }
 
@@ -470,6 +484,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.state.supportsApprovalRequestIds = undefined;
         this.state.supportsUserInputRequestIds = undefined;
         this.state.supportsLocaleUpdates = undefined;
+    this.state.supportsAutoApprovalUpdates = undefined;
         this.state.pendingUserInput = null;
         this.state.pendingUserInputOrigin = undefined;
         this.state.sharedSessionId = undefined;
@@ -560,6 +575,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.announcedUserInputRequestId = undefined;
     this.state.supportsUserInputRequestIds = undefined;
     this.state.supportsLocaleUpdates = undefined;
+    this.state.supportsAutoApprovalUpdates = undefined;
     this.state.pendingUserInput = null;
     this.state.pendingUserInputOrigin = undefined;
     this.state.activeTurnId = undefined;

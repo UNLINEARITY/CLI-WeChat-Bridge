@@ -32,6 +32,9 @@ export type BridgeNoticeLevel = "info" | "warning";
 
 export type ApprovalSource = "cli";
 
+/** What an automatically approved request was, for the per-turn summary. */
+export type AutoApprovalKind = "command" | "file_write" | "permissions" | "network" | "read" | "other";
+
 export type ApprovalRequest = {
   source: ApprovalSource;
   summary: string;
@@ -127,6 +130,7 @@ export type BridgeAdapterState = {
   supportsApprovalRequestIds?: boolean;
   supportsUserInputRequestIds?: boolean;
   supportsLocaleUpdates?: boolean;
+  supportsAutoApprovalUpdates?: boolean;
   sharedSessionId?: string;
   sharedThreadId?: string;
   activeRuntimeSessionId?: string;
@@ -181,6 +185,11 @@ export type BridgeEvent =
   | {
       type: "approval_required";
       request: ApprovalRequest | PendingApproval;
+      timestamp: string;
+    }
+  | {
+      type: "approval_auto_resolved";
+      kind: AutoApprovalKind;
       timestamp: string;
     }
   | {
@@ -243,6 +252,8 @@ export interface BridgeAdapter {
   selectModel?(modelId: string): Promise<BridgeModelOption>;
   setPlanMode?(enabled: boolean): Promise<boolean>;
   updateLocale?(locale: "zh" | "en"): Promise<boolean>;
+  /** Mirror the daemon's `/auto` switch into a CLI running in another process. */
+  setAutoApproval?(enabled: boolean): Promise<boolean>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean>;

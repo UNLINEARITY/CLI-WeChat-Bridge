@@ -9,6 +9,7 @@ import type { SlotSessionRecord } from "./slot-session-store.ts";
 import path from "node:path";
 import { BridgeController } from "../bridge/bridge-controller.ts";
 import type {
+  AutoApprovalKind,
   BridgeAdapter,
   BridgeEvent,
   BridgeSessionStartMode,
@@ -55,6 +56,8 @@ export type DaemonSlot = {
   outputBatcher: OutputBatcher;
   pendingConfirmations: PendingApproval[];
   displayedApprovalRequestId?: string;
+  /** Requests approved automatically since the last final reply. */
+  autoApprovals: Partial<Record<AutoApprovalKind, number>>;
   pendingUserInput: PendingUserInputRequest | null;
   resumeCoordinator: ResumeSessionCoordinator;
   turns: TurnCoordinator<ActiveTask>;

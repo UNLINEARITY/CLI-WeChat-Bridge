@@ -3588,6 +3588,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         id: requestId,
         result: autoResponse.result,
       });
+      this.emit({ type: "approval_auto_resolved", kind: autoResponse.kind, timestamp: nowIso() });
       this.state.lastOutputAt = nowIso();
       this.setStatus(
         this.pendingApprovalRequests.length ? "awaiting_approval" : "busy",

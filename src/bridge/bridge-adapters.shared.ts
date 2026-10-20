@@ -16,6 +16,7 @@ import { spawn as spawnPty } from "node-pty";
 
 import type {
   ApprovalRequest,
+  AutoApprovalKind,
   BridgeAdapterKind,
   BridgeLifecycleMode,
   BridgeSessionStartMode,
@@ -35,6 +36,7 @@ import {
 } from "./outbound-attachments.ts";
 import {
   evaluateApprovalPolicy,
+  toAutoApprovalKind,
   type ApprovalOperation,
   type ApprovalPolicyContext,
 } from "./approval-policy.ts";
@@ -137,6 +139,7 @@ export type CodexPendingUserInputRequest = {
 export type CodexApprovalAutoResponse = {
   result: Record<string, unknown>;
   reason: string;
+  kind: AutoApprovalKind;
 };
 
 export type CodexActiveTurn = {
@@ -557,10 +560,8 @@ export function getCodexApprovalAutoResponse(
     return null;
   }
 
-  const verdict = evaluateApprovalPolicy(
-    describeCodexApprovalOperation(method, params),
-    context,
-  );
+  const operation = describeCodexApprovalOperation(method, params);
+  const verdict = evaluateApprovalPolicy(operation, context);
   if (verdict.decision !== "auto_allow") return null;
 
   return {
@@ -568,6 +569,7 @@ export function getCodexApprovalAutoResponse(
       ? buildCodexPermissionsRequestApprovalResponse(params, "confirm", { strictAutoReview: true })
       : { decision: "accept" },
     reason: verdict.reason,
+    kind: toAutoApprovalKind(operation.kind),
   };
 }
 
