@@ -201,6 +201,9 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           runtimeKind: "legacy_adapter",
           instanceId: `${process.pid}-${Date.now().toString(36)}`,
           kind: this.options.kind,
+          ...(this.options.slotInstance && this.options.slotInstance > 1
+            ? { slotInstance: this.options.slotInstance }
+            : {}),
           port: address.port,
           token: buildLocalCompanionToken(),
           cwd: this.options.cwd,
@@ -319,6 +322,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.rejectPendingRequests(`${this.options.kind} companion proxy is shutting down.`);
     clearLocalCompanionEndpoint(this.options.cwd, this.endpoint?.instanceId, {
       adapter: this.options.kind,
+      instance: this.options.slotInstance,
     });
 
     if (this.socket) {
@@ -393,7 +397,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
             companionConnectedAt,
           },
           this.endpoint?.instanceId,
-          { adapter: this.options.kind },
+          { adapter: this.options.kind, instance: this.options.slotInstance },
         );
         sendLocalCompanionMessage(socket, { type: "hello_ack", locale: getLocale() });
         return;
@@ -408,6 +412,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.expectedCloseReason = null;
         clearLocalCompanionOccupancy(this.options.cwd, this.endpoint?.instanceId, {
           adapter: this.options.kind,
+          instance: this.options.slotInstance,
         });
         this.detachPanelSocket();
         if (!this.shuttingDown) {

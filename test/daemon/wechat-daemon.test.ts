@@ -179,6 +179,13 @@ describe("wechat-daemon helpers", () => {
     }
   }, 15_000);
 
+  test("buildVisibleClientLaunchArgs names numbered instances only", () => {
+    const cwd = path.resolve("./tmp/project");
+    expect(buildVisibleClientLaunchArgs({ adapter: "pi", cwd })).not.toContain("--slot-instance");
+    const args = buildVisibleClientLaunchArgs({ adapter: "pi", cwd, instance: 2 });
+    expect(args[args.indexOf("--slot-instance") + 1]).toBe("2");
+  });
+
   test("buildVisibleClientLaunchArgs routes codex through the remote client", () => {
     const args = buildVisibleClientLaunchArgs({
       adapter: "codex",

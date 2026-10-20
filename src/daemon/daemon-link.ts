@@ -31,6 +31,8 @@ export type DaemonEndpoint = {
 
 export type DaemonSlotSummary = {
   adapter: DaemonAdapterKind;
+  /** Numbered window of the adapter in its workspace. */
+  instance: number;
   status: string;
   cwd: string;
   companionPid?: number;
@@ -43,6 +45,10 @@ export type DaemonStatus = {
   cwd: string;
   channelId?: BridgeChannelId;
   activeAdapter?: DaemonAdapterKind;
+  /** Numbered window of the active adapter; absent means 1. */
+  activeInstance?: number;
+  /** Bridge mode (see bridge-mode.ts); absent from older daemons. */
+  mode?: "none" | "single" | "multi_type" | "multi_instance" | "multi_workspace";
   startedAt: string;
   /** Every listed workspace, present only when there is more than one. */
   workspaces?: string[];

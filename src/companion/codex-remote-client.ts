@@ -36,6 +36,8 @@ import { isDirectModuleRun } from "../core/direct-run.ts";
 
 type CodexRemoteClientCliOptions = {
   cwd: string;
+  /** Numbered codex window in cwd; defaults to 1. */
+  slotInstance?: number;
   cliArgs: string[];
   sessionStartMode?: "restore" | "new";
 };
@@ -67,6 +69,7 @@ function log(message: string): void {
 export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
   let cwd = process.cwd();
   let sessionStartMode: CodexRemoteClientCliOptions["sessionStartMode"];
+  let slotInstance: number | undefined;
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -99,6 +102,16 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
       continue;
     }
 
+    if (arg === "--slot-instance") {
+      const value = Number(next);
+      if (!Number.isInteger(value) || value < 1) {
+        throw new Error(`Invalid --slot-instance value: ${next ?? "(missing)"}`);
+      }
+      slotInstance = value;
+      i += 1;
+      continue;
+    }
+
     if (arg === "--session-start-mode") {
       if (next !== "restore" && next !== "new") {
         throw new Error(`Invalid --session-start-mode value: ${next ?? "(missing)"}`);
@@ -111,11 +124,11 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
     cliArgs.push(arg);
   }
 
-  return { cwd, cliArgs, sessionStartMode };
+  return { cwd, cliArgs, sessionStartMode, slotInstance };
 }
 
-export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
-  const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
+export function readCodexRuntimeEndpoint(cwd: string, slotInstance?: number): LocalCompanionEndpoint {
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex", instance: slotInstance });
   if (!endpoint || endpoint.kind !== "codex") {
     throw new Error(
       `No active Codex runtime was found for ${cwd}. Run "wechat-codex" in that directory to recreate it.`,
@@ -221,9 +234,11 @@ export class CodexVisibleClientSupervisor {
           codexVisibleThreadId: undefined,
         },
         this.endpoint.instanceId,
+        this.endpoint.slotInstance,
       );
       clearLocalCompanionOccupancy(this.endpoint.cwd, this.endpoint.instanceId, {
         adapter: "codex",
+        instance: this.endpoint.slotInstance,
       });
     }
   }
@@ -243,7 +258,10 @@ export class CodexVisibleClientSupervisor {
     if (this.runSettled) {
       throw new Error("The visible Codex client has already stopped.");
     }
-    const endpoint = readLocalCompanionEndpoint(this.endpoint.cwd, { adapter: "codex" });
+    const endpoint = readLocalCompanionEndpoint(this.endpoint.cwd, {
+      adapter: "codex",
+      instance: this.endpoint.slotInstance,
+    });
     const previousThreadId = endpoint?.sharedThreadId ?? this.currentThreadId;
     const previousChild = this.child;
     this.switching = true;
@@ -484,7 +502,7 @@ export class CodexVisibleClientSupervisor {
         companionConnectedAt: new Date().toISOString(),
       },
       this.endpoint.instanceId,
-      { adapter: "codex" },
+      { adapter: "codex", instance: this.endpoint.slotInstance },
     );
     updateCodexVisibleControl(
       this.endpoint.cwd,
@@ -494,6 +512,7 @@ export class CodexVisibleClientSupervisor {
         codexVisibleThreadId: this.currentThreadId,
       },
       this.endpoint.instanceId,
+      this.endpoint.slotInstance,
     );
   }
 
@@ -520,7 +539,7 @@ export async function runCodexRemoteClientFromEndpoint(
 export async function runCodexRemoteClient(
   options: CodexRemoteClientCliOptions,
 ): Promise<number> {
-  const endpoint = readCodexRuntimeEndpoint(options.cwd);
+  const endpoint = readCodexRuntimeEndpoint(options.cwd, options.slotInstance);
   return await runCodexRemoteClientFromEndpoint(endpoint, {
     extraCliArgs: options.cliArgs,
     sessionStartMode: options.sessionStartMode,

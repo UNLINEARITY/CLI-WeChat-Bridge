@@ -55,20 +55,37 @@
 
 ## 运行模型
 
-所有远程连接都由同一套 daemon 引擎（`src/daemon`）处理，没有独立的单桥接进程。对用户有两种模式：
+所有远程连接都由同一套 daemon 引擎（`src/daemon`）处理，没有独立的单桥接进程。daemon 有两种生命周期：
 
-| 模式 | 入口 | 生命周期 |
-| --- | --- | --- |
-| 单桥接 | 直接启动器（`wechat-codex`、`wecom-claude`、`telegram-pi` 等） | 没有运行中的 daemon 时，启动器在后台拉起临时 daemon（`--ephemeral`）；所有窗口关闭后退出 |
-| 多 CLI | `wechat-daemon`、`wecom-daemon`、`telegram-daemon` | 常驻；窗口关闭后仍在线。已有 daemon 时再运行会把它转为常驻并登记当前目录，而不是替换它 |
+| 入口 | 生命周期 |
+| --- | --- |
+| 直接启动器（`wechat-codex`、`wecom-claude`、`telegram-pi` 等） | 没有运行中的 daemon 时，启动器在后台拉起临时 daemon（`--ephemeral`）；所有窗口关闭后退出 |
+| `wechat-daemon`、`wecom-daemon`、`telegram-daemon` | 只是启动服务，常驻；窗口关闭后仍在线。已有 daemon 时再运行会把它转为常驻并把当前目录设为主目录，而不是替换它 |
+
+### 渐进模式
+
+不论哪种生命周期，桥接都从干净的单桥接开始，按打开的窗口逐级升级，只升不降（`src/daemon/bridge-mode.ts`，状态由 `SlotManager.mode` 持有，不写盘）：
+
+| 模式 | 进入条件 | 远程寻址 | 回复前缀 |
+| --- | --- | --- | --- |
+| 无 | 还没有窗口 | `/codex` 等在当前目录打开第一个 CLI | — |
+| L0 单桥接 | 第一个窗口；它的目录是开启目录 | 不需要 | 无 |
+| L1 多 CLI | 开启目录中再打开另一种 CLI | `/codex` 等切换；同目录同类型拒绝 | `[codex]` |
+| L2 同类型多实例 | 开启目录中再打开同一种 CLI | `/1`、`/2` 切换；`/open` 再开一个；其他类型拒绝 | `[pi-1]` |
+| L3 多目录 | 任一模式下在其他目录打开窗口 | `/cd` 切换目录，`/codex` 等切换 CLI，`/1`、`/2` 切换同目录同类型的多个窗口，`/open` 再开一个；不限制 | `[目录/codex]`，同目录同类型有多个时 `[目录/pi-2]` |
+
+- **准入**：启动器、Codex 附加、远程打开都经过 `SlotManager.ensureSlot` 中同一个 `admitWindow` 判断；拒绝时启动器在终端说明原因，远程命令回复原因。L1 与 L2 互斥，避免 `/pi` 既表示切换又表示新开。
+- **升级通知**：L0→L1、L0→L2、→L3 各有一条不同的通知，说明新开放的命令。欢迎语只列单 CLI 命令；`/cd` 只在 L3 开放，`/all` 在 L1、L2、L3 开放，`/1` 在 L2、L3 开放。
+- **不降级**：窗口关闭不改变模式。临时 daemon 在最后一个窗口关闭后退出；常驻 daemon 在最后一个窗口关闭后回到"无"，当前目录回到主目录。
+- **编号**：实例编号按"目录 + CLI"计，关闭后编号空出，下一个新窗口用最小的空位。
 
 关键规则：
 
-- **slot**：按"工作目录 + CLI + 实例编号"区分（`SlotManager`），一个 daemon 可同时服务多个项目目录。远程用 `/cd` 切换当前目录，用 `/codex` 等切换当前 CLI；只能切换到本机已打开的目录。
-- **窗口**：直接启动器在当前终端运行 CLI，并向 daemon 申请一个跟随窗口的 slot；窗口关闭后 slot 释放（daemon 巡检 companion 存活，四种 CLI 行为一致）。远程切换只在主目录（`wechat-daemon` 的启动目录，或第一个启动器的目录）打开新窗口。
-- **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束。
-- **输出**：只有一个目录时消息前缀为 `[codex]`，有多个目录时为 `[目录/codex]`。审批和问题跨目录时用 `/confirm <编号>`、`/answer #<编号>` 指定。
-- **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`，供显式 `--session-start-mode restore` 恢复。
+- **slot**：按"工作目录 + CLI + 实例编号"区分（`SlotManager`）。实例 1 沿用原有文件名，编号实例的 endpoint 为 `<cli>-<n>-companion-endpoint.json`，会话为 `slot-session-<cli>-<n>.json`，可见客户端以 `--slot-instance <n>` 连接对应 endpoint。
+- **窗口**：直接启动器在当前终端运行 CLI，并向 daemon 申请一个跟随窗口的 slot；窗口关闭后 slot 释放（daemon 巡检 companion 存活，四种 CLI 行为一致）。远程打开新窗口时使用当前选中窗口所在的目录；还没有窗口时使用 daemon 的主目录。
+- **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束；它在模式判断中视同一个 codex 窗口。
+- **输出**：前缀按上表的模式决定。审批和问题跨窗口时用 `/confirm <编号>`、`/answer #<编号>` 指定。
+- **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`（编号实例为 `slot-session-<cli>-<n>.json`），供显式 `--session-start-mode restore` 恢复。
 - **出站**：`OutboundDispatcher`（`src/core`）串行发送文本与附件；目标会话失效时暂存到 `PendingMessageStore`，下一条入站消息到达后补发。
 
 ## Codex 适配器（WebSocket JSON-RPC）

@@ -79,6 +79,8 @@ export type AdapterOptions = {
   codexAttachDaemon?: boolean;
   /** Explicit thread id for codexAttachDaemon; discovered from cwd when omitted. */
   codexAttachThreadId?: string;
+  /** Numbered window of this adapter in its workspace; defaults to 1. */
+  slotInstance?: number;
 };
 
 export type EventSink = (event: BridgeEvent) => void;

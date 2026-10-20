@@ -604,6 +604,7 @@ describe("wechat-daemon handlers: /all broadcast", () => {
   test("cancels when a slot has a pending approval", async () => {
     const env = new FakeDaemonEnvironment();
     const daemon = env.buildDaemon("wecom");
+    await daemon.handleDaemonRequest({ command: "ensure_slot", adapter: "claude", cwd: TEST_CWD, openVisible: false });
     await forwardInput(daemon, { adapter: "codex", text: "warm", conversationId: "conv-1" });
     env.runtime("codex").emit({
       type: "approval_required",
@@ -616,6 +617,18 @@ describe("wechat-daemon handlers: /all broadcast", () => {
     await sendInbound(daemon, { text: "/all anything" });
 
     expect(lastNotice(env)).toContain("/all canceled");
+    expect(env.runtime("codex").inputs).toHaveLength(1);
+  });
+
+  test("is not offered by a single bridge", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "warm", conversationId: "conv-1" });
+    env.wecom.sent.length = 0;
+
+    await sendInbound(daemon, { text: "/all anything" });
+
+    expect(lastNotice(env)).toContain("/all works only while the bridge runs several windows");
     expect(env.runtime("codex").inputs).toHaveLength(1);
   });
 

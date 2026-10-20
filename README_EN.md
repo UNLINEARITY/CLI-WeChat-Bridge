@@ -260,12 +260,25 @@ After starting the daemon, you can switch CLIs from the messaging channel. When 
 
 Daemon behavior:
 
+- The bridge grows with the windows you open (see "Progressive modes" below): with one CLI it is a clean single bridge, and the channel shows only single-CLI commands.
 - One daemon can manage several working directories: running a direct launcher (for example `wechat-claude`) in another directory runs the CLI in that terminal and adds the directory to the running daemon. Send `/cd` in the channel to list directories and `/cd <number>` or `/cd <name>` to switch. Only directories opened on this computer can be selected.
-- With one directory, output is labeled like `[codex]`; with several, all output is labeled like `[directory/codex]`.
+- A single bridge sends output unlabeled; with several CLIs output is labeled like `[codex]`, with several windows of one CLI like `[pi-1]`, and across directories like `[directory/codex]`.
 - Startup takes over and cleans up old standalone bridge processes, stale locks, and old endpoints.
-- It opens a new visible terminal in its startup directory when the requested CLI is not already available; CLIs in other directories start from a direct launcher run in that directory.
-- Important output includes `[codex]`, `[claude]`, `[opencode]`, or `[pi]` labels before being sent back.
+- It opens a new visible terminal in the directory of the current window when the requested CLI is not already available, or in its startup directory while no window is open.
 - Send `/daemon-stop` in the connected channel to stop the daemon.
+
+#### Progressive modes
+
+| Mode | When it starts | Switching from the channel |
+| --- | --- | --- |
+| Single bridge | The first window | Not needed |
+| Several CLIs | Another CLI type in the same directory (for example `wechat-pi`, then `wechat-opencode`) | `/pi`, `/opencode`, and so on |
+| Several windows of one CLI | The same CLI again in the same directory (run `wechat-pi` again), or `/open` in a single bridge | `/1`, `/2`; `/open` opens another |
+| Several directories | Any CLI in another directory | `/cd` for directories, `/codex` and the like for CLIs, `/1`, `/2` for windows of one CLI |
+
+- Each upgrade sends a notice to the channel that lists the commands it opened up.
+- "Several CLIs" and "several windows of one CLI" exclude each other in one directory; the terminal explains a refusal. Opening the CLI in another directory moves to "several directories" instead.
+- Modes never step down: closing windows keeps the mode. An ephemeral daemon started by a launcher exits after its last window closes; `wechat-daemon` starts over with the next window.
 
 You can also select the initial CLI when starting it:
 
@@ -398,8 +411,10 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/claude [prompt]` | Daemon | Switch to Claude Code and optionally forward a prompt |
 | `/opencode [prompt]` | Daemon | Switch to OpenCode and optionally forward a prompt |
 | `/pi [prompt]` | Daemon | Switch to Pi and optionally forward a prompt |
-| `/cd`, `/cd <number or name>` | Daemon | List the working directories the daemon manages, or switch the current one; only directories opened on this computer can be selected |
-| `/all <prompt>` | Daemon | Send the same prompt to all started CLIs in the current directory; unstarted slots are skipped, and the whole dispatch is canceled if any CLI is busy |
+| `/cd`, `/cd <number or name>` | Daemon (several directories) | List the working directories the daemon manages, or switch the current one; only directories opened on this computer can be selected |
+| `/all <prompt>` | Daemon (several CLIs, several windows, several directories) | Send the same prompt to every started window in the current directory; unstarted CLIs are skipped, and the whole dispatch is canceled if any window is busy |
+| `/open` | Daemon (single bridge, several windows, several directories) | Open another window of the current CLI in the current directory |
+| `/1`, `/2`, … (optional prompt) | Daemon (several windows, several directories) | Switch to that numbered window of the current CLI; an optional prompt is forwarded after the switch |
 | `/status` | Direct launch, daemon | Show bridge, daemon, adapter, and workspace state |
 | `/lang`, `/lang zh`, `/lang en` | Direct launch, daemon | View or switch Chinese/English bridge messages; applies immediately and saves the preference. `/language` is an alias |
 | `/model`, `/model <number>` | Codex, Claude Code, OpenCode, Pi | List and switch models for the current session; numbered lists expire after 5 minutes |

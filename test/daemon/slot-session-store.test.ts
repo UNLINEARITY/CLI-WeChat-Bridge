@@ -65,4 +65,27 @@ describe("fileSlotSessionStore", () => {
       null,
     ]);
   });
+
+  test("numbered instances keep separate records without the legacy fallback", () => {
+    const output = runWithDataDir(`
+      import fs from "node:fs";
+      import path from "node:path";
+      import { getWorkspaceChannelPaths } from "./src/wechat/channel-config.ts";
+      import { fileSlotSessionStore } from "./src/daemon/slot-session-store.ts";
+      const { stateFile } = getWorkspaceChannelPaths("/work/app");
+      fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+      fs.writeFileSync(stateFile, JSON.stringify({ adapter: "pi", cwd: "/work/app", sharedSessionId: "legacy-1" }));
+      fileSlotSessionStore.write("/work/app", "pi", { sharedSessionId: "s-2" }, 2);
+      console.log(JSON.stringify([
+        fileSlotSessionStore.read("/work/app", "pi", 2),
+        fileSlotSessionStore.read("/work/app", "pi", 3),
+        fileSlotSessionStore.read("/work/app", "pi"),
+      ]));
+    `);
+    expect(JSON.parse(output)).toEqual([
+      { sharedSessionId: "s-2" },
+      null,
+      { sharedSessionId: "legacy-1" },
+    ]);
+  });
 });

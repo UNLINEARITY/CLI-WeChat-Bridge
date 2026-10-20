@@ -781,7 +781,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async shutdownVisibleClient(): Promise<void> {
-    const endpoint = readLocalCompanionEndpoint(this.options.cwd, { adapter: "codex" });
+    const endpoint = readLocalCompanionEndpoint(this.options.cwd, {
+      adapter: "codex",
+      instance: this.options.slotInstance,
+    });
     if (
       !endpoint?.companionPid ||
       endpoint.instanceId !== this.localClientInstanceId ||
@@ -794,6 +797,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     try {
       await requestCodexVisibleClientShutdown({
         cwd: this.options.cwd,
+        slotInstance: this.options.slotInstance,
         instanceId: endpoint.instanceId,
       });
     } catch {
@@ -812,6 +816,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       runtimeKind: this.runtimeKind,
       instanceId: this.localClientInstanceId,
       kind: this.options.kind,
+      ...(this.options.slotInstance && this.options.slotInstance > 1
+        ? { slotInstance: this.options.slotInstance }
+        : {}),
       port: this.appServerPort,
       token: this.appServerAuthToken,
       renderMode: "headless",
@@ -2471,6 +2478,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private async switchVisibleCodexThread(threadId: string): Promise<string> {
     return await requestCodexVisibleThreadSwitch({
       cwd: this.options.cwd,
+      slotInstance: this.options.slotInstance,
       instanceId: this.localClientInstanceId,
       threadId,
     });

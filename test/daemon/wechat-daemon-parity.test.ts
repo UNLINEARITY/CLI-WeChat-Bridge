@@ -146,6 +146,10 @@ class MemorySessionStore implements SlotSessionStore {
   }
 }
 
+function windowKey(cwd: string, adapter: DaemonAdapterKind, instance = 1): string {
+  return instance > 1 ? `${cwd}|${adapter}-${instance}` : `${cwd}|${adapter}`;
+}
+
 class Env {
   readonly wechat = new FakeWeChatTransport();
   readonly created: FakeRuntime[] = [];
@@ -153,7 +157,7 @@ class Env {
   readonly sessions = new MemorySessionStore();
   readonly restoredWith: Array<string | undefined> = [];
   readonly opened: { cwd: string; adapter: DaemonAdapterKind; title?: string }[] = [];
-  /** Visible windows that are already running, as `cwd|adapter`. */
+  /** Visible windows that are already running, as `cwd|adapter` (`cwd|adapter-2` for numbered ones). */
   readonly alive = new Set<string>();
   /** Treat every visible window as already running (the default). */
   allAlive = true;
@@ -172,10 +176,11 @@ class Env {
     },
     openVisibleClient: (params) => {
       this.opened.push({ cwd: params.cwd, adapter: params.adapter, title: params.title });
-      this.alive.add(`${params.cwd}|${params.adapter}`);
+      this.alive.add(windowKey(params.cwd, params.adapter, params.instance));
       return { command: "fake-visible-client", args: [] };
     },
-    isVisibleClientAlive: (cwd, adapter) => this.allAlive || this.alive.has(`${cwd}|${adapter}`),
+    isVisibleClientAlive: (cwd, adapter, instance) =>
+      this.allAlive || this.alive.has(windowKey(cwd, adapter, instance)),
     daemonLog: (message) => {
       this.logs.push(message);
     },
@@ -248,17 +253,23 @@ function event<T extends BridgeEvent["type"]>(
 }
 
 describe("daemon behaviors kept after the standalone merge", () => {
-  test("prefixes replies from the current adapter with [adapter]", async () => {
+  test("a single bridge sends replies bare; several CLIs prefix them with [adapter]", async () => {
     const env = new Env();
     const daemon = env.buildDaemon();
     await send(daemon, "/claude");
+    const claude = env.latest();
     await send(daemon, "fix the failing test");
     env.wechat.sent.length = 0;
 
-    env.latest().emit(event("final_reply", { text: "Tests pass now." }));
+    claude.emit(event("final_reply", { text: "Tests pass now." }));
     await tick(20);
+    expect(env.texts()).toEqual(["Tests pass now."]);
 
-    expect(env.texts()).toEqual(["[claude]\nTests pass now."]);
+    await send(daemon, "/codex");
+    env.wechat.sent.length = 0;
+    claude.emit(event("final_reply", { text: "Still green." }));
+    await tick(20);
+    expect(env.texts()).toEqual(["[claude]\nStill green."]);
   });
 
   test("disposes a slot after a fatal error and rebuilds it on the next switch", async () => {
@@ -339,7 +350,7 @@ const questionRequest = {
 };
 
 describe("multi-directory daemon", () => {
-  test("a launcher in another directory adds a slot there and announces it", async () => {
+  test("a launcher in another directory adds a slot there and announces the multi-directory mode", async () => {
     const env = new Env();
     const daemon = env.buildDaemon();
     await send(daemon, "/claude");
@@ -350,8 +361,8 @@ describe("multi-directory daemon", () => {
     expect(env.runtimeIn(OTHER_CWD, "codex")).toBeDefined();
     expect(daemon.getStatus().cwd).toBe(TEST_CWD);
     expect(daemon.getStatus().activeAdapter).toBe("claude");
-    expect(env.texts().at(-1)).toContain("other-app/codex");
-    expect(env.texts().at(-1)).toContain("/cd other-app");
+    expect(env.texts().at(-1)).toContain("other-app/codex joined");
+    expect(env.texts().at(-1)).toContain("/cd");
   });
 
   test("/cd lists directories and switches by number or name", async () => {
@@ -378,12 +389,23 @@ describe("multi-directory daemon", () => {
     const env = new Env();
     const daemon = env.buildDaemon();
     await send(daemon, "/claude");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
 
     await send(daemon, "/cd /etc");
 
     expect(env.texts().at(-1)).toContain("No directory matches /etc");
     expect(daemon.getStatus().cwd).toBe(TEST_CWD);
-    expect(env.created).toHaveLength(1);
+    expect(env.created).toHaveLength(2);
+  });
+
+  test("/cd is not offered before the bridge spans several directories", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+
+    await send(daemon, "/cd");
+
+    expect(env.texts().at(-1)).toContain("/cd works only once the bridge spans several directories");
   });
 
   test("/cd asks for a number when two directories share a name", async () => {
@@ -395,7 +417,8 @@ describe("multi-directory daemon", () => {
     await send(daemon, "/cd app");
 
     expect(env.texts().at(-1)).toContain("Several directories are named app");
-    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    // The first window became current, as nothing else was.
+    expect(daemon.getStatus().cwd).toBe("/tmp/a/app");
   });
 
   test("output from another directory is prefixed with [directory/adapter]", async () => {
@@ -523,7 +546,7 @@ describe("multi-directory daemon", () => {
 
     await send(daemon, "also update the README");
     expect(codex.inputs).toHaveLength(0);
-    expect(env.texts().at(-1)).toContain("[codex]");
+    expect(env.texts().at(-1)).toContain("Queued for delivery");
 
     codex.state = { ...codex.state, status: "idle", activeTurnOrigin: undefined, activeTurnId: undefined };
     codex.emit(event("task_complete", {}));
@@ -534,7 +557,7 @@ describe("multi-directory daemon", () => {
 });
 
 describe("visibility fixes after the first field test", () => {
-  test("a remote switch does not open a window outside the home directory", async () => {
+  test("a remote switch opens the window in the current directory", async () => {
     const env = new Env();
     env.allAlive = false;
     const daemon = env.buildDaemon();
@@ -543,16 +566,13 @@ describe("visibility fixes after the first field test", () => {
     env.alive.add(`${OTHER_CWD}|pi`);
     await send(daemon, "/cd other-app");
     env.wechat.sent.length = 0;
-    const createdBefore = env.created.length;
 
     await send(daemon, "/codex");
 
-    expect(env.created).toHaveLength(createdBefore);
-    expect(env.opened.filter((entry) => entry.cwd === OTHER_CWD && entry.adapter === "codex")).toEqual([]);
-    expect(env.texts().at(-1)).toContain("other-app has no codex");
-    expect(env.texts().at(-1)).toContain("wechat-codex");
-    expect(env.texts().at(-1)).toContain("daemon-parity has codex. Send /cd daemon-parity");
-    expect(daemon.getStatus().activeAdapter).toBe("pi");
+    expect(env.opened.filter((entry) => entry.cwd === OTHER_CWD && entry.adapter === "codex"))
+      .toHaveLength(1);
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("codex");
   });
 
   test("a remote switch still opens a window in the home directory, titled with it", async () => {
@@ -706,7 +726,7 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
     expect(env.logs.some((line) => line.startsWith("slot_released: adapter=codex"))).toBe(true);
   });
 
-  test("promote keeps an ephemeral daemon running and moves home to the new directory", async () => {
+  test("promote keeps an ephemeral daemon running; once empty it opens windows in the new home", async () => {
     const env = new Env();
     env.allAlive = false;
     const daemon = env.buildDaemon();
@@ -719,7 +739,7 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
 
     expect(promoted).toEqual({ pid: process.pid, wasEphemeral: true });
     expect(env.exitCodes).toEqual([]);
-    await send(daemon, "/cd other-app");
+    expect(daemon.getStatus().mode).toBe("none");
     await send(daemon, "/claude");
     expect(env.opened.map((entry) => `${entry.cwd}|${entry.adapter}`)).toEqual([`${OTHER_CWD}|claude`]);
   });
@@ -763,19 +783,205 @@ describe("one engine, single-bridge and multi-CLI modes", () => {
     expect(env.logs.some((line) => line.startsWith("window_never_connected: adapter=claude"))).toBe(true);
   });
 
-  test("a second launcher for a slot whose window is open is refused without resetting it", async () => {
+  test("a second launcher of the same CLI opens a numbered instance without resetting the first", async () => {
     const env = new Env();
     env.allAlive = false;
     const daemon = env.buildDaemon();
     await launcherSlot(daemon, TEST_CWD, "claude");
     env.alive.add(`${TEST_CWD}|claude`);
     const claude = env.latest();
+    env.wechat.sent.length = 0;
 
     const claim = await launcherSlot(daemon, TEST_CWD, "claude");
 
-    expect(claim.alreadyRunning).toBe(true);
-    expect(env.created).toHaveLength(1);
+    expect(claim.instance).toBe(2);
+    expect(env.created).toHaveLength(2);
     expect(claude.inputs).toEqual([]);
+    expect(env.texts().at(-1)).toContain("A second claude opened");
+  });
+});
+
+describe("progressive bridge modes", () => {
+  const status = (daemon: BridgeDaemon) =>
+    (daemon as unknown as { slotManager: { mode: { kind: string } } }).slotManager.mode.kind;
+
+  test("the first window is a clean single bridge", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    expect(status(daemon)).toBe("none");
+
+    await launcherSlot(daemon, TEST_CWD, "pi");
+
+    expect(status(daemon)).toBe("single");
+    expect(env.texts().some((text) => text.includes("joined") || text.includes("opened"))).toBe(false);
+  });
+
+  test("another CLI type in the same directory moves to multi-CLI mode, which refuses a repeat", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    env.alive.add(`${TEST_CWD}|pi`);
+
+    await launcherSlot(daemon, TEST_CWD, "opencode");
+    expect(status(daemon)).toBe("multi_type");
+    expect(env.texts().at(-1)).toContain("opencode joined");
+    expect(env.texts().at(-1)).toContain("/opencode /pi");
+
+    const repeat = await launcherSlot(daemon, TEST_CWD, "pi");
+    expect(repeat.refused).toBe("type_already_open");
+    expect(env.created).toHaveLength(2);
+  });
+
+  test("multi-instance mode refuses another CLI type in its directory", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    env.alive.add(`${TEST_CWD}|pi`);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    expect(status(daemon)).toBe("multi_instance");
+
+    const other = await launcherSlot(daemon, TEST_CWD, "codex");
+
+    expect(other.refused).toBe("instance_mode_type_locked");
+    expect(env.created).toHaveLength(2);
+  });
+
+  test("a window in another directory moves any mode to the multi-directory mode", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    env.alive.add(`${TEST_CWD}|pi`);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+
+    const other = await launcherSlot(daemon, OTHER_CWD, "codex");
+
+    expect(other.refused).toBeUndefined();
+    expect(status(daemon)).toBe("multi_workspace");
+    expect(env.texts().at(-1)).toContain("other-app/codex joined");
+  });
+
+  test("closing windows never steps down; a resident daemon left empty starts over", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    env.alive.add(`${TEST_CWD}|pi`);
+    await launcherSlot(daemon, TEST_CWD, "codex");
+    env.alive.add(`${TEST_CWD}|codex`);
+    const slots = (daemon as unknown as {
+      slotManager: { releaseClosedWindows(nowMs?: number): void };
+    }).slotManager;
+    slots.releaseClosedWindows();
+
+    env.alive.delete(`${TEST_CWD}|codex`);
+    slots.releaseClosedWindows();
+    slots.releaseClosedWindows();
+    expect(status(daemon)).toBe("multi_type");
+
+    env.alive.delete(`${TEST_CWD}|pi`);
+    slots.releaseClosedWindows();
+    slots.releaseClosedWindows();
+    expect(status(daemon)).toBe("none");
+  });
+});
+
+describe("remote commands per bridge mode", () => {
+  test("/open in a single bridge opens a numbered window and moves to multi-instance mode", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+
+    await send(daemon, "/open");
+
+    expect(env.opened.map((entry) => entry.title)).toEqual([
+      "wechat-pi · daemon-parity",
+      "wechat-pi-2 · daemon-parity",
+    ]);
+    expect(daemon.getStatus().mode).toBe("multi_instance");
+    expect(daemon.getStatus().activeInstance).toBe(2);
+    expect(env.texts().some((text) => text.includes("A second pi opened"))).toBe(true);
+  });
+
+  test("/1 and /2 switch between windows and prefix replies with the number", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const first = env.latest();
+    await send(daemon, "/open");
+    const second = env.latest();
+
+    await send(daemon, "/1 run the tests");
+    expect(first.inputs.at(-1)).toContain("run the tests");
+    expect(second.inputs).toEqual([]);
+
+    await send(daemon, "/3");
+    expect(env.texts().at(-1)).toContain("There is no pi-3. Open: /1, /2");
+
+    env.wechat.sent.length = 0;
+    second.emit(event("final_reply", { text: "Done." }));
+    await tick(20);
+    expect(env.texts()).toEqual(["[pi-2]\nDone."]);
+  });
+
+  test("multi-instance mode refuses switching to another CLI type", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    await send(daemon, "/open");
+    const created = env.created.length;
+
+    await send(daemon, "/codex");
+
+    expect(env.created).toHaveLength(created);
+    expect(env.texts().at(-1)).toContain("several pi windows");
+    expect(daemon.getStatus().activeAdapter).toBe("pi");
+  });
+
+  test("multi-CLI mode refuses /open and does not offer /1", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    await send(daemon, "/codex");
+
+    await send(daemon, "/open");
+    expect(env.texts().at(-1)).toContain("this directory already has codex");
+
+    await send(daemon, "/1");
+    expect(env.texts().at(-1)).toContain("not available in this mode");
+  });
+
+  test("/all in multi-instance mode reaches every window", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const first = env.latest();
+    await send(daemon, "/open");
+    const second = env.latest();
+
+    await send(daemon, "/all check status");
+
+    expect(first.inputs.at(-1)).toContain("check status");
+    expect(second.inputs.at(-1)).toContain("check status");
+    expect(env.texts().at(-1)).not.toContain("codex");
+  });
+
+  test("/status of a single bridge names only the CLI it runs", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+
+    await send(daemon, "/status");
+
+    const status = env.texts().at(-1)!;
+    expect(status).toContain("Mode: single bridge");
+    expect(status).toContain("pi: ");
+    expect(status).not.toContain("codex");
   });
 });
 
@@ -807,12 +1013,23 @@ describe("Codex attach through the daemon", () => {
     expect(env.latest().lifecycle).toBe("persistent");
     expect(daemon.getStatus().slots).toHaveLength(1);
     expect(env.exitCodes).toEqual([]);
-
-    await send(daemon, "/cd");
-    expect(env.texts().at(-1)).toContain("other-app (codex (attached))");
+    expect(daemon.getStatus().mode).toBe("single");
   });
 
-  test("attaching is refused while the directory already has a codex slot", async () => {
+  test("attaching counts as a codex window: refused where multi-CLI mode already has codex", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, OTHER_CWD, "codex");
+    await launcherSlot(daemon, OTHER_CWD, "pi");
+
+    const claim = await attach(daemon);
+
+    expect(claim.refused).toBe("type_already_open");
+    expect(env.created).toHaveLength(2);
+  });
+
+  test("attaching next to a single codex window opens a second codex instance", async () => {
     const env = new Env();
     env.allAlive = false;
     const daemon = env.buildDaemon();
@@ -820,8 +1037,8 @@ describe("Codex attach through the daemon", () => {
 
     const claim = await attach(daemon);
 
-    expect(claim.alreadyRunning).toBe(true);
-    expect(env.created).toHaveLength(1);
+    expect(claim.instance).toBe(2);
+    expect(env.created).toHaveLength(2);
   });
 });
 

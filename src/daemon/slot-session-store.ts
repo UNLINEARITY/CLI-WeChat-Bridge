@@ -21,8 +21,8 @@ export type SlotSessionRecord = {
 };
 
 export type SlotSessionStore = {
-  read(cwd: string, adapter: DaemonAdapterKind): SlotSessionRecord | null;
-  write(cwd: string, adapter: DaemonAdapterKind, record: SlotSessionRecord): void;
+  read(cwd: string, adapter: DaemonAdapterKind, instance?: number): SlotSessionRecord | null;
+  write(cwd: string, adapter: DaemonAdapterKind, record: SlotSessionRecord, instance?: number): void;
 };
 
 /** The session fields of an adapter state worth persisting. */
@@ -42,8 +42,10 @@ export function sameSlotSession(left: SlotSessionRecord | null, right: SlotSessi
     left!.transcriptPath === right.transcriptPath;
 }
 
-function slotSessionFile(cwd: string, adapter: DaemonAdapterKind): string {
-  return path.join(getWorkspaceChannelPaths(cwd).workspaceDir, `slot-session-${adapter}.json`);
+/** The first instance keeps the original file name; numbered ones get their own. */
+function slotSessionFile(cwd: string, adapter: DaemonAdapterKind, instance = 1): string {
+  const name = instance > 1 ? `${adapter}-${instance}` : adapter;
+  return path.join(getWorkspaceChannelPaths(cwd).workspaceDir, `slot-session-${name}.json`);
 }
 
 function readJson(filePath: string): Record<string, unknown> | null {
@@ -67,14 +69,17 @@ function optionalString(value: unknown): string | undefined {
  * versions is read once as a fallback, so restores survive the upgrade.
  */
 export const fileSlotSessionStore: SlotSessionStore = {
-  read(cwd, adapter) {
-    const record = readJson(slotSessionFile(cwd, adapter));
+  read(cwd, adapter, instance = 1) {
+    const record = readJson(slotSessionFile(cwd, adapter, instance));
     if (record) {
       return {
         sharedSessionId: optionalString(record.sharedSessionId),
         resumeConversationId: optionalString(record.resumeConversationId),
         transcriptPath: optionalString(record.transcriptPath),
       };
+    }
+    if (instance > 1) {
+      return null; // Older versions never ran numbered instances.
     }
     const legacy = readJson(getWorkspaceChannelPaths(cwd).stateFile) as Partial<BridgeState> | null;
     const sharedSessionId = resolveRestorableSharedSessionId(legacy, { adapter, cwd });
@@ -87,8 +92,8 @@ export const fileSlotSessionStore: SlotSessionStore = {
       transcriptPath: optionalString(legacy.transcriptPath),
     };
   },
-  write(cwd, adapter, record) {
-    const filePath = slotSessionFile(cwd, adapter);
+  write(cwd, adapter, record, instance = 1) {
+    const filePath = slotSessionFile(cwd, adapter, instance);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     writeJsonFileAtomic(filePath, {
       ...record,

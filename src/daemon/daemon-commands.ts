@@ -12,7 +12,7 @@ import type { BridgeChannelId } from "../core/channel-types.ts";
 import { getBridgeChannelDisplayName, isBridgeChannelId } from "../core/channel-types.ts";
 import type { DaemonAdapterKind, DaemonStatus } from "./daemon-link.ts";
 import { DAEMON_ADAPTERS, isDaemonAdapterKind } from "./daemon-shared.ts";
-import { isSameWorkspace, workspaceLabels } from "./daemon-slot.ts";
+import { isSameWorkspace, slotName, workspaceLabels } from "./daemon-slot.ts";
 
 export type DaemonCliOptions = {
   cwd: string;
@@ -222,22 +222,33 @@ function formatSlotStatusLine(slot: DaemonStatus["slots"][number]): string {
     slot.pendingUserInput ? t("status.pendingInput") : "",
     slot.companionPid ? `companion_pid=${slot.companionPid}` : "",
   ].filter(Boolean);
-  return `${slot.adapter}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`;
+  return `${slotName(slot)}: ${slot.status}${flags.length ? ` (${flags.join(", ")})` : ""}`;
 }
 
 export function formatDaemonStatus(status: DaemonStatus): string {
+  const active = status.activeAdapter
+    ? slotName({ adapter: status.activeAdapter, instance: status.activeInstance ?? 1 })
+    : t("status.none");
   const lines = [
     t("status.daemon", { channel: status.channelId ?? "wechat" }),
+    ...(status.mode ? [`${t("status.label.mode")}: ${t(`status.mode.${status.mode}`)}`] : []),
     `${t("status.label.cwd")}: ${status.cwd}`,
-    `${t("status.label.active")}: ${status.activeAdapter ?? t("status.none")}`,
+    `${t("status.label.active")}: ${active}`,
     `${t("status.label.started_at")}: ${status.startedAt}`,
   ];
 
   const workspaces = status.workspaces ?? [status.cwd];
   const current = status.slots.filter((slot) => isSameWorkspace(slot.cwd, status.cwd));
+  // Modes that switch by CLI type list every type; the others list only
+  // what runs, so a single bridge never names CLIs it does not use.
+  const listsEveryType = !status.mode || status.mode === "multi_type" || status.mode === "multi_workspace";
   for (const adapter of DAEMON_ADAPTERS) {
-    const slot = current.find((entry) => entry.adapter === adapter);
-    lines.push(slot ? formatSlotStatusLine(slot) : `${adapter}: ${t("status.notStarted")}`);
+    const running = current.filter((entry) => entry.adapter === adapter);
+    if (running.length > 0) {
+      lines.push(...running.map(formatSlotStatusLine));
+    } else if (listsEveryType) {
+      lines.push(`${adapter}: ${t("status.notStarted")}`);
+    }
   }
 
   // Other workspaces list only their running slots.

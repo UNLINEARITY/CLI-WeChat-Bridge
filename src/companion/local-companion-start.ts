@@ -347,6 +347,11 @@ export async function connectToDaemon(
 export type DaemonSlotClaim = {
   created: boolean;
   activated: boolean;
+  /** Numbered window the daemon assigned; absent from older daemons. */
+  instance?: number;
+  /** The bridge mode refused another window (see bridge-mode.ts). */
+  refused?: "type_already_open" | "instance_mode_type_locked";
+  /** Older daemons: the window is already open. */
   alreadyRunning?: boolean;
   sharedThreadId?: string;
 };
@@ -382,12 +387,14 @@ export async function claimDaemonSlot(
 export async function runVisibleClient(
   options: LocalCompanionStartCliOptions,
   runners: VisibleClientRunners = {},
+  slotInstance?: number,
 ): Promise<number> {
   // Keep the foreground client in-process so Windows does not briefly flash an
   // extra bootstrap console before the real companion UI appears.
   if (options.adapter === "codex") {
     return await (runners.codexRemoteClient ?? runCodexRemoteClient)({
       cwd: options.cwd,
+      slotInstance,
       cliArgs: options.cliArgs,
       sessionStartMode: options.sessionStartMode,
     });
@@ -396,6 +403,7 @@ export async function runVisibleClient(
   return await (runners.localCompanion ?? runLocalCompanion)({
     adapter: options.adapter,
     cwd: options.cwd,
+    slotInstance,
     sessionStartMode: options.sessionStartMode,
     cliArgs: options.cliArgs,
   });
@@ -459,14 +467,27 @@ export async function runLocalCompanionStart(
 
   const endpoint = await connectToDaemon(options);
   const claim = await claimDaemonSlot(options, endpoint);
-  if (claim.alreadyRunning) {
-    log(
-      options,
-      `${options.adapter} is already running for ${options.cwd} in another terminal. Use that window, or close it and run this command again.`,
-    );
+  const refusal = describeClaimRefusal(options, claim);
+  if (refusal) {
+    log(options, refusal);
     return 1;
   }
-  return await runVisibleClient(options);
+  return await runVisibleClient(options, {}, claim.instance);
+}
+
+/** Terminal text for a window the bridge mode refused, or null. */
+export function describeClaimRefusal(
+  options: Pick<LocalCompanionStartCliOptions, "adapter" | "cwd" | "channelId">,
+  claim: DaemonSlotClaim,
+): string | null {
+  const channel = options.channelId ?? "wechat";
+  if (claim.refused === "instance_mode_type_locked") {
+    return `The ${channel} bridge is running several windows of one CLI type in ${options.cwd}, so ${options.adapter} cannot join this directory. Run ${channel}-${options.adapter} in another directory, or close those windows first.`;
+  }
+  if (claim.refused === "type_already_open" || claim.alreadyRunning) {
+    return `${options.adapter} is already running for ${options.cwd} in another terminal, and this bridge runs several CLI types. Use that window, close it and run this command again, or run ${channel}-${options.adapter} in another directory.`;
+  }
+  return null;
 }
 
 export function formatAttachedBridgeMessage(
@@ -495,11 +516,9 @@ async function runAttachCurrentSession(
 
   const endpoint = await connectToDaemon(options, deps);
   const claim = await attachDaemonSlot(options, endpoint, deps);
-  if (claim.alreadyRunning) {
-    log(
-      options,
-      `codex is already connected for ${options.cwd}. Close that Codex window, or stop its slot, before attaching.`,
-    );
+  const refusal = describeClaimRefusal(options, claim);
+  if (refusal) {
+    log(options, refusal);
     return 1;
   }
   if (!claim.sharedThreadId) {

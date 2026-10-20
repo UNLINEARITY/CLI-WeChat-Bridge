@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import type { BridgeModeKind, WindowRefusal } from "./bridge-mode.ts";
 import type { SlotSessionRecord } from "./slot-session-store.ts";
 import path from "node:path";
 import { BridgeController } from "../bridge/bridge-controller.ts";
@@ -41,6 +42,8 @@ export type DaemonSlot = {
   attached: boolean;
   /** When the slot was created (ms). */
   createdAtMs: number;
+  /** When the operator last switched to this slot (ms); 0 if never. */
+  activatedAtMs: number;
   /** A window has been seen connected for this slot. */
   windowSeen?: boolean;
   /** Consecutive window checks that found no connected window. */
@@ -121,20 +124,24 @@ export type EnsureSlotOptions = {
   cwd?: string;
   /** Make the slot the current one once it is ready; defaults to true. */
   activate?: boolean;
-  /**
-   * Remote requests may open a visible window only in the home workspace;
-   * launchers running locally pass false. Defaults to true.
-   */
-  restrictToHome?: boolean;
   /** End the slot when its visible window closes. */
   boundToWindow?: boolean;
   /** Codex only: attach to a live shared-daemon thread instead of a window. */
   codexAttach?: { threadId?: string };
+  /**
+   * Numbered window of the adapter in the workspace. Defaults to the one the
+   * operator is on there, else the most recently used.
+   */
+  instance?: number;
+  /** Ask for another window of the adapter even when the workspace has one. */
+  newInstance?: boolean;
 };
 
 export type EnsureSlotResult = {
   activeAdapter: DaemonAdapterKind;
   cwd: string;
+  /** Instance number of the slot the call prepared. */
+  instance: number;
   created: boolean;
   openedVisible: boolean;
   visibleConnected: boolean;
@@ -142,11 +149,12 @@ export type EnsureSlotResult = {
   activated: boolean;
   activationVersion: number;
   previousActiveAdapter?: DaemonAdapterKind;
+  previousActiveInstance?: number;
   previousActiveCwd: string;
-  /** Refused: no window exists and remote requests cannot open one here. */
-  outsideHome?: boolean;
-  /** Refused: a launcher asked for a slot whose window is already open. */
-  alreadyRunning?: boolean;
+  /** Refused by the bridge mode: the new window would mix directions. */
+  refused?: WindowRefusal;
+  /** Admitting the slot moved the bridge up to this mode. */
+  upgradedTo?: BridgeModeKind;
   /** Thread the slot follows after the call (reported to attach launchers). */
   sharedThreadId?: string;
 };

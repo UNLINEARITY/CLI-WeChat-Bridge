@@ -47,6 +47,7 @@ import {
 } from "./daemon-slot.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
 import { SlotManager } from "./slot-manager.ts";
+import { modeAllowsCommand } from "./bridge-mode.ts";
 
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
 
@@ -268,27 +269,79 @@ export class InboundRouter {
   /** Reply for a switch that did not activate, naming the workspace. */
   private describeSwitchFailure(result: EnsureSlotResult): string {
     const slots = this.host.slotManager;
-    if (result.outsideHome) {
-      const label = slots.workspaceLabel(result.cwd);
-      const lines = [t("daemon.outsideHome", {
-        label,
-        adapter: result.activeAdapter,
-        launcher: `${this.host.channelId}-${result.activeAdapter}`,
-      })];
-      for (const cwd of slots.workspaces()) {
-        if (slots.getSlot(cwd, result.activeAdapter)) {
-          lines.push(t("daemon.outsideHome.elsewhere", {
-            label: slots.workspaceLabel(cwd),
-            adapter: result.activeAdapter,
-          }));
-        }
-      }
-      return lines.join("\n");
+    if (result.refused) {
+      const launcher = `${this.host.channelId}-${result.activeAdapter}`;
+      const mode = slots.mode;
+      return result.refused === "instance_mode_type_locked"
+        ? t("daemon.refused.instanceLocked", {
+          adapter: mode.kind === "multi_instance" ? mode.adapter : result.activeAdapter,
+          target: result.activeAdapter,
+          launcher,
+        })
+        : t("daemon.refused.typeOpen", { adapter: result.activeAdapter, launcher });
     }
     return t("daemon.activateFailed", {
       adapter: slots.sourceName(result.cwd, result.activeAdapter),
       detail: formatDaemonSwitchResultDetail(result),
     });
+  }
+
+  /**
+   * `/open` opens another window of the current CLI in the current
+   * directory; `/2` switches to that numbered window. Returns the message to
+   * keep routing (a prompt after `/2`), null once handled, or undefined when
+   * the text is neither command.
+   */
+  private async handleInstanceCommand(
+    message: BridgeInboundMessage,
+  ): Promise<BridgeInboundMessage | null | undefined> {
+    const text = message.text.trim();
+    const open = /^\/open$/i.test(text);
+    const numbered = text.match(/^\/([1-9]\d?)(?:\s+([\s\S]+))?$/);
+    if (!open && !numbered) {
+      return undefined;
+    }
+    const slots = this.host.slotManager;
+    const active = slots.getActiveSlot();
+    if (!active) {
+      await this.host.queueMessage(message.senderId, formatNoActiveAdapterMessage());
+      return null;
+    }
+    const instance = numbered ? Number(numbered[1]) : undefined;
+    if (instance !== undefined) {
+      if (!modeAllowsCommand(slots.mode, "instance")) {
+        await this.host.queueMessage(message.senderId, t("daemon.mode.instanceUnavailable"));
+        return null;
+      }
+      if (!slots.getSlot(active.cwd, active.adapter, instance)) {
+        await this.host.queueMessage(message.senderId, t("daemon.instance.notFound", {
+          name: `${active.adapter}-${instance}`,
+          list: slots.instancesOf(active.cwd, active.adapter).map((slot) => `/${slot.instance}`).join(", "),
+        }));
+        return null;
+      }
+    }
+    const result = await slots.ensureSlot(active.adapter, {
+      cwd: active.cwd,
+      openVisible: true,
+      reuseExistingVisible: true,
+      ...(instance !== undefined ? { instance } : { newInstance: true }),
+    });
+    if (!result.activated) {
+      await this.host.queueMessage(message.senderId, this.describeSwitchFailure(result));
+      return null;
+    }
+    const slot = slots.getActiveSlot()!;
+    this.bindCurrentConversation(slot);
+    const remainder = numbered?.[2]?.trim();
+    if (remainder) {
+      return { ...message, text: remainder };
+    }
+    await this.host.queueMessage(message.senderId, t("daemon.activeTerminal", {
+      adapter: slots.slotSourceName(slot),
+      detail: formatDaemonSwitchResultDetail(result),
+    }));
+    return null;
   }
 
   async handleInboundMessage(message: BridgeInboundMessage): Promise<void> {
@@ -334,6 +387,14 @@ export class InboundRouter {
       }
     }
 
+    const afterInstanceCommand = await this.handleInstanceCommand(message);
+    if (afterInstanceCommand === null) {
+      return;
+    }
+    if (afterInstanceCommand) {
+      message = afterInstanceCommand;
+    }
+
     const switchDirective = parseDaemonSwitchDirective(message.text);
     if (switchDirective) {
       const result = await this.host.slotManager.ensureSlot(switchDirective.adapter, {
@@ -352,7 +413,7 @@ export class InboundRouter {
         await this.host.queueMessage(
           message.senderId,
           t("daemon.activeTerminal", {
-            adapter: this.host.slotManager.sourceName(result.cwd, switchDirective.adapter),
+            adapter: this.host.slotManager.slotSourceName(this.host.slotManager.getActiveSlot()!),
             detail,
           }),
         );
@@ -384,6 +445,13 @@ export class InboundRouter {
 
     const workspaceCommand = message.text.trim().match(/^\/cd(?:\s+([\s\S]+))?$/i);
     if (workspaceCommand) {
+      if (!modeAllowsCommand(this.host.slotManager.mode, "cd")) {
+        await this.host.queueMessage(
+          message.senderId,
+          t("daemon.mode.cdUnavailable", { launcher: `${this.host.channelId}-*` }),
+        );
+        return;
+      }
       await this.host.controls.handleWorkspaceCommand(
         message.senderId,
         workspaceCommand[1]?.trim() ?? "",
@@ -506,7 +574,7 @@ export class InboundRouter {
     if (!visibleResult.activated) {
       await this.host.queueMessage(
         message.senderId,
-        visibleResult.outsideHome
+        visibleResult.refused
           ? this.describeSwitchFailure(visibleResult)
           : this.host.slotManager.prefix(slot, formatDaemonSwitchResultDetail(visibleResult)),
       );
@@ -597,7 +665,7 @@ export class InboundRouter {
         adapter,
         conversationId,
         reason: "not_activated",
-        message: ensureResult.outsideHome
+        message: ensureResult.refused
           ? this.describeSwitchFailure(ensureResult)
           : formatDaemonSwitchResultDetail(ensureResult),
       };
@@ -631,6 +699,7 @@ export class InboundRouter {
         ensureResult.activationVersion,
         previousActiveAdapter,
         ensureResult.previousActiveCwd,
+        ensureResult.previousActiveInstance,
       );
       return {
         forwarded: false,
@@ -647,6 +716,7 @@ export class InboundRouter {
         ensureResult.activationVersion,
         previousActiveAdapter,
         ensureResult.previousActiveCwd,
+        ensureResult.previousActiveInstance,
       );
       throw error;
     }

@@ -214,13 +214,19 @@ export function getWorkspaceChannelPaths(cwd: string): WorkspaceChannelPaths {
   };
 }
 
+/**
+ * Endpoint file of one adapter window in a workspace. The first instance
+ * keeps the original name; later numbered instances get their own file.
+ */
 export function getWorkspaceAdapterEndpointFile(
   cwd: string,
   adapter: WorkspaceEndpointAdapter,
+  instance = 1,
 ): string {
+  const name = instance > 1 ? `${adapter}-${instance}` : adapter;
   return path.join(
     getWorkspaceChannelPaths(cwd).workspaceDir,
-    `${adapter}-companion-endpoint.json`,
+    `${name}-companion-endpoint.json`,
   );
 }
 

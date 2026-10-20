@@ -16,10 +16,12 @@ export class BridgeController {
   private endpointInstanceId: string | null = null;
   private readonly adapter: BridgeAdapter;
   private readonly cwd: string;
+  private readonly instance: number;
 
-  constructor(adapter: BridgeAdapter, cwd: string) {
+  constructor(adapter: BridgeAdapter, cwd: string, instance = 1) {
     this.adapter = adapter;
     this.cwd = cwd;
+    this.instance = instance;
   }
 
   syncLocalClientEndpoint(): void {
@@ -35,6 +37,7 @@ export class BridgeController {
 
     const existing = readLocalCompanionEndpoint(this.cwd, {
       adapter: endpoint.kind,
+      instance: endpoint.slotInstance,
     });
     const adapterState = this.adapter.getState();
     const nextEndpoint =
@@ -66,6 +69,7 @@ export class BridgeController {
   clearLocalClientEndpoint(): void {
     clearLocalCompanionEndpoint(this.cwd, this.endpointInstanceId ?? undefined, {
       adapter: this.adapter.getState().kind,
+      instance: this.instance,
     });
     this.endpointInstanceId = null;
   }

@@ -120,8 +120,9 @@ export function sendCodexVisibleShutdownResponse(
 function resolveCodexControlEndpoint(
   cwd: string,
   instanceId: string,
+  slotInstance?: number,
 ): LocalCompanionEndpoint {
-  const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex", instance: slotInstance });
   if (!endpoint || endpoint.kind !== "codex" || endpoint.instanceId !== instanceId) {
     throw new Error(`The visible Codex client for ${cwd} is no longer attached to this runtime.`);
   }
@@ -135,11 +136,13 @@ function resolveCodexControlEndpoint(
 
 export async function requestCodexVisibleThreadSwitch(params: {
   cwd: string;
+  /** Numbered codex window in cwd; defaults to 1. */
+  slotInstance?: number;
   instanceId: string;
   threadId: string;
   timeoutMs?: number;
 }): Promise<string> {
-  const endpoint = resolveCodexControlEndpoint(params.cwd, params.instanceId);
+  const endpoint = resolveCodexControlEndpoint(params.cwd, params.instanceId, params.slotInstance);
   const requestId = crypto.randomUUID();
   const timeoutMs = params.timeoutMs ?? CODEX_VISIBLE_SWITCH_TIMEOUT_MS;
 
@@ -231,10 +234,12 @@ export async function requestCodexVisibleThreadSwitch(params: {
 
 export async function requestCodexVisibleClientShutdown(params: {
   cwd: string;
+  /** Numbered codex window in cwd; defaults to 1. */
+  slotInstance?: number;
   instanceId: string;
   timeoutMs?: number;
 }): Promise<void> {
-  const endpoint = resolveCodexControlEndpoint(params.cwd, params.instanceId);
+  const endpoint = resolveCodexControlEndpoint(params.cwd, params.instanceId, params.slotInstance);
   const requestId = crypto.randomUUID();
   const timeoutMs = params.timeoutMs ?? 5_000;
 

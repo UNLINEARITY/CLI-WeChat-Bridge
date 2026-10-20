@@ -31,6 +31,7 @@ import {
   formatNoActiveAdapterMessage,
 } from "./daemon-commands.ts";
 import type { SlotManager } from "./slot-manager.ts";
+import { modeAllowsCommand } from "./bridge-mode.ts";
 import {
   type DaemonSlot,
   type EnsureSlotOptions,
@@ -474,13 +475,22 @@ export class DaemonControlCommands {
     return false;
   }
 
-  /** `/all` broadcasts to the slots of the current workspace only. */
+  /**
+   * `/all` broadcasts to every window of the current workspace: all CLI
+   * types, or all numbered windows of one CLI. A single bridge has no use
+   * for it.
+   */
   private async handleBroadcastCommand(
     message: BridgeInboundMessage,
     text: string,
   ): Promise<void> {
-    const cwd = this.host.slotManager.activeCwd;
-    const startedSlots = this.host.slotManager.slotsIn(cwd);
+    const slots = this.host.slotManager;
+    if (!modeAllowsCommand(slots.mode, "all")) {
+      await this.host.queueMessage(message.senderId, t("daemon.mode.allUnavailable"));
+      return;
+    }
+    const cwd = slots.activeCwd;
+    const startedSlots = slots.slotsIn(cwd);
     if (startedSlots.length === 0) {
       await this.host.queueMessage(
         message.senderId,
@@ -491,7 +501,7 @@ export class DaemonControlCommands {
 
     const busySlots = startedSlots.filter((slot) => this.isSlotBusyForBroadcast(slot));
     if (busySlots.length > 0) {
-      const names = busySlots.map((slot) => slot.adapter).join(", ");
+      const names = busySlots.map((slot) => slotName(slot)).join(", ");
       this.host.daemonLog(`broadcast_canceled_busy: busy=[${names}]`);
       await this.host.queueMessage(
         message.senderId,
@@ -502,17 +512,15 @@ export class DaemonControlCommands {
 
     const broadcastMessage: BridgeInboundMessage = { ...message, text };
     const dispatched: string[] = [];
-    const skipped: string[] = [];
-    for (const adapter of DAEMON_ADAPTERS) {
-      const slot = this.host.slotManager.getSlot(cwd, adapter);
-      if (!slot) {
-        skipped.push(adapter);
-        continue;
-      }
-      this.host.daemonLog(`broadcast_input: adapter=${adapter} cwd=${cwd} text=${truncatePreview(text)}`);
+    for (const slot of startedSlots) {
+      this.host.daemonLog(`broadcast_input: adapter=${slot.adapter} instance=${slot.instance} cwd=${cwd} text=${truncatePreview(text)}`);
       await this.host.dispatchInboundText(broadcastMessage, slot);
-      dispatched.push(adapter);
+      dispatched.push(slotName(slot));
     }
+    // Multi-CLI modes name the CLI types that did not get the prompt.
+    const skipped = slots.mode.kind === "multi_instance"
+      ? []
+      : DAEMON_ADAPTERS.filter((adapter) => !startedSlots.some((slot) => slot.adapter === adapter));
 
     const lines = [
       t("daemon.broadcast.sent", { count: dispatched.length, workers: t(dispatched.length > 1 ? "daemon.broadcast.multipleWorkers" : "daemon.broadcast.singleWorker"), names: dispatched.join(", ") }),

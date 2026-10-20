@@ -35,6 +35,8 @@ function log(adapter: string, message: string): void {
 export type LocalCompanionCliOptions = {
   adapter: "codex" | "claude" | "opencode" | "pi";
   cwd: string;
+  /** Numbered window of the adapter in cwd; defaults to 1. */
+  slotInstance?: number;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs: string[];
 };
@@ -43,6 +45,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
   let adapter: "codex" | "claude" | "opencode" | "pi" | null = null;
   let cwd = process.cwd();
   let sessionStartMode: BridgeSessionStartMode = "restore";
+  let slotInstance: number | undefined;
   const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -83,6 +86,16 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
       continue;
     }
 
+    if (arg === "--slot-instance") {
+      const value = Number(next);
+      if (!Number.isInteger(value) || value < 1) {
+        throw new Error(`Invalid --slot-instance value: ${next ?? "(missing)"}`);
+      }
+      slotInstance = value;
+      i += 1;
+      continue;
+    }
+
     if (arg === "--session-start-mode") {
       if (!next || !["restore", "new"].includes(next)) {
         throw new Error(`Invalid session start mode: ${next ?? "(missing)"}`);
@@ -99,7 +112,7 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     throw new Error("Missing required --adapter <codex|claude|opencode|pi>");
   }
 
-  return { adapter, cwd, sessionStartMode, cliArgs };
+  return { adapter, cwd, slotInstance, sessionStartMode, cliArgs };
 }
 
 function delay(ms: number): Promise<void> {
@@ -114,6 +127,7 @@ function readMatchingEndpoint(
 ): LocalCompanionEndpoint & { kind: LocalCompanionCliOptions["adapter"] } {
   const endpoint = readLocalCompanionEndpoint(options.cwd, {
     adapter: options.adapter,
+    instance: options.slotInstance,
   });
   if (!endpoint || endpoint.kind !== options.adapter) {
     throw new Error(

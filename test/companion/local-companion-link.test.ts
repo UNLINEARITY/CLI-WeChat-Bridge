@@ -241,3 +241,34 @@ describe("local companion endpoint occupancy", () => {
     });
   });
 });
+
+describe("numbered endpoint instances", () => {
+  test("a second instance has its own file and leaves the first alone", () => {
+    const cwd = makeTempCwd();
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, { kind: "pi", instanceId: "pi-1" }));
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, { kind: "pi", instanceId: "pi-2", slotInstance: 2 }));
+
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi" })?.instanceId).toBe("pi-1");
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi", instance: 2 })).toMatchObject({
+      instanceId: "pi-2",
+      slotInstance: 2,
+    });
+    // The legacy single-endpoint file keeps describing the first instance.
+    expect(readLocalCompanionEndpoint(cwd)?.instanceId).toBe("pi-1");
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi", instance: 3 })).toBeNull();
+  });
+
+  test("clearing and occupancy updates stay within one instance", () => {
+    const cwd = makeTempCwd();
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, { kind: "pi", instanceId: "pi-1" }));
+    writeLocalCompanionEndpoint(buildEndpoint(cwd, { kind: "pi", instanceId: "pi-2", slotInstance: 2 }));
+
+    updateLocalCompanionOccupancy(cwd, { companionPid: 4242 }, "pi-2", { adapter: "pi", instance: 2 });
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi", instance: 2 })?.companionPid).toBe(4242);
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi" })?.companionPid).toBeUndefined();
+
+    clearLocalCompanionEndpoint(cwd, undefined, { adapter: "pi", instance: 2 });
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi", instance: 2 })).toBeNull();
+    expect(readLocalCompanionEndpoint(cwd, { adapter: "pi" })?.instanceId).toBe("pi-1");
+  });
+});

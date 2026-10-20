@@ -23,7 +23,7 @@ import {
   isChannelSendKind,
   type ChannelSendKind,
 } from "../channels/wechat/wechat-forwarding.ts";
-import { formatBindingsListMessage, listBindings, loadEmojiBindings } from "./emoji-bindings.ts";
+import { loadEmojiBindings } from "./emoji-bindings.ts";
 import {
   classifyWechatTransportError,
   DEFAULT_LONG_POLL_TIMEOUT_MS,
@@ -78,7 +78,8 @@ import {
   isVisibleClientAlive,
 } from "./visible-client-launcher.ts";
 import { cleanupDaemonBeforeStart, cleanupSingleBridgeBeforeDaemon } from "./daemon-cleanup.ts";
-import type { DaemonSlot, EnsureSlotResult } from "./daemon-slot.ts";
+import { slotName, type DaemonSlot, type EnsureSlotResult } from "./daemon-slot.ts";
+import type { BridgeModeKind } from "./bridge-mode.ts";
 import { handleSlotEvent, type SlotEventHost } from "./slot-event-forwarder.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
 import { SlotManager } from "./slot-manager.ts";
@@ -282,7 +283,7 @@ export class BridgeDaemon {
       operatorId: this.authorizedUserId,
       visibleClientConnectTimeoutMs: this.deps.visibleClientConnectTimeoutMs,
       createRuntime: (options) => this.createRuntime(options),
-      isVisibleClientAlive: (cwd, adapter) => this.isVisibleClientAlive(cwd, adapter),
+      isVisibleClientAlive: (cwd, adapter, instance) => this.isVisibleClientAlive(cwd, adapter, instance),
       openVisibleClient: (options) => this.openVisibleClient(options),
       queueMessage: (senderId, text, context, targetOverride) =>
         this.queueMessage(senderId, text, context, targetOverride),
@@ -291,6 +292,7 @@ export class BridgeDaemon {
       isEphemeral: () => this.ephemeral,
       sessions: this.deps.slotSessions ?? fileSlotSessionStore,
       onSlotRemoved: () => this.exitIfIdle(),
+      onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
       daemonLog: (message) => this.daemonLog(message),
     });
     this.controls = new DaemonControlCommands({
@@ -366,6 +368,20 @@ export class BridgeDaemon {
     void this.shutdown().finally(() => (this.deps.exitProcess ?? process.exit)(0));
   }
 
+  /** Tell the operator what the new mode opened up; each upgrade reads differently. */
+  private announceModeUpgrade(mode: BridgeModeKind, slot: DaemonSlot): void {
+    const slots = this.slotManager;
+    const text = mode === "multi_type"
+      ? t("daemon.upgrade.multiType", {
+        adapter: slot.adapter,
+        switches: slots.slotsIn(slot.cwd).map((other) => `/${other.adapter}`).join(" "),
+      })
+      : mode === "multi_instance"
+        ? t("daemon.upgrade.multiInstance", { adapter: slot.adapter })
+        : t("daemon.upgrade.multiWorkspace", { source: slots.slotSourceName(slot) });
+    void this.queueMessage(this.authorizedUserId, text);
+  }
+
   set takenOverAdapter(adapter: DaemonAdapterKind | undefined) {
     this.slotManager.takenOverAdapter = adapter;
   }
@@ -378,8 +394,8 @@ export class BridgeDaemon {
     return (this.deps.createRuntime ?? createRuntimeHost)(options);
   }
 
-  private isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean {
-    return (this.deps.isVisibleClientAlive ?? isVisibleClientAlive)(cwd, adapter);
+  private isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind, instance = 1): boolean {
+    return (this.deps.isVisibleClientAlive ?? isVisibleClientAlive)(cwd, adapter, instance);
   }
 
   private openVisibleClient(options: Parameters<typeof openVisibleClient>[0]): VisibleClientLaunch {
@@ -402,14 +418,18 @@ export class BridgeDaemon {
       cwd: slots.activeCwd,
       channelId: this.channelId,
       activeAdapter: slots.activeAdapter ?? undefined,
+      ...(slots.activeAdapter && slots.activeInstance > 1 ? { activeInstance: slots.activeInstance } : {}),
+      mode: slots.mode.kind,
       startedAt: this.startedAt,
       ...(workspaces.length > 1 ? { workspaces } : {}),
       slots: workspaces.flatMap((cwd) => slots.slotsIn(cwd)).map((slot): DaemonSlotSummary => {
         const endpoint = readLocalCompanionEndpoint(slot.cwd, {
           adapter: slot.adapter,
+          instance: slot.instance,
         });
         return {
           adapter: slot.adapter,
+          instance: slot.instance,
           status: slot.runtime.getState().status,
           cwd: slot.cwd,
           companionPid: endpoint?.companionPid,
@@ -487,13 +507,19 @@ export class BridgeDaemon {
     );
     this.daemonLog(`started: channel=${this.channelId} cwd=${this.cwd}`);
 
-    const activeSlot = this.slotManager.getActiveSlot();
-    const welcomeText = t("daemon.welcome", {
-      channel: this.channelDriver.displayName,
-      cwd: this.cwd,
-      adapter: activeSlot?.adapter ?? "none",
-      bindings: formatBindingsListMessage(listBindings()),
-    });
+    // A bridge starts out showing only the single-CLI commands; each upgrade
+    // announces what it opens up. A resident service with no window yet
+    // explains how to open one.
+    const welcomeText = this.ephemeral || this.slotManager.mode.kind !== "none"
+      ? t("daemon.welcome.single", {
+        channel: this.channelDriver.displayName,
+        cwd: this.slotManager.activeCwd,
+      })
+      : t("daemon.welcome.service", {
+        channel: this.channelDriver.displayName,
+        cwd: this.cwd,
+        launcher: `${this.channelId}-*`,
+      });
     await this.queueMessage(this.authorizedUserId, welcomeText);
 
     if (this.channelDriver.capabilities.pushInbound) {
@@ -694,43 +720,28 @@ export class BridgeDaemon {
   }
 
   /**
-   * A launcher asked for a slot. The current workspace switches to it like
-   * before; another workspace gets its slot without moving the channel, and
-   * the operator is told how to switch there.
+   * A launcher (or a Codex attach) asked for a window. It becomes current
+   * when it opens in the current workspace or nothing is current yet; a
+   * window elsewhere gets its slot without moving the channel. The bridge
+   * mode decides whether the window may join at all.
    */
   private async ensureWorkspaceSlot(
     request: Extract<DaemonRequest, { command: "ensure_slot" }>,
   ): Promise<EnsureSlotResult> {
     const slots = this.slotManager;
-    const activate = slots.isActiveWorkspace(request.cwd);
+    const activate = slots.isActiveWorkspace(request.cwd) || !slots.getActiveSlot();
     const known = slots.hasWorkspace(request.cwd);
-    const existing = slots.getSlot(request.cwd, request.adapter);
-    const occupied = request.codexAttach
-      // One codex slot per directory until numbered instances exist.
-      ? Boolean(existing)
-      : request.boundToWindow && Boolean(existing) && this.isVisibleClientAlive(request.cwd, request.adapter);
-    if (occupied) {
-      // One window per slot until numbered instances exist; never reset the
-      // session of a window that is already running.
-      this.daemonLog(`launcher_refused_already_running: adapter=${request.adapter} cwd=${request.cwd}`);
-      return {
-        activeAdapter: request.adapter,
-        cwd: request.cwd,
-        created: false,
-        openedVisible: false,
-        visibleConnected: true,
-        visibleReady: true,
-        activated: false,
-        activationVersion: 0,
-        previousActiveCwd: slots.activeCwd,
-        alreadyRunning: true,
-      };
-    }
+    // Take over a slot of this type whose window is gone (closing, or opened
+    // remotely and not connected yet); otherwise this is a new window. Never
+    // reset the session of a window that is already running.
+    const opensWindow = request.boundToWindow === true || Boolean(request.codexAttach);
+    const idle = opensWindow && !request.codexAttach
+      ? slots.instancesOf(request.cwd, request.adapter).find((slot) =>
+        !slot.attached && !this.isVisibleClientAlive(slot.cwd, slot.adapter, slot.instance))
+      : undefined;
     const result = await slots.ensureSlot(request.adapter, {
       cwd: request.cwd,
       activate,
-      // The launcher runs on this computer in that directory.
-      restrictToHome: false,
       boundToWindow: request.boundToWindow,
       codexAttach: request.codexAttach,
       profile: request.profile,
@@ -738,13 +749,21 @@ export class BridgeDaemon {
       openVisible: request.openVisible ?? true,
       sessionStartMode: request.sessionStartMode,
       reuseExistingVisible: request.reuseExistingVisible ?? true,
+      ...(idle ? { instance: idle.instance } : opensWindow ? { newInstance: true } : {}),
     });
-    if (!activate && result.created) {
+    if (result.refused) {
+      this.daemonLog(`launcher_refused: adapter=${request.adapter} cwd=${request.cwd} reason=${result.refused}`);
+      return result;
+    }
+    if (!activate && result.created && !result.upgradedTo) {
       const label = slots.workspaceLabel(request.cwd);
       this.daemonLog(`workspace_slot_started: cwd=${request.cwd} adapter=${request.adapter} new_workspace=${!known}`);
       await this.queueMessage(
         this.authorizedUserId,
-        t("daemon.workspace.connected", { label, adapter: request.adapter }),
+        t("daemon.workspace.connected", {
+          label,
+          adapter: slotName({ adapter: request.adapter, instance: result.instance }),
+        }),
       );
     }
     return result;

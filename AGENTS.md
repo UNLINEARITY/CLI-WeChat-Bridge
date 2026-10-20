@@ -4,9 +4,10 @@
 CLI WeChat Bridge lets one WeChat iLink account or one WeCom smart-bot account drive local CLI agents from a normal project directory. The user-facing npm package is `cli-wechat-bridge`; `@unlinearity/cli-wechat-bridge` is kept as a compatibility mirror for existing users.
 
 One daemon engine (`src/daemon`) runs every bridge; there is no separate standalone bridge runtime. It has two user-facing modes:
-- `wechat-daemon` (multi-CLI mode): the preferred long-lived mode. It owns the channel connection, keeps Codex, Claude Code, OpenCode, and Pi slots for several workspaces, and switches from WeChat with `/codex`, `/claude`, `/opencode`, `/pi`, and `/cd`. Remote switches open a new visible CLI only in the home workspace (the daemon's startup directory).
+- `wechat-daemon` (resident service): the preferred long-lived mode. It owns the channel connection, keeps Codex, Claude Code, OpenCode, and Pi slots for several workspaces, and starts with no bridge mode until the first window opens. Remote opens use the current window's workspace, or the home workspace (the daemon's startup directory) while no window is open.
 - `wecom-daemon`: the equivalent long-lived mode for the official WeCom smart-bot WebSocket channel; it uses the same adapter slots and command grammar with WeCom-specific credentials and conversation state.
-- Direct launchers (single-bridge mode): `wechat-codex`, `wechat-claude`, `wechat-opencode`, `wechat-pi` and their `wecom-*`/`telegram-*` counterparts run the CLI in the current terminal. They join the channel's running daemon, or start an ephemeral one (`--ephemeral`) whose slots follow their windows and which exits after the last window closes; a second launcher simply joins it. Running `wechat-daemon` while a daemon is up promotes it instead of replacing it. Public `wechat-bridge-*` commands no longer exist.
+- Direct launchers (single-bridge mode): `wechat-codex`, `wechat-claude`, `wechat-opencode`, `wechat-pi` and their `wecom-*`/`telegram-*` counterparts run the CLI in the current terminal. They join the channel's running daemon, or start an ephemeral one (`--ephemeral`) whose slots follow their windows and which exits after the last window closes; a second launcher simply joins it. Running `wechat-daemon` while a daemon is up promotes it instead of replacing it, keeping its bridge mode. Public `wechat-bridge-*` commands no longer exist.
+- Progressive bridge modes (`src/daemon/bridge-mode.ts`): every bridge starts as a clean single bridge (L0, no prefixes, single-CLI commands only) and only moves up until the daemon exits. In the first window's workspace another CLI type leads to multi-CLI mode (L1, `/codex` etc.), the same type to numbered multi-instance mode (L2, `/1` `/2`, `/open`); L1 and L2 never mix. A window in any other workspace leads to the unrestricted multi-workspace mode (L3, `/cd`). Launchers, Codex attach, and remote opens all pass the same `admitWindow` check in `SlotManager.ensureSlot`; a resident daemon whose last window closed starts over.
 
 Runtime data now lives under `~/.cli-bridge` by default. Legacy data is copy-migrated from `~/.claude/channels/wechat` and from `CLAUDE_WECHAT_CHANNEL_DATA_DIR` only as a migration source. Use `CLI_BRIDGE_DATA_DIR` for the active data directory.
 
@@ -30,7 +31,7 @@ These rules are owner-imposed and override anything else in this file, including
 - `src/bridge`: adapters and their shared support — adapter selection, endpoint sync (`BridgeController`), approval detection, outbound attachments, message and user-input formatting, legacy lock reading, and process cleanup.
 - `src/bridge/bridge-adapters.*.ts`: adapter-specific Codex, Claude Code, OpenCode, and Pi behavior. Keep adapter conditionals here or in closely related companion modules.
 - `src/companion`: visible local CLI companion launchers, IPC endpoint files, daemon delegation, and local companion proxy support.
-- `src/daemon`: the one bridge engine — `wechat-daemon.ts` wiring and main loop, `slot-manager.ts` (slots by workspace, CLI, and instance; home workspace; window-bound lifecycle), `inbound-router.ts`, `control-commands.ts`, `slot-event-forwarder.ts`, `visible-client-launcher.ts`, `daemon-ipc-server.ts`, `slot-session-store.ts`, and pre-start cleanup of stale state from older versions.
+- `src/daemon`: the one bridge engine — `wechat-daemon.ts` wiring and main loop, `bridge-mode.ts` (progressive modes and window admission), `slot-manager.ts` (slots by workspace, CLI, and instance; bridge mode; home workspace; window-bound lifecycle), `inbound-router.ts`, `control-commands.ts`, `slot-event-forwarder.ts`, `visible-client-launcher.ts`, `daemon-ipc-server.ts`, `slot-session-store.ts`, and pre-start cleanup of stale state from older versions.
 - `src/runtime`: runtime creation for daemon slots (Codex runtime host, or the companion proxy adapter for the other CLIs) and the local client endpoint types.
 - `src/i18n`: localized user-facing strings.
 - `src/types`: ambient type declarations for untyped dependencies.
@@ -47,7 +48,7 @@ Default active state is in `~/.cli-bridge`:
 - `bridge.log`: combined bridge and daemon runtime log.
 - `bridge.lock.json`: lock of the removed standalone bridge; read only to clean up after upgrades.
 - `daemon-endpoint.json`: daemon IPC endpoint.
-- `workspaces/<workspace-key>/slot-session-<adapter>.json`: session each slot last followed, for explicit restores (older `bridge-state.json` files are read as a fallback).
+- `workspaces/<workspace-key>/slot-session-<adapter>.json`: session each slot last followed, for explicit restores (older `bridge-state.json` files are read as a fallback); numbered instances use `slot-session-<adapter>-<n>.json`.
 - `workspaces/<workspace-key>/codex-panel-endpoint*.json`: adapter-scoped local companion endpoints.
 - `inbound-attachments/<date>/`: downloaded WeChat images and files.
 - `wecom/inbound-attachments/<date>/`: downloaded WeCom media files.
@@ -130,7 +131,7 @@ Add focused regression coverage when changing:
 For release-facing changes, run `npm run quality` plus package/smoke checks. For narrow fixes, run the smallest focused test first, then expand to the relevant suite.
 
 ## Daemon And Bridge Behavior
-`wechat-daemon` and `wecom-daemon` are the preferred user workflows. One daemon manages several workspaces: slots are keyed by workspace and adapter (`SlotManager`), `/cd` switches the current workspace, and only workspaces opened locally can be selected. If a daemon is live, direct launchers in any directory delegate to it instead of replacing it. The expired `wechat-*-start` compatibility aliases were removed in 1.1.5; use the direct launchers.
+`wechat-daemon` and `wecom-daemon` are the preferred user workflows. One daemon manages several workspaces: slots are keyed by workspace, adapter, and instance number (`SlotManager`), `/cd` switches the current workspace once the bridge spans several, and only workspaces opened locally can be selected. Numbered instances use their own endpoint and session files (`<adapter>-<n>-companion-endpoint.json`, `slot-session-<adapter>-<n>.json`); instance 1 keeps the original names. If a daemon is live, direct launchers in any directory delegate to it instead of replacing it. The expired `wechat-*-start` compatibility aliases were removed in 1.1.5; use the direct launchers.
 
 Daemon startup should clean stale or still-running single-bridge state automatically when possible. Do not push cleanup work onto the user if the code can safely detect and clear stale locks, dead endpoints, peer bridge processes, or orphan OpenCode processes. When changing cleanup logic, update daemon tests and make logs explicit enough to diagnose what was cleaned.
 

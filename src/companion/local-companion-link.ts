@@ -53,6 +53,8 @@ export type LocalCompanionEndpoint = LocalClientEndpoint;
 
 type EndpointReadOptions = {
   adapter?: LegacyBridgeAdapterKind;
+  /** Numbered window of `adapter`; defaults to the first one. */
+  instance?: number;
 };
 
 type EndpointWriteOptions = {
@@ -138,6 +140,10 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
       record.runtimeKind === "codex_runtime_host" ? "codex_runtime_host" : "legacy_adapter",
     instanceId: record.instanceId,
     kind,
+    slotInstance:
+      typeof record.slotInstance === "number" && record.slotInstance > 1
+        ? record.slotInstance
+        : undefined,
     port: record.port,
     token: record.token,
     renderMode:
@@ -223,11 +229,13 @@ export function writeLocalCompanionEndpoint(
   // while companions poll them concurrently; a torn write reads as JSON.parse
   // failure → "no endpoint" → healthy bridges get restarted or duplicate
   // clients launched.
+  const instance = endpoint.slotInstance ?? 1;
   writeJsonFileAtomic(
-    getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind),
+    getWorkspaceAdapterEndpointFile(endpoint.cwd, endpoint.kind, instance),
     payload,
   );
-  if (options.writeLegacy !== false) {
+  // The legacy single-endpoint file only ever describes a first instance.
+  if (options.writeLegacy !== false && instance === 1) {
     writeJsonFileAtomic(endpointFile, payload);
   }
 }
@@ -239,10 +247,11 @@ export function readLocalCompanionEndpoint(
   try {
     const { endpointFile } = getWorkspaceChannelPaths(cwd);
     if (options.adapter) {
+      const instance = options.instance ?? 1;
       const scoped = readEndpointFile(
-        getWorkspaceAdapterEndpointFile(cwd, options.adapter),
+        getWorkspaceAdapterEndpointFile(cwd, options.adapter, instance),
       );
-      if (scoped) {
+      if (scoped || instance > 1) {
         return scoped;
       }
       const legacy = readEndpointFile(endpointFile);
@@ -261,8 +270,11 @@ export function clearLocalCompanionEndpoint(
 ): void {
   try {
     const { endpointFile } = getWorkspaceChannelPaths(cwd);
+    const instance = options.instance ?? 1;
     const files = options.adapter
-      ? [getWorkspaceAdapterEndpointFile(cwd, options.adapter), endpointFile]
+      ? instance > 1
+        ? [getWorkspaceAdapterEndpointFile(cwd, options.adapter, instance)]
+        : [getWorkspaceAdapterEndpointFile(cwd, options.adapter), endpointFile]
       : [
           endpointFile,
           getWorkspaceAdapterEndpointFile(cwd, "codex"),
@@ -391,9 +403,10 @@ export function updateCodexVisibleControl(
     codexVisibleThreadId?: string;
   },
   instanceId?: string,
+  slotInstance?: number,
 ): void {
   try {
-    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex" });
+    const endpoint = readLocalCompanionEndpoint(cwd, { adapter: "codex", instance: slotInstance });
     if (!endpoint || endpoint.kind !== "codex") {
       return;
     }

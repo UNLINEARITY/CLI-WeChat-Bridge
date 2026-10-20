@@ -189,7 +189,8 @@ npm run e2e -- --adapter claude --no-mirror
 | 文件 | 作用 |
 | --- | --- |
 | `src/daemon/wechat-daemon.ts` | daemon 装配、主循环、关闭与 IPC 请求分发（单桥接与多 CLI 模式共用） |
-| `src/daemon/slot-manager.ts` | 按目录与 CLI 管理 slot、当前目录、主目录与窗口生命周期 |
+| `src/daemon/bridge-mode.ts` | 渐进模式（单桥接、多 CLI、同类型多实例、多目录）与窗口准入规则 |
+| `src/daemon/slot-manager.ts` | 按目录、CLI 与实例编号管理 slot、桥接模式、当前目录、主目录与窗口生命周期 |
 | `src/daemon/inbound-router.ts` | 入站消息、切换指令、`/cd` 与排队 |
 | `src/companion/local-companion-start.ts` | 直接启动器：加入或拉起 daemon，在当前终端运行 CLI |
 | `src/daemon/daemon-link.ts` | daemon 本地 IPC endpoint 与请求协议 |

@@ -25,12 +25,14 @@ Keep the invoking Codex conversation and its context. The launcher prefix select
 - `No shared Codex app-server daemon socket at ...`: codex < 0.162 or no shared background server. Upgrade codex and retry.
 - `No live Codex daemon session found for <project>`: no daemon-attached session in this directory. Open codex normally (>= 0.162) in the project and retry.
 - `thread ... already has an active writer`: the target session is **embedded** (desktop app, `--no-daemon`, `--oss`, `--profile`). Embedded sessions cannot be attached; say so instead of falling back to opening another session.
-- `codex is already connected for <project>`: this directory already has a codex terminal in the bridge daemon. Close that Codex window first; attach does not replace it.
+- `codex is already running for <project> in another terminal, and this bridge runs several CLI types`: the bridge is in multi-CLI mode and this directory already has codex. Close that Codex window first, or attach from another directory; attach does not replace it.
+- `The <channel> bridge is running several windows of one CLI type`: the bridge is in multi-instance mode for another CLI in this directory. Attach from another directory, or close those windows first.
 - A running daemon of another channel blocks attach; stop it first. A daemon of the same channel is joined, not replaced.
 
 ## Status, switching, and shutdown
 
-- Status: `/status` or `/cd` from the channel (attached terminals show as `codex (attached)`), `~/.cli-bridge/workspaces/<workspace-key>/slot-session-codex.json`, and `~/.cli-bridge/bridge.log`.
+- Status: `/status` from the channel (`/cd` once the bridge spans several directories, where attached terminals show as `codex (attached)`), `~/.cli-bridge/workspaces/<workspace-key>/slot-session-codex.json`, and `~/.cli-bridge/bridge.log`.
+- Attach counts as a codex window for the bridge mode: next to a single codex window it becomes `codex-2`, next to another CLI it moves the bridge to multi-CLI mode, and in another directory to multi-directory mode.
 - Switch to another conversation: in another project directory, run the attach command there (it is added alongside, switch with `/cd`); in the same directory, use `/resume` from the channel.
 - Shutdown: send `/daemon-stop` from the channel; it stops the whole bridge daemon.
 - Attach does not kill or restart anything: the shared daemon, the owning TUI, and all turns stay intact; the bridge is a guest client and turns it injects appear live in the local session.

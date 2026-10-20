@@ -21,6 +21,8 @@ export type LocalClientEndpoint = {
   runtimeKind: RuntimeKind;
   instanceId: string;
   kind: LegacyBridgeAdapterKind;
+  /** Numbered window of this adapter in its workspace; absent means 1. */
+  slotInstance?: number;
   port: number;
   token: string;
   renderMode?: RuntimeRenderMode;

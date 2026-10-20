@@ -27,6 +27,8 @@ const VISIBLE_CLIENT_CONNECT_POLL_MS = 250;
 export function buildVisibleClientLaunchArgs(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
+  /** Numbered window of the adapter in cwd; defaults to 1. */
+  instance?: number;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
 }): string[] {
@@ -54,6 +56,9 @@ export function buildVisibleClientLaunchArgs(params: {
   }
   if (params.sessionStartMode && params.sessionStartMode !== "restore") {
     args.push("--session-start-mode", params.sessionStartMode);
+  }
+  if (params.instance && params.instance > 1) {
+    args.push("--slot-instance", String(params.instance));
   }
   args.push("--cwd", params.cwd, ...(params.cliArgs ?? []));
   return args;
@@ -134,6 +139,7 @@ export function formatLaunchPreview(launch: VisibleClientLaunch): string {
 export function openVisibleClient(params: {
   adapter: DaemonAdapterKind;
   cwd: string;
+  instance?: number;
   sessionStartMode?: BridgeSessionStartMode;
   cliArgs?: string[];
   onError?: (error: Error) => void;
@@ -262,8 +268,12 @@ end tell`;
   };
 }
 
-export function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): boolean {
-  const endpoint = readLocalCompanionEndpoint(cwd, { adapter });
+export function isVisibleClientAlive(
+  cwd: string,
+  adapter: DaemonAdapterKind,
+  instance = 1,
+): boolean {
+  const endpoint = readLocalCompanionEndpoint(cwd, { adapter, instance });
   if (!endpoint?.companionPid) {
     return false;
   }
@@ -271,7 +281,7 @@ export function isVisibleClientAlive(cwd: string, adapter: DaemonAdapterKind): b
     return true;
   }
 
-  clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter });
+  clearLocalCompanionOccupancy(cwd, endpoint.instanceId, { adapter, instance });
   return false;
 }
 
@@ -306,11 +316,12 @@ export async function waitForVisibleClientConnection(
   params: {
     cwd: string;
     adapter: DaemonAdapterKind;
+    instance?: number;
     timeoutMs?: number;
     pollMs?: number;
   },
   deps: {
-    isAlive?: (cwd: string, adapter: DaemonAdapterKind) => boolean;
+    isAlive?: (cwd: string, adapter: DaemonAdapterKind, instance?: number) => boolean;
     sleep?: (ms: number) => Promise<void>;
     now?: () => number;
   } = {},
@@ -323,7 +334,7 @@ export async function waitForVisibleClientConnection(
   const deadline = now() + timeoutMs;
 
   while (true) {
-    if (isAlive(params.cwd, params.adapter)) {
+    if (isAlive(params.cwd, params.adapter, params.instance)) {
       return true;
     }
 
