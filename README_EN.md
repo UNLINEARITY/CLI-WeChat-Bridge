@@ -85,15 +85,19 @@ stateDiagram-v2
 
 ### 2. Install and update
 
-Install or update the published npm package:
+Install or update the published npm package. New users should prefer the shorter `cli-chat-bridge`, the project's upcoming name, published since 1.3.0:
+
+```bash
+npm install -g cli-chat-bridge@latest
+```
+
+The identical `cli-wechat-bridge` package is published alongside it:
 
 ```bash
 npm install -g cli-wechat-bridge@latest
 ```
 
-The legacy package name `@unlinearity/cli-wechat-bridge` continues to receive the same releases. Existing users can keep updating it; new users should prefer the shorter `cli-wechat-bridge` name.
-
-Since 1.3.0 the same build is also published under the project's upcoming name, `cli-chat-bridge` (`npm install -g cli-chat-bridge@latest`). The three packages provide the same commands, so install only one; to switch names, `npm uninstall -g` the current package first, or npm stops with `EEXIST`.
+The legacy package name `@unlinearity/cli-wechat-bridge` continues to receive the same releases, so existing users can keep updating it. The three packages provide the same commands, so install only one; to switch names, `npm uninstall -g` the current package first, or npm stops with `EEXIST`.
 
 <details>
 <summary><b>Installation issues with the node-pty native module?</b></summary>

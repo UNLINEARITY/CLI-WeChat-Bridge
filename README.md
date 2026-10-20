@@ -85,15 +85,19 @@ stateDiagram-v2
 
 ### 2. 安装与更新
 
-发布版本可以直接从 npm 安装/更新：
+发布版本可以直接从 npm 安装/更新。新用户优先使用更短的 `cli-chat-bridge`（项目即将使用的新名称，从 1.3.0 起同步发布）：
+
+```bash
+npm install -g cli-chat-bridge@latest
+```
+
+也可以安装内容完全相同的 `cli-wechat-bridge`：
 
 ```bash
 npm install -g cli-wechat-bridge@latest
 ```
 
-兼容性说明：旧包名 `@unlinearity/cli-wechat-bridge` 会继续同步发布，已经安装旧包名的用户可以正常升级；新用户优先使用更短的 `cli-wechat-bridge`。
-
-从 1.3.0 起，同一份构建也以项目即将使用的新名称 `cli-chat-bridge` 发布（`npm install -g cli-chat-bridge@latest`）。三个包提供相同的命令，只安装其中一个即可；要切换包名，请先 `npm uninstall -g` 当前的包，否则 npm 会因 `EEXIST` 中止安装。
+兼容性说明：旧包名 `@unlinearity/cli-wechat-bridge` 会继续同步发布，已经安装旧包名的用户可以正常升级。三个包提供相同的命令，只安装其中一个即可；要切换包名，请先 `npm uninstall -g` 当前的包，否则 npm 会因 `EEXIST` 中止安装。
 
 <details>
 <summary><b>安装遇到问题？（node-pty 原生模块）</b></summary>
