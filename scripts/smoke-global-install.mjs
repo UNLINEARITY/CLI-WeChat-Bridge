@@ -17,7 +17,8 @@ const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const PACKAGE_JSON_PATH = path.join(REPO_ROOT, "package.json");
 const PACKAGE_JSON = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, "utf8"));
 const PACKAGE_NAME = String(PACKAGE_JSON.name ?? "");
-const COMPAT_PACKAGE_NAMES = ["@unlinearity/cli-wechat-bridge"];
+// Mirror names ship the same commands; any installed copy would clash.
+const COMPAT_PACKAGE_NAMES = ["@unlinearity/cli-wechat-bridge", "cli-chat-bridge"];
 const BIN_MAP = PACKAGE_JSON.bin && typeof PACKAGE_JSON.bin === "object" ? PACKAGE_JSON.bin : {};
 const NPM_EXEC_PATH = process.env.npm_execpath;
 

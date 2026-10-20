@@ -260,6 +260,17 @@ NO_PROXY=127.0.0.1,localhost,::1
 
 提示：Node.js 的内置 `fetch` 默认**不读取**代理环境变量。如果你的网络必须经代理才能访问 `ilinkai.weixin.qq.com`，Node.js 24 及以上请设置 `NODE_USE_ENV_PROXY=1` 后重启桥接；Node.js 22.13 不使用 `NODE_OPTIONS=--use-env-proxy`，应升级 Node.js 或为运行环境提供可用的直连网络。`--doctor` 的"微信服务可达性"一项会在检测到该情况时给出提示。
 
+## 启动器被拒绝，或远程命令提示"当前模式下不可用"
+
+桥接按打开的窗口渐进升级（见 [README 渐进桥接模式](../README.md#渐进桥接模式)），以下提示都是模式规则，不是故障：
+
+1. **`... is already running for <目录> in another terminal, and this bridge runs several CLI types`**：桥接处于多 CLI 模式，这个目录已经有同一种 CLI。多 CLI 模式下同一目录每种 CLI 只开一个；要同时跑两个，请在另一个目录运行，桥接会升级为多目录模式。
+2. **`The <通道> bridge is running several windows of one CLI type ...`**：桥接处于同类型多实例模式，这个目录只能再开同一种 CLI。要用其他 CLI，请在另一个目录运行，或先关闭这些窗口（临时 daemon 会随最后一个窗口退出，下次从单桥接开始）。
+3. **`/cd`、`/all`、`/1` 提示不可用**：`/cd` 只在跨多个目录时开放，`/all` 只在有多个窗口时开放，`/1`、`/2` 只在同一种 CLI 开了多个窗口时开放。单桥接中可以发送 `/open` 再开一个同类型窗口。
+4. **回复突然带上了 `[codex]`、`[pi-1]` 前缀**：桥接已升级，前缀用于区分回复来自哪个窗口。模式只升不降；关闭多余窗口不会去掉前缀，退出临时 daemon（关闭全部窗口）后下次重新从单桥接开始。
+
+`/status` 的"模式"一行显示当前模式；`bridge.log` 中的 `bridge_mode_upgraded`、`window_refused`、`launcher_refused` 记录每次升级与拒绝的原因。
+
 ## 消息发出去桥接没反应（环境看起来一切正常）
 
 按以下顺序排查，这些都是"部分用户正常、部分用户不可用"的高频根因：

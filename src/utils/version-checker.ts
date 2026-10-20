@@ -111,6 +111,26 @@ export async function fetchLatestVersion(
 }
 
 /**
+ * Name of the npm package this copy was installed from: the same build ships
+ * as cli-chat-bridge, cli-wechat-bridge, and @unlinearity/cli-wechat-bridge,
+ * and reinstall hints must name the one the user has, or npm refuses to
+ * install a second package with the same commands.
+ */
+export function getInstalledPackageName(): string {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(
+      path.resolve(import.meta.dirname, "..", "..", "package.json"),
+      "utf-8",
+    ));
+    return typeof packageJson.name === "string" && packageJson.name
+      ? packageJson.name
+      : NPM_PACKAGE_NAME;
+  } catch {
+    return NPM_PACKAGE_NAME;
+  }
+}
+
+/**
  * 从本地 package.json 读取当前版本
  */
 export async function getCurrentVersion(): Promise<string> {

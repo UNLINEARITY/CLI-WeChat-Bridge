@@ -21,7 +21,7 @@ node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-命令把当前会话作为一个无窗口的 codex 终端加入 bridge daemon(没有运行中的 daemon 时在后台自动启动),并等待绑定完成,成功输出 `Attached Codex daemon thread <id>`。同一目录已有 codex 终端时会拒绝;要换到同一目录的另一个线程,在通道内使用 `/resume`。停止:在通道内发送 `/daemon-stop`(会停止整个 bridge daemon)。
+命令把当前会话作为一个无窗口的 codex 终端加入 bridge daemon(没有运行中的 daemon 时在后台自动启动),并等待绑定完成,成功输出 `Attached Codex daemon thread <id>`。附加的会话在桥接模式中视同一个 codex 窗口:旁边只有一个 codex 窗口时成为 `codex-2`,旁边是其他 CLI 时桥接升级为多 CLI 模式(此时同一目录已有 codex 会拒绝),在其他目录附加则升级为多目录模式;要换到同一目录的另一个线程,在通道内使用 `/resume`。停止:在通道内发送 `/daemon-stop`(会停止整个 bridge daemon)。
 
 ### 工作原理(已实测验证)
 
@@ -34,7 +34,7 @@ node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 - **内嵌会话无法接入**:桌面 App(Codex Desktop)、`--no-daemon`、`--oss`、`--profile` 启动的会话内嵌 app-server,不在共享 daemon 里;对它们 resume 会得到 `thread ... already has an active writer`。
 - codex < 0.162 没有共享 daemon socket,attach 模式不可用;原有 wechat-codex 自建 app-server 流程(验证范围 0.149–0.161)不受影响。
 - 共享 daemon 的环境变量在 daemon 启动时固定;daemon 重启期间 Bridge 会自动重连并 rejoin。
-- 已有 `wechat-daemon`/`wecom-daemon`/`telegram-daemon` 在运行时,attach 会加入它,在 `/cd` 列表中显示为 `codex（附加）`;不同渠道的 daemon 在运行时需要先停止。
+- 已有 `wechat-daemon`/`wecom-daemon`/`telegram-daemon` 在运行时,attach 会加入它,在 `/cd` 列表(多目录模式)中显示为 `codex（附加）`;不同渠道的 daemon 在运行时需要先停止。
 
 ### 为什么桌面会话无法接入(实证)
 
@@ -63,7 +63,7 @@ Invoke `$codex-bridge` inside a Codex TUI session, or run from the project direc
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-The command adds the session to the bridge daemon as a windowless codex terminal (starting the daemon in the background when none runs) and waits for the bind; success prints `Attached Codex daemon thread <id>`. It is refused when the directory already has a codex terminal; to move to another thread in the same directory, use `/resume` from the channel. Stop with `/daemon-stop` from the channel, which stops the whole bridge daemon.
+The command adds the session to the bridge daemon as a windowless codex terminal (starting the daemon in the background when none runs) and waits for the bind; success prints `Attached Codex daemon thread <id>`. The attached session counts as a codex window for the bridge mode: next to a single codex window it becomes `codex-2`, next to another CLI the bridge moves to multi-CLI mode (where a directory that already has codex refuses it), and in another directory to multi-directory mode; to move to another thread in the same directory, use `/resume` from the channel. Stop with `/daemon-stop` from the channel, which stops the whole bridge daemon.
 
 ### How it works (verified live)
 
@@ -76,7 +76,7 @@ The command adds the session to the bridge daemon as a windowless codex terminal
 - **Embedded sessions cannot be attached**: desktop-app (Codex Desktop), `--no-daemon`, `--oss`, and `--profile` sessions run an embedded app-server outside the shared daemon; resuming them fails with `thread ... already has an active writer`.
 - codex < 0.162 has no shared daemon socket, so attach mode is unavailable; the existing wechat-codex owned-app-server flow (validated 0.149–0.161) is unaffected.
 - The daemon's environment is fixed at daemon start; the bridge reconnects and rejoins automatically across daemon restarts.
-- When a `wechat-daemon`/`wecom-daemon`/`telegram-daemon` is running, attach joins it and appears as `codex (attached)` in the `/cd` list; a daemon of another channel must be stopped first.
+- When a `wechat-daemon`/`wecom-daemon`/`telegram-daemon` is running, attach joins it and appears as `codex (attached)` in the `/cd` list (multi-directory mode); a daemon of another channel must be stopped first.
 
 ### Why desktop sessions cannot be attached (verified)
 

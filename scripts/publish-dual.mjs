@@ -16,7 +16,11 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
 const PACKAGE_JSON_PATH = path.join(REPO_ROOT, "package.json");
 const PRIMARY_PACKAGE_NAME = "cli-wechat-bridge";
+// Mirrors carry the same build under other names: the scoped compatibility
+// package for existing users, and the project's upcoming name.
 const COMPAT_PACKAGE_NAME = "@unlinearity/cli-wechat-bridge";
+const NEXT_PACKAGE_NAME = "cli-chat-bridge";
+export const MIRROR_PACKAGE_NAMES = [COMPAT_PACKAGE_NAME, NEXT_PACKAGE_NAME];
 const DEFAULT_REGISTRY = "https://registry.npmjs.org/";
 const MIRROR_FILES = [
   "bin",
@@ -146,7 +150,7 @@ function printHelp() {
     [
       "Usage: npm run publish:dual -- [--dry-run] [--registry <url>] [--tag <tag>] [--otp <code>]",
       "",
-      "Publishes cli-wechat-bridge as the primary package and @unlinearity/cli-wechat-bridge as a compatibility mirror.",
+      "Publishes cli-wechat-bridge as the primary package, plus @unlinearity/cli-wechat-bridge and cli-chat-bridge as mirrors of the same build.",
       "Existing package versions are skipped automatically.",
       "",
       "Options:",
@@ -211,7 +215,11 @@ function copyMirrorFile(sourcePath, targetPath) {
   fs.cpSync(sourcePath, targetPath, { recursive: true });
 }
 
-export function createMirrorPackage(packageJson, sourceRoot = REPO_ROOT) {
+export function createMirrorPackage(
+  packageJson,
+  sourceRoot = REPO_ROOT,
+  mirrorName = COMPAT_PACKAGE_NAME,
+) {
   const mirrorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cli-wechat-bridge-mirror-"));
 
   for (const fileName of MIRROR_FILES) {
@@ -220,7 +228,7 @@ export function createMirrorPackage(packageJson, sourceRoot = REPO_ROOT) {
 
   const mirrorPackageJson = {
     ...packageJson,
-    name: COMPAT_PACKAGE_NAME,
+    name: mirrorName,
     scripts: undefined,
     devDependencies: undefined,
     publishConfig: {
@@ -293,33 +301,26 @@ function main() {
     );
   }
 
-  const primaryPublished = readPublishedVersion(
-    PRIMARY_PACKAGE_NAME,
-    version,
-    options.registry,
-  );
-  const compatPublished = readPublishedVersion(
-    COMPAT_PACKAGE_NAME,
-    version,
-    options.registry,
-  );
-
-  if (primaryPublished && compatPublished) {
-    log(`Both package versions already exist for ${version}; nothing to publish.`);
+  const allNames = [PRIMARY_PACKAGE_NAME, ...MIRROR_PACKAGE_NAMES];
+  const missing = allNames.filter((name) => !readPublishedVersion(name, version, options.registry));
+  if (missing.length === 0) {
+    log(`All ${allNames.length} package versions already exist for ${version}; nothing to publish.`);
     return;
   }
 
-  log(`Building ${PRIMARY_PACKAGE_NAME}@${version} once before publishing both packages...`);
+  log(`Building ${PRIMARY_PACKAGE_NAME}@${version} once before publishing ${allNames.join(", ")}...`);
   runNpm(["run", "build"], { stdio: "inherit" });
 
   publishFromCwd(PRIMARY_PACKAGE_NAME, version, REPO_ROOT, options);
 
-  let mirrorRoot = "";
-  try {
-    mirrorRoot = createMirrorPackage(packageJson);
-    publishFromCwd(COMPAT_PACKAGE_NAME, version, mirrorRoot, options);
-  } finally {
-    removePath(mirrorRoot);
+  for (const mirrorName of MIRROR_PACKAGE_NAMES) {
+    let mirrorRoot = "";
+    try {
+      mirrorRoot = createMirrorPackage(packageJson, REPO_ROOT, mirrorName);
+      publishFromCwd(mirrorName, version, mirrorRoot, options);
+    } finally {
+      removePath(mirrorRoot);
+    }
   }
 }
 

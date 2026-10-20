@@ -4,6 +4,12 @@
 
 ## 版本列表
 
+### [v1.3.0](./1.3.0.md) / [中文说明](./1.3.0_CN.md)
+
+**底层重构为一套 daemon 引擎、渐进桥接模式与 `cli-chat-bridge` 包名**
+
+迄今改动最大的一次发布。底层把原先并行的独立 bridge 与 daemon 合并为一套 daemon 引擎：3,569 行的 daemon 按职责拆分为十余个模块，新增统一的通道注册表与通道无关的核心层；改动 121 个文件，源码反而从 40,737 行减少到 39,881 行。在此之上引入渐进桥接模式：桥接从干净的单桥接开始（回复不带标签、只显示单 CLI 命令），随本机打开的窗口扩展为 L1 多 CLI、L2 同类型多实例（`/1`、`/2`、`/open`）或 L3 多目录（`/cd`），只升不降，每次升级都有通知。直接启动命令在任意目录加入运行中的 daemon，`wechat-daemon` 改为常驻服务，支持跨窗口审批与问答和会话恢复；修复 Codex 窗口关闭后 slot 不释放、`telegram-daemon` 被误认为微信 daemon。独立 bridge 与 Claude 思考转发已移除，单桥接回复不再带标签。同一版本同时以 `cli-chat-bridge`、`cli-wechat-bridge`、`@unlinearity/cli-wechat-bridge` 发布，三者只需安装其一。
+
 ### [v1.2.3](./1.2.3.md) / [中文说明](./1.2.3_CN.md)
 
 **Telegram 接入、当前 Codex 会话附加与双语 README**

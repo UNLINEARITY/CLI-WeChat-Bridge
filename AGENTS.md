@@ -156,29 +156,31 @@ Inbound WeCom images, files, and videos are downloaded to `~/.cli-bridge/wecom/i
 
 Network failures to `https://ilinkai.weixin.qq.com` may be proxy-related even when bridge state is healthy. Node `fetch()` needs appropriate `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and on Node 24+ may use `NODE_USE_ENV_PROXY=1`; keep `NO_PROXY=127.0.0.1,localhost,::1` so local daemon/companion traffic stays direct. Do not set `NODE_OPTIONS=--use-env-proxy` on Node 22.13.
 
-## Dual npm Package Publishing
+## npm Package Publishing (three names)
 The root `package.json` must keep:
 ```json
 "name": "cli-wechat-bridge"
 ```
 
-Publish both package names with:
+Since 1.3.0 every release is published under three names with identical content: `cli-wechat-bridge` (primary), `@unlinearity/cli-wechat-bridge` (compatibility mirror), and `cli-chat-bridge` (the project's upcoming name). Publish all three with:
 ```bash
 npm run publish:dual -- --dry-run
 npm run publish:dual -- --otp <code>
 ```
 
-`scripts/publish-dual.mjs` is the source of truth for dual publishing:
+`scripts/publish-dual.mjs` (kept under its old name) is the source of truth for publishing:
 - it builds once before publishing;
 - it publishes `cli-wechat-bridge` from the repository root;
-- it creates a temporary scoped mirror package named `@unlinearity/cli-wechat-bridge`;
-- the mirror contains `bin/`, `dist/`, `README.md`, `LICENSE.txt`, and rewritten package metadata without scripts/devDependencies;
+- it creates a temporary mirror package for each name in `MIRROR_PACKAGE_NAMES` (`@unlinearity/cli-wechat-bridge`, `cli-chat-bridge`);
+- each mirror contains `bin/`, `dist/`, `skills/`, both READMEs, `LICENSE.txt`, the node-pty permission script, and rewritten package metadata that keeps only `postinstall`;
 - it checks `<package>@<version>` first and skips already-published versions;
-- if one package publishes and the other fails, rerun the same script after fixing auth; the completed package will be skipped.
+- if one package publishes and another fails, rerun the same script after fixing auth; completed packages will be skipped.
 
-Do not manually rename `package.json` to publish the scoped package. Do not claim a package was published until `npm view <name> version dist-tags --registry=https://registry.npmjs.org/ --json` confirms it.
+The three packages expose the same commands, so a user can install only one of them globally; switching names requires uninstalling the current package first (npm otherwise fails with `EEXIST`). Reinstall hints use `getInstalledPackageName()` so they name the package the user actually installed.
 
-README badges cannot natively combine download counts for two npm packages. Keep primary package badges pointed at `cli-wechat-bridge` and use a separate scoped-package downloads badge for compatibility visibility.
+Do not manually rename `package.json` to publish a mirror package. Do not claim a package was published until `npm view <name> version dist-tags --registry=https://registry.npmjs.org/ --json` confirms it.
+
+README badges cannot natively combine download counts for several npm packages. Keep primary package badges pointed at `cli-wechat-bridge` and use a separate scoped-package downloads badge for compatibility visibility.
 
 ## Release Process
 Use this checklist for a normal release:
@@ -190,13 +192,14 @@ Use this checklist for a normal release:
 6. Run `npm pack --dry-run --json` and verify the tarball contains `bin/`, `dist/`, `README.md`, and `LICENSE.txt`, not `src/`, tests, local state, or `node_modules`.
 7. Run `npm run smoke:global -- --purge-global --clean-cache`; use `--full` when validating the complete release path.
 8. Run `npm publish --dry-run --access public`.
-9. Run `npm run publish:dual -- --dry-run`.
-10. Push `main` and the plain `x.y.z` tag together (for example `git push origin main 1.1.8`). The Release workflow runs the full quality gate and creates the GitHub Release whose body combines `docs/releases/<tag>_CN.md` with GitHub's auto-generated changelog. The tag must point at a commit that contains both the release notes and `.github/workflows/release.yml`; verify the workflow run and the resulting release before proceeding. Do not publish npm packages before the tag-release gate passes.
+9. Run `npm run publish:dual -- --dry-run` (covers all three package names).
+10. Push `main` and the plain `x.y.z` tag together (for example `git push origin main 1.1.8`). The Release workflow runs the full quality gate and creates the GitHub Release whose body combines the English `docs/releases/<tag>.md` (headed by a link to `docs/releases/<tag>_CN.md`) with GitHub's auto-generated changelog; both note files must exist. The tag must point at a commit that contains both the release notes and `.github/workflows/release.yml`; verify the workflow run and the resulting release before proceeding. Do not publish npm packages before the tag-release gate passes.
 11. Publish with `npm run publish:dual -- --otp <code>` when npm requests OTP, or without `--otp` when web auth is already valid.
-12. Verify both registries:
+12. Verify all three packages on the registry:
 ```bash
 npm view cli-wechat-bridge version dist-tags --registry=https://registry.npmjs.org/ --json
 npm view @unlinearity/cli-wechat-bridge version dist-tags --registry=https://registry.npmjs.org/ --json
+npm view cli-chat-bridge version dist-tags --registry=https://registry.npmjs.org/ --json
 ```
 13. Only after live registry verification, update `log.md` and `git-log.md` if the user asks for double log entries.
 

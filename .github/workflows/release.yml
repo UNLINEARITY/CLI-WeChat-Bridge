@@ -1,8 +1,9 @@
 # Release automation for version tags (e.g. 1.1.7).
 #
 # Pushing a plain x.y.z tag runs the full quality gate, then creates a
-# GitHub Release whose body combines docs/releases/<tag>_CN.md with the
-# notes GitHub auto-generates (commit/PR list and full-changelog diff link).
+# GitHub Release whose body combines the English docs/releases/<tag>.md, a
+# link to the Chinese docs/releases/<tag>_CN.md, and the notes GitHub
+# auto-generates (commit/PR list and full-changelog diff link).
 # A failed gate leaves no release behind. npm publishing stays manual.
 
 name: Release
@@ -66,10 +67,12 @@ jobs:
       - name: Verify release notes exist
         run: |
           TAG="${GITHUB_REF_NAME}"
-          if [ ! -f "docs/releases/${TAG}_CN.md" ]; then
-            echo "docs/releases/${TAG}_CN.md is missing; refusing to publish a release without notes." >&2
-            exit 1
-          fi
+          for NOTES in "docs/releases/${TAG}.md" "docs/releases/${TAG}_CN.md"; do
+            if [ ! -f "$NOTES" ]; then
+              echo "$NOTES is missing; refusing to publish a release without notes." >&2
+              exit 1
+            fi
+          done
 
       - name: Create GitHub release
         env:
@@ -79,10 +82,13 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           # Start from GitHub's auto-generated notes (What's Changed, full changelog).
           gh release create "$TAG" --title "$TAG" --verify-tag --generate-notes
-          # Prepend our curated Chinese release notes above the generated part.
+          # Prepend our curated English release notes, with a link to the
+          # Chinese notes, above the generated part.
           GENERATED="$(gh release view "$TAG" --json body -q .body)"
+          CN_URL="https://github.com/${GITHUB_REPOSITORY}/blob/${TAG}/docs/releases/${TAG}_CN.md"
           {
-            cat "docs/releases/${TAG}_CN.md"
+            printf '> 中文说明 / Chinese release notes: [%s_CN.md](%s)\n\n' "$TAG" "$CN_URL"
+            cat "docs/releases/${TAG}.md"
             printf '\n---\n\n'
             printf '%s\n' "$GENERATED"
           } > /tmp/release-notes.md

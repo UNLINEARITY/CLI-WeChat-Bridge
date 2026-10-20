@@ -13,6 +13,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { buildLocalCompanionToken } from "../companion/local-companion-link.ts";
 import { t } from "../i18n/index.ts";
+import { getInstalledPackageName } from "../utils/version-checker.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   buildClaudeFailureMessage,
@@ -1280,7 +1281,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
           text: [
             t("hook.healthCheck.warning"),
             logHint,
-            t("hook.healthCheck.fixes"),
+            t("hook.healthCheck.fixes", { package: getInstalledPackageName() }),
           ].filter(Boolean).join("\n"),
           timestamp: nowIso(),
         });

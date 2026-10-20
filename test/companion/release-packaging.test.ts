@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createMirrorPackage } from "../../scripts/publish-dual.mjs";
+import { createMirrorPackage, MIRROR_PACKAGE_NAMES } from "../../scripts/publish-dual.mjs";
 import { getSmokeCommands } from "../../scripts/smoke-global-install.mjs";
 
 const repoRoot = path.resolve(import.meta.dir, "../..");
@@ -36,7 +36,11 @@ describe("release package metadata", () => {
     expect(expected).toHaveLength(15);
   });
 
-  test("the scoped mirror includes both READMEs, commands and skill without local state", () => {
+  test("publishes the scoped compatibility mirror and the upcoming cli-chat-bridge name", () => {
+    expect(MIRROR_PACKAGE_NAMES).toEqual(["@unlinearity/cli-wechat-bridge", "cli-chat-bridge"]);
+  });
+
+  test.each(["@unlinearity/cli-wechat-bridge", "cli-chat-bridge"])("the %s mirror includes both READMEs, commands and skill without local state", (mirrorName) => {
     const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-package-source-"));
     for (const entry of ["bin", "skills", "scripts/ensure-node-pty-permissions.mjs", "README.md", "README_EN.md", "LICENSE.txt"]) {
       const target = path.join(sourceRoot, entry);
@@ -51,10 +55,10 @@ describe("release package metadata", () => {
     for (const entry of ["src", "test", "node_modules", "docs"]) {
       fs.mkdirSync(path.join(sourceRoot, entry));
     }
-    const directory = createMirrorPackage(packageJson, sourceRoot);
+    const directory = createMirrorPackage(packageJson, sourceRoot, mirrorName);
     try {
       const mirror = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8"));
-      expect(mirror.name).toBe("@unlinearity/cli-wechat-bridge");
+      expect(mirror.name).toBe(mirrorName);
       expect(mirror.version).toBe(packageJson.version);
       expect(mirror.bin).toEqual(packageJson.bin);
       expect(mirror.scripts).toEqual({ postinstall: packageJson.scripts.postinstall });

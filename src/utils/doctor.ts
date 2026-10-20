@@ -28,6 +28,7 @@ import {
   type DaemonEndpoint,
 } from "../daemon/daemon-link.ts";
 import { t } from "../i18n/index.ts";
+import { getInstalledPackageName } from "./version-checker.ts";
 import {
   DEFAULT_BASE_URL,
   getWorkspaceAdapterEndpointFile,
@@ -133,7 +134,7 @@ function findExecutable(name: string): string | null {
 function getPlatformPtyFix(platform: NodeJS.Platform): string {
   switch (platform) {
     case "linux":
-      return "sudo apt install build-essential python3 && npm install -g cli-wechat-bridge@latest";
+      return `sudo apt install build-essential python3 && npm install -g ${getInstalledPackageName()}@latest`;
     case "darwin":
       return "xcode-select --install && npm rebuild node-pty";
     case "win32":

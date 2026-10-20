@@ -11,6 +11,7 @@ import net from "node:net";
 import { fileURLToPath } from "node:url";
 import { spawn, spawnSync } from "node:child_process";
 import { t } from "../i18n/index.ts";
+import { getInstalledPackageName } from "../utils/version-checker.ts";
 import { spawn as spawnPty } from "node-pty";
 
 import type {
@@ -1806,17 +1807,17 @@ export function buildSpawnDiagnostic(
   ];
 
   if (errorMessage.includes("posix_spawnp") || errorMessage.includes("node-pty")) {
-    lines.push(t("spawn.diagnostic.nodePty"));
+    lines.push(t("spawn.diagnostic.nodePty", { package: getInstalledPackageName() }));
     if (platform === "darwin") {
       lines.push(t("spawn.diagnostic.xcode"));
     }
     if (platform === "linux") {
-      lines.push(t("spawn.diagnostic.linuxBuildTools"));
+      lines.push(t("spawn.diagnostic.linuxBuildTools", { package: getInstalledPackageName() }));
     }
   } else if (errorMessage.includes("ENOENT") || errorMessage.includes("spawn")) {
     lines.push(t("spawn.diagnostic.notFound", { target }));
   } else {
-    lines.push(t("spawn.diagnostic.generic"));
+    lines.push(t("spawn.diagnostic.generic", { package: getInstalledPackageName() }));
   }
 
   lines.push(t("spawn.diagnostic.nodeVersion"));
