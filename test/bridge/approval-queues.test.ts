@@ -243,6 +243,37 @@ describe("approval queues", () => {
     expect(replies[0].requestId).toBe("second");
   });
 
+  test("Claude releases a hook approval the local dialog already approved", () => {
+    const { adapter, events, replies, ask } = claude();
+    ask("first");
+    adapter.handleClaudePermissionRequest("second", { tool_name: "Bash", tool_input: { command: "rm -rf /tmp/other" } },
+      { end: (reply: string) => replies.push(JSON.parse(reply)), destroy() {} });
+    const post = (event: string, command: string) => adapter.handleClaudeHookEnvelope({ requestId: `${event}-${command}`,
+      rawPayload: JSON.stringify({ hook_event_name: event, tool_name: "Bash", tool_use_id: "tool", tool_input: { command } }),
+      socket: { end: () => undefined, destroy() {} } });
+    post("PostToolUse", "rm -rf /tmp/unrelated");
+    expect(adapter.getState().pendingApprovals.map((request: any) => request.requestId)).toEqual(["first", "second"]);
+    post("PostToolUse", "rm -rf /tmp/approval-test");
+    expect(replies.map((reply) => reply.requestId)).toEqual(["first"]);
+    expect(replies[0].stdout).toBeUndefined();
+    expect(adapter.getState().pendingApproval.requestId).toBe("second");
+    post("PostToolUseFailure", "rm -rf /tmp/other");
+    expect(adapter.getState().pendingApprovals).toEqual([]);
+    expect(adapter.getState().status).toBe("busy");
+    expect(events.at(-1)).toMatchObject({ type: "approval_state_changed", requests: [] });
+  });
+
+  test("Claude releases hook approvals rejected locally once the next prompt is submitted", () => {
+    const { adapter, replies, ask } = claude();
+    ask("first");
+    adapter.handleClaudeHookEnvelope({ requestId: "prompt",
+      rawPayload: JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "try something else" }),
+      socket: { end: () => undefined, destroy() {} } });
+    expect(replies.map((reply) => reply.requestId)).toEqual(["first"]);
+    expect(adapter.getState().pendingApprovals).toEqual([]);
+    expect(adapter.getState().status).toBe("busy");
+  });
+
   test("Claude keeps the queue after a hook write failure", async () => {
     const { adapter, ask } = claude();
     ask("first", { end() { throw new Error("offline"); }, destroy() {} });

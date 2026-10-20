@@ -24,6 +24,7 @@ export type ClaudeHookEventName =
   | "StopFailure"
   | "PreToolUse"
   | "PostToolUse"
+  | "PostToolUseFailure"
   | "PreCompact"
   | "PostCompact"
   | "SubagentStop";
@@ -164,6 +165,7 @@ export function buildClaudeHookSettings(
       StopFailure: [hook],
       PreToolUse: [hook],
       PostToolUse: [hook],
+      PostToolUseFailure: [hook],
       PreCompact: [hook],
       PostCompact: [hook],
       SubagentStop: [hook],
@@ -320,6 +322,14 @@ export function buildClaudePermissionApprovalRequest(
 function getClaudeToolInputString(payload: ClaudeHookPayload, key: string): string {
   const value = payload.tool_input?.[key];
   return typeof value === "string" ? value : "";
+}
+
+/**
+ * Identifies the tool call behind a hook payload. PermissionRequest carries
+ * no tool_use_id, so a later PostToolUse is matched by tool name and input.
+ */
+export function getClaudeToolCallKey(payload: ClaudeHookPayload): string {
+  return JSON.stringify([payload.tool_name ?? "", payload.tool_input ?? {}]);
 }
 
 export function getClaudeOutboundAttachmentDenyMessage(

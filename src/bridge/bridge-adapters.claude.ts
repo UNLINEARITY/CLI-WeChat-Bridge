@@ -28,6 +28,7 @@ import {
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
   getClaudePermissionAutoResponse,
+  getClaudeToolCallKey,
   getClaudeOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
@@ -1587,6 +1588,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
         }
         return;
       case "PostToolUse":
+      case "PostToolUseFailure":
+        this.releaseLocallyResolvedHookApprovals(payload);
         if (payload.tool_name === "AskUserQuestion" && payload.tool_use_id) {
           let removed = false;
           for (const [id, pending] of this.pendingHookUserInputs) {
@@ -1790,6 +1793,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
   }
 
   private handleClaudeUserPromptSubmit(payload: { prompt?: string }): void {
+    // A prompt cannot be submitted while a permission dialog is open: any
+    // approval still pending here was rejected locally, which ends the turn
+    // without a hook.
+    this.releaseStaleHookApprovals(Array.from(this.pendingHookApprovals.values()));
     const prompt =
       typeof payload.prompt === "string" ? normalizeOutput(payload.prompt).trim() : "";
     if (!prompt) {
@@ -1909,6 +1916,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       requestId,
       socket,
       request,
+      toolCallKey: getClaudeToolCallKey(payload),
       origin: this.state.activeTurnOrigin,
     });
     this.pendingCliApprovalHints = null;
@@ -1928,6 +1936,24 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (requests[0] && requests[0].requestId !== previousId) {
       this.emit({ type: "approval_required", request: requests[0], timestamp: nowIso() });
     }
+  }
+
+  /**
+   * Claude races its local permission dialog against the hook. A tool that
+   * ran (or failed) was approved, so its hook approval is stale.
+   */
+  private releaseLocallyResolvedHookApprovals(payload: ClaudeHookPayload): void {
+    const toolCallKey = getClaudeToolCallKey(payload);
+    const stale = Array.from(this.pendingHookApprovals.values())
+      .filter((pending) => pending.toolCallKey === toolCallKey);
+    this.releaseStaleHookApprovals(stale);
+  }
+
+  /** Release hook approvals that Claude has already resolved without them. */
+  private releaseStaleHookApprovals(stale: ClaudePendingHookApproval[]): void {
+    if (!stale.length) return;
+    for (const pending of stale) this.cancelPendingClaudeHookApproval(pending.requestId);
+    this.syncPendingHookApprovals();
   }
 
   private handleClosedClaudeHookApproval(requestId: string): void {

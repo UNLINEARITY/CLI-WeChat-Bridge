@@ -167,6 +167,7 @@ export type ClaudePendingHookApproval = {
   requestId: string;
   socket: net.Socket;
   request: ApprovalRequest;
+  toolCallKey: string;
   origin?: BridgeTurnOrigin;
 };
 

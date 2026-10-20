@@ -448,6 +448,32 @@ describe("daemon sequential approvals", () => {
     expect(slot.turns.activeTask).toBe(parentTask);
   });
 
+  test("shows a request the operator has not seen instead of confirming it blind", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter: "codex", text: "parent task", conversationId: "parent-conversation" });
+    const internal = daemon as any;
+    const slot = internal.slots.get("codex");
+    const runtime = env.runtime("codex");
+    const first = { ...pendingApproval, requestId: "first", commandPreview: "first command" };
+    runtime.state.pendingApproval = first;
+    runtime.state.pendingApprovals = [first];
+    runtime.state.status = "awaiting_approval";
+    // The adapter state already holds the request, but its prompt has not
+    // been delivered yet.
+    runtime.emit({ type: "approval_state_changed", requests: [first], timestamp: new Date().toISOString() });
+    expect(slot.displayedApprovalRequestId).toBeUndefined();
+    const message = { senderId: OPERATOR_ID };
+    await internal.controls.confirmPendingApproval(message, slot);
+    expect(runtime.approvals).toEqual([]);
+    expect(env.wecom.sent.at(-1)?.kind).toBe("approval_required");
+    expect(env.wecom.sent.at(-1)?.text).toContain("first command");
+    expect(env.wecom.sent.some((sent) => sent.text.includes("could not"))).toBe(false);
+    await internal.controls.confirmPendingApproval(message, slot);
+    expect(runtime.approvals).toEqual(["confirm"]);
+    expect(runtime.state.pendingApprovals).toEqual([]);
+  });
+
   test("a delayed obsolete popup cannot restore a locally settled request", async () => {
     const env = new FakeDaemonEnvironment();
     const daemon = env.buildDaemon("wecom");

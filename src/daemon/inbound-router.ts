@@ -123,6 +123,7 @@ export class InboundRouter {
         );
         reason = "pending_approval";
         await sendReminder(routeMessage, "approval_required");
+        slot.displayedApprovalRequestId = slot.pendingConfirmations[0]?.requestId;
       },
       remindPendingUserInput: async () => {
         routeMessage = this.host.slotManager.prefix(
@@ -508,6 +509,7 @@ export class InboundRouter {
               ),
             ),
           );
+          currentSlot.displayedApprovalRequestId = currentSlot.pendingConfirmations[0]?.requestId;
         },
         remindPendingUserInput: async () => {
           await this.host.queueMessage(

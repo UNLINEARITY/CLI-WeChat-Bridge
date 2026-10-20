@@ -10,6 +10,7 @@ import { handleLanguageControl } from "../bridge/language-control.ts";
 import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { nowIso, parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
 import { parsePendingUserInputAnswerCommand } from "../bridge/user-input-messages.ts";
+import { formatApprovalMessage } from "../bridge/message-formatting.ts";
 import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
 import {
@@ -355,9 +356,24 @@ export class DaemonControlCommands {
     }
 
     const pending = slot.pendingConfirmations[0]!;
-    const requestId = slot.runtime.getState().pendingApprovals !== undefined
-      ? slot.displayedApprovalRequestId ?? ""
-      : pending.requestId;
+    const liveState = slot.runtime.getState();
+    let requestId = pending.requestId;
+    if (liveState.pendingApprovals !== undefined) {
+      const shown = slot.displayedApprovalRequestId;
+      if (!shown || !liveState.pendingApprovals.some((request) => request.requestId === shown)) {
+        // The operator has not seen the current request yet (its prompt is
+        // still queued, or the one they saw was settled locally): show it
+        // instead of deciding blind.
+        await this.host.queueMessage(
+          message.senderId,
+          this.host.slotManager.prefix(slot, formatApprovalMessage(pending, liveState)),
+          "approval_required",
+        );
+        slot.displayedApprovalRequestId = pending.requestId;
+        return;
+      }
+      requestId = shown;
+    }
     const count = await slot.runtime.resolveApproval(action, requestId) ? 1 : 0;
     if (!count) {
       await this.host.queueMessage(
