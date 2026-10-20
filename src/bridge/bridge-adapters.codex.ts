@@ -218,8 +218,7 @@ const {
   appendBoundedLog,
   buildCodexApprovalRequest,
   buildCodexCliArgs,
-  buildCodexDynamicToolCallFailureResponse,
-  buildCodexMcpServerElicitationDeclineResponse,
+  buildCodexMcpToolApprovalResponse,
   buildCodexPermissionsRequestApprovalResponse,
   buildCodexUserInputRequest,
   coerceWebSocketMessageData,
@@ -236,6 +235,7 @@ const {
   getCodexOutboundAttachmentDenyMessage,
   getNotificationThreadId,
   getNotificationTurnId,
+  isCodexMcpToolApprovalElicitation,
   isRecord,
   isRecentIsoTimestamp,
   listCodexResumeSessions,
@@ -3196,6 +3196,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     request: CodexPendingApprovalRequest,
     action: "confirm" | "deny",
   ): Promise<void> {
+    if (request.method === "mcpServer/elicitation/request") {
+      this.sendRpcMessage({ id: request.requestId, result: buildCodexMcpToolApprovalResponse(action) });
+      return;
+    }
     if (request.method === "item/permissions/requestApproval") {
       this.sendRpcMessage({
         id: request.requestId,
@@ -3479,35 +3483,19 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
-    if (method === "mcpServer/elicitation/request") {
-      this.sendRpcMessage({
-        id: requestId,
-        result: buildCodexMcpServerElicitationDeclineResponse(),
-      });
-      return;
-    }
-
-    if (method === "item/tool/call") {
-      this.sendRpcMessage({
-        id: requestId,
-        result: buildCodexDynamicToolCallFailureResponse(),
-      });
-      return;
-    }
-
+    // Codex sends every server request to all clients of the thread and
+    // takes the first answer. Requests the bridge cannot answer for the
+    // operator (dynamic tools registered by the visible client, MCP forms,
+    // links, device checks, new methods) are left to the local terminal
+    // instead of being declined or failed first.
     if (
       method !== "item/commandExecution/requestApproval" &&
       method !== "item/fileChange/requestApproval" &&
       method !== "item/permissions/requestApproval" &&
-      method !== "item/tool/requestUserInput"
+      method !== "item/tool/requestUserInput" &&
+      method !== "mcpServer/elicitation/request"
     ) {
-      this.sendRpcMessage({
-        id: requestId,
-        error: {
-          code: -32601,
-          message: `Unsupported server request: ${method}`,
-        },
-      });
+      this.leaveServerRequestToLocalClient(method, "unsupported");
       return;
     }
 
@@ -3519,6 +3507,21 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
           message: "Invalid Codex approval request payload.",
         },
       });
+      return;
+    }
+
+    if (method === "mcpServer/elicitation/request" && !isCodexMcpToolApprovalElicitation(params)) {
+      this.leaveServerRequestToLocalClient(method, "local_only_elicitation");
+      if (this.activeTurn && getNotificationThreadId(params) === this.activeTurn.threadId) {
+        this.emit({
+          type: "notice",
+          level: "warning",
+          text: t("adapter.codex.localElicitation", {
+            server: typeof params.serverName === "string" ? params.serverName : "MCP",
+          }),
+          timestamp: nowIso(),
+        });
+      }
       return;
     }
 
@@ -3534,19 +3537,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const trackedTurn =
       (method !== "item/tool/requestUserInput" ? this.approvalOwnerForBackgroundThread(params) : null) ??
       this.identifyTrackedTurn("server/request", params) ??
-      this.fallbackTrackedTurnForServerRequest(params);
+      this.fallbackTrackedTurnForServerRequest(params) ??
+      this.activeTurnForUncorrelatedElicitation(method, params);
     if (!trackedTurn) {
       if (method !== "item/tool/requestUserInput" && this.activeTurn && this.rpcSocket) {
         this.discoverBackgroundApprovalOwner(requestId, method, params);
         return;
       }
-      this.sendRpcMessage({
-        id: requestId,
-        error: {
-          code: -32602,
-          message: "Invalid Codex server request payload: missing threadId or turnId.",
-        },
-      });
+      this.leaveServerRequestToLocalClient(method, "unowned");
       return;
     }
 
@@ -3737,10 +3735,21 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       if (!trackedTurn) throw new Error("Codex approval does not belong to the active parent turn.");
       this.handleTrackedTurnServerRequest(requestId, method, params, trackedTurn);
     })().catch((error: unknown) => {
-      if (generation === this.approvalGeneration && !this.settledApprovalIds.has(id) && this.rpcSocket) {
-        this.sendRpcMessage({ id: requestId, error: { code: -32602, message: describeUnknownError(error) } });
-      }
+      // Another client of the thread owns it; answering here would win the race.
+      this.leaveServerRequestToLocalClient(method, `unowned: ${describeUnknownError(error)}`);
     }).finally(() => this.discoveringApprovalIds.delete(id));
+  }
+
+  /** MCP elicitations carry turnId only when app-server can correlate one. */
+  private activeTurnForUncorrelatedElicitation(method: string, params: Record<string, unknown>): CodexActiveTurn | null {
+    return method === "mcpServer/elicitation/request" && this.activeTurn
+      && getNotificationTurnId(params) === null && getNotificationThreadId(params) === this.activeTurn.threadId
+      ? this.activeTurn
+      : null;
+  }
+
+  private leaveServerRequestToLocalClient(method: string, reason: string): void {
+    appendBridgeLog(BRIDGE_LOG_FILE, `[${nowIso()}] codex_server_request_left_to_local: method=${method} reason=${reason}\n`);
   }
 
   private approvalOwnerForBackgroundThread(params: Record<string, unknown>): CodexActiveTurn | null {

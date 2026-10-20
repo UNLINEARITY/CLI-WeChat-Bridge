@@ -378,7 +378,7 @@ Pi extension 还注册内部命令 `__cli_bridge_new` 和 `__cli_bridge_switch`�
 | --- | --- | --- |
 | bridge 发起请求 | `initialize`、`thread/start`、`thread/resume`、`turn/start`、`turn/interrupt` | 内部勿动；Codex 协议兼容层 |
 | bridge 接收通知 | `thread/started`、`thread/status/changed`、`turn/started`、`item/started`、`item/agentMessage/delta`、`item/completed`、`turn/completed`、`error`、`serverRequest/resolved` | 内部勿动 |
-| bridge 响应 server request | `currentTime/read`、`mcpServer/elicitation/request`、`item/tool/call`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`、`item/tool/requestUserInput` | 内部勿动 |
+| bridge 响应 server request | `currentTime/read`、`item/commandExecution/requestApproval`、`item/fileChange/requestApproval`、`item/permissions/requestApproval`、`item/tool/requestUserInput`，以及 MCP 工具审批形式的 `mcpServer/elicitation/request`；`item/tool/call`、其他 elicitation 与未知方法留给本地客户端 | 内部勿动 |
 
 这些方法即使名称像“命令”，也是 Codex 上游 JSON-RPC 契约。删除会直接破坏 turn、审批或用户输入。
 

@@ -10,6 +10,8 @@ export const messages: Record<string, string> = {
   "approval.codex.commandReason": "Codex 执行命令前需要批准：{reason}",
   "approval.codex.file": "Codex 修改文件前需要批准。",
   "approval.codex.fileReason": "Codex 修改文件前需要批准：{reason}",
+  "approval.codex.mcp": "Codex 调用 {server} 的 MCP 工具前需要批准。",
+  "adapter.codex.localElicitation": "Codex 正在本地终端等待 {server} 的 MCP 表单或验证，请在终端处理。",
   "approval.codex.permissions": "Codex 获取额外权限前需要批准。",
   "approval.codex.permissionsReason": "Codex 获取额外权限前需要批准：{reason}",
   "approval.codex.commandPreview": "请求批准执行命令。",

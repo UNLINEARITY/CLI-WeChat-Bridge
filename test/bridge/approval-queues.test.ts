@@ -196,14 +196,15 @@ describe("approval queues", () => {
     expect(adapter.getState().pendingApprovals).toEqual([]);
   });
 
-  test("Codex rejects foreign child ownership and preserves pending input after approvals", async () => {
+  test("Codex leaves foreign child requests to their own client and preserves pending input after approvals", async () => {
     const { adapter, ask, replies } = codex();
     adapter.rpcSocket = {};
     adapter.sendRpcRequest = async () => ({ thread: { id: "foreign", parentThreadId: "parent", cwd: "/another-project" } });
     ask("foreign-request", "foreign", "foreign-turn");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(adapter.getState().pendingApprovals).toEqual([]);
-    expect(replies[0]).toMatchObject({ id: "foreign-request", error: { code: -32602 } });
+    // Answering would win Codex's first-response race for another client's thread.
+    expect(replies).toEqual([]);
     ask("parent-request");
     adapter.state.pendingUserInput = { summary: "Choose", questions: [] };
     await adapter.resolveApproval("deny", adapter.getState().pendingApproval.requestId);

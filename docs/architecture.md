@@ -146,7 +146,11 @@ rejoin 语义：对运行中的线程调用 `thread/resume` 会返回历史并�
 审批请求 (server-initiated requests):
   Server → Bridge: item/commandExecution/requestApproval
   Bridge → Server: { decision: "accept" | "decline" }
+  Server → Bridge: mcpServer/elicitation/request (codex_approval_kind = mcp_tool_call)
+  Bridge → Server: { action: "accept" | "decline" }
 ```
+
+Codex 把每个 server request 发给线程的所有客户端，以最先到达的回答为准。bridge 只回答自己能代操作者决定的请求：命令、文件修改、权限申请、MCP 工具审批与 `request_user_input`。其余请求（visible 客户端注册的动态工具 `item/tool/call`、MCP 表单 / 链接 / 设备验证、不属于当前轮次的请求、新出现的方法）不回复，留给本地终端处理；MCP 表单与验证会在远程通道提示到终端完成。
 
 ### 会话管理
 

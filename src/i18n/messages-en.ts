@@ -10,6 +10,8 @@ export const messages: Record<string, string> = {
   "approval.codex.commandReason": "Codex needs approval before running a command: {reason}",
   "approval.codex.file": "Codex needs approval before applying a file change.",
   "approval.codex.fileReason": "Codex needs approval before applying a file change: {reason}",
+  "approval.codex.mcp": "Codex needs approval before calling a tool from {server}.",
+  "adapter.codex.localElicitation": "Codex is waiting in the local terminal for an MCP form or verification from {server}. Complete it there.",
   "approval.codex.permissions": "Codex needs approval before granting extra permissions.",
   "approval.codex.permissionsReason": "Codex needs approval before granting extra permissions: {reason}",
   "approval.codex.commandPreview": "Command execution approval requested.",

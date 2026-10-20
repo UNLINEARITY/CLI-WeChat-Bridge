@@ -120,7 +120,8 @@ export type CodexPendingApprovalRequest = {
   method:
     | "item/commandExecution/requestApproval"
     | "item/fileChange/requestApproval"
-    | "item/permissions/requestApproval";
+    | "item/permissions/requestApproval"
+    | "mcpServer/elicitation/request";
   threadId: string;
   turnId: string;
   origin: BridgeTurnOrigin;
@@ -380,6 +381,21 @@ export function buildCodexApprovalRequest(
     };
   }
 
+  if (method === "mcpServer/elicitation/request") {
+    const meta = isRecord(params._meta) ? params._meta : {};
+    const server = typeof params.serverName === "string" ? params.serverName : "MCP";
+    const tool = typeof meta.tool_title === "string" ? meta.tool_title
+      : typeof meta.tool_name === "string" ? meta.tool_name : "";
+    const message = typeof params.message === "string" ? params.message : "";
+    const toolParams = meta.tool_params === undefined ? "" : JSON.stringify(meta.tool_params);
+    return {
+      source: "cli",
+      summary: message ? truncatePreview(message, 160) : t("approval.codex.mcp", { server }),
+      commandPreview: truncatePreview([`${server}${tool ? ` / ${tool}` : ""}`, toolParams].filter(Boolean).join(" "), 180),
+      toolName: tool || undefined,
+    };
+  }
+
   if (method === "item/permissions/requestApproval") {
     const reason = typeof params.reason === "string" ? params.reason : "";
     const preview = summarizeCodexPermissionsRequest(params.permissions);
@@ -534,6 +550,11 @@ export function describeCodexApprovalOperation(
       writePaths: collectCodexWritePaths(params.additionalPermissions),
     };
   }
+  if (method === "mcpServer/elicitation/request") {
+    const meta = isRecord(params._meta) ? params._meta : {};
+    const tool = typeof meta.tool_name === "string" ? meta.tool_name : "";
+    return { kind: "mcp", tool: [params.serverName, tool].filter((part) => typeof part === "string" && part).join("/") };
+  }
   if (method === "item/fileChange/requestApproval") {
     // The request names no files: Codex announces the patch only after the
     // decision. It asks when the patch leaves its writable roots, so without
@@ -567,7 +588,9 @@ export function getCodexApprovalAutoResponse(
   return {
     result: method === "item/permissions/requestApproval"
       ? buildCodexPermissionsRequestApprovalResponse(params, "confirm", { strictAutoReview: true })
-      : { decision: "accept" },
+      : method === "mcpServer/elicitation/request"
+        ? buildCodexMcpToolApprovalResponse("confirm")
+        : { decision: "accept" },
     reason: verdict.reason,
     kind: toAutoApprovalKind(operation.kind),
   };
@@ -640,24 +663,22 @@ export function buildCodexPermissionsRequestApprovalResponse(
   return response;
 }
 
-export function buildCodexMcpServerElicitationDeclineResponse(): Record<string, unknown> {
-  return {
-    action: "decline",
-    content: null,
-    _meta: null,
-  };
+/**
+ * Codex asks to approve an MCP tool call through an MCP elicitation: an
+ * empty form tagged `codex_approval_kind: mcp_tool_call`
+ * (codex-rs/protocol/src/mcp_approval_meta.rs). Other elicitations are forms,
+ * links, or device checks that only the local terminal can complete.
+ */
+export function isCodexMcpToolApprovalElicitation(params: unknown): boolean {
+  return isRecord(params) && params.mode === "form" && isRecord(params._meta)
+    && params._meta.codex_approval_kind === "mcp_tool_call";
 }
 
-export function buildCodexDynamicToolCallFailureResponse(): Record<string, unknown> {
-  return {
-    contentItems: [
-      {
-        type: "inputText",
-        text: "Dynamic tool calls are not supported by the WeChat bridge.",
-      },
-    ],
-    success: false,
-  };
+/** Accepting the approval form needs no content; declining denies the call. */
+export function buildCodexMcpToolApprovalResponse(action: "confirm" | "deny"): Record<string, unknown> {
+  return action === "confirm"
+    ? { action: "accept", content: {}, _meta: null }
+    : { action: "decline", content: null, _meta: null };
 }
 
 export function buildCodexUserInputRequest(params: unknown): UserInputRequest | null {

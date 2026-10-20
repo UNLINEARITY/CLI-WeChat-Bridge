@@ -2712,7 +2712,7 @@ describe("Codex panel completion recovery", () => {
     expect(adapter.state.status).toBe("busy");
   });
 
-  test("returns explicit fallback responses for unsupported Codex server tools", () => {
+  test("leaves Codex server requests it cannot answer to the local client", () => {
     const adapter = createBridgeAdapter({
       kind: "codex",
       command: "codex",
@@ -2720,20 +2720,20 @@ describe("Codex panel completion recovery", () => {
       renderMode: "panel",
     }) as any;
     const rpcMessages: Array<Record<string, unknown>> = [];
+    const events: any[] = [];
+    adapter.setEventSink((event: any) => events.push(event));
     adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
       rpcMessages.push(payload);
     };
+    adapter.activeTurn = { threadId: "thread_1", turnId: "turn_1", origin: "wechat" };
 
     adapter.handleRpcServerRequest(10, "mcpServer/elicitation/request", {
       threadId: "thread_1",
       turnId: "turn_1",
       serverName: "calendar",
       mode: "form",
-      message: "Allow this request?",
-      requestedSchema: {
-        type: "object",
-        properties: {},
-      },
+      message: "Which calendar?",
+      requestedSchema: { type: "object", properties: { calendar: { type: "string" } } },
     });
     adapter.handleRpcServerRequest(11, "item/tool/call", {
       threadId: "thread_1",
@@ -2742,28 +2742,51 @@ describe("Codex panel completion recovery", () => {
       tool: "lookup_ticket",
       arguments: {},
     });
+    adapter.handleRpcServerRequest(12, "account/somethingNew", { threadId: "thread_1" });
 
+    expect(rpcMessages).toEqual([]);
+    expect(adapter.getState().pendingApprovals).toEqual([]);
+    expect(events.filter((event) => event.type === "notice").map((event) => event.text))
+      .toEqual([expect.stringContaining("calendar")]);
+  });
+
+  test("forwards Codex MCP tool approvals and answers them as elicitations", async () => {
+    const adapter = createBridgeAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd: process.cwd(),
+      renderMode: "panel",
+    }) as any;
+    const rpcMessages: Array<Record<string, unknown>> = [];
+    adapter.setEventSink(() => undefined);
+    adapter.sendRpcMessage = (payload: Record<string, unknown>) => {
+      rpcMessages.push(payload);
+    };
+    adapter.activeTurn = { threadId: "thread_1", turnId: "turn_1", origin: "wechat" };
+    adapter.state.status = "busy";
+    const approval = (id: number, turnId: string | null) => adapter.handleRpcServerRequest(id, "mcpServer/elicitation/request", {
+      threadId: "thread_1",
+      turnId,
+      serverName: "github",
+      mode: "form",
+      message: "Allow the github MCP server to run tool \"create_issue\"?",
+      requestedSchema: { type: "object", properties: {} },
+      _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "create_issue", tool_params: { title: "Bug" } },
+    });
+
+    approval(20, "turn_1");
+    approval(21, null);
+    expect(rpcMessages).toEqual([]);
+    expect(adapter.getState().pendingApprovals).toHaveLength(2);
+    expect(adapter.getState().pendingApproval).toMatchObject({
+      summary: "Allow the github MCP server to run tool \"create_issue\"?",
+      commandPreview: "github / create_issue {\"title\":\"Bug\"}",
+    });
+    expect(await adapter.resolveApproval("confirm", adapter.getState().pendingApproval.requestId)).toBe(true);
+    expect(await adapter.resolveApproval("deny", adapter.getState().pendingApproval.requestId)).toBe(true);
     expect(rpcMessages).toEqual([
-      {
-        id: 10,
-        result: {
-          action: "decline",
-          content: null,
-          _meta: null,
-        },
-      },
-      {
-        id: 11,
-        result: {
-          contentItems: [
-            {
-              type: "inputText",
-              text: "Dynamic tool calls are not supported by the WeChat bridge.",
-            },
-          ],
-          success: false,
-        },
-      },
+      { id: 20, result: { action: "accept", content: {}, _meta: null } },
+      { id: 21, result: { action: "decline", content: null, _meta: null } },
     ]);
   });
 
