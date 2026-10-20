@@ -5,7 +5,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { t } from "../i18n/index.ts";
-import type { ApprovalRequest, AutoApprovalKind, UserInputRequest } from "./bridge-types.ts";
+import type { ApprovalDecision, ApprovalRequest, AutoApprovalKind, UserInputRequest } from "./bridge-types.ts";
 import {
   OUTBOUND_ATTACHMENT_DENY_MESSAGE,
   containsOutboundAttachmentPath,
@@ -322,6 +322,8 @@ export function buildClaudePermissionApprovalRequest(
     toolName,
     detailLabel,
     detailPreview,
+    extraDecisions: toClaudeSessionPermissionUpdates(payload.permission_suggestions).length ? ["always", "abort"] : ["abort"],
+    denyReasonSupported: true,
   };
 }
 
@@ -401,19 +403,34 @@ export function getClaudePermissionAutoResponse(
     : null;
 }
 
+/**
+ * Claude's own "don't ask again" choices, limited to the current session so
+ * a remote approval never edits settings files.
+ */
+export function toClaudeSessionPermissionUpdates(suggestions: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(suggestions)) return [];
+  return suggestions.flatMap((suggestion) =>
+    suggestion && typeof suggestion === "object" && typeof (suggestion as { type?: unknown }).type === "string"
+      ? [{ ...(suggestion as Record<string, unknown>), destination: "session" }]
+      : []);
+}
+
 export function buildClaudePermissionDecisionHookOutput(
-  action: ClaudePermissionDecisionAction,
+  action: ApprovalDecision,
   denyMessage = "Permission denied from WeChat bridge.",
+  suggestions?: unknown,
 ): string {
+  const sessionUpdates = action === "always" ? toClaudeSessionPermissionUpdates(suggestions) : [];
   const decision =
-    action === "confirm"
+    action === "confirm" || action === "always"
       ? {
           behavior: "allow",
+          ...(sessionUpdates.length ? { updatedPermissions: sessionUpdates } : {}),
         }
       : {
           behavior: "deny",
           message: denyMessage,
-          interrupt: false,
+          interrupt: action === "abort",
         };
 
   return JSON.stringify({

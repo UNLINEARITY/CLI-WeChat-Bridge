@@ -108,11 +108,22 @@ export const messages: Record<string, string> = {
 
   // === 审批 ===
   "approval.prompt": "{adapter} 权限请求。\n{summary}\n\n回复 /confirm 或 /deny。",
-  "approval.confirmed": "已确认审批，继续执行...",
-  "approval.denied": "已拒绝审批。",
+  "approval.resolved.confirm": "已确认审批，继续执行...",
+  "approval.resolved.always": "已允许，本会话内同类操作不再询问。",
+  "approval.resolved.deny": "已拒绝审批。",
+  "approval.resolved.abort": "已拒绝，并停止本轮任务。",
+  "approval.resolved.denyWithReason": "已拒绝，理由已转给模型。",
+  "approval.resolved.denyReasonQueued": "已拒绝。Codex 不支持随拒绝附带理由，本轮结束后会把理由作为下一条消息发给它。",
+  "approval.resolved.denyReasonDropped": "已拒绝，但这个 CLI 窗口版本较旧，理由没有送达；重启窗口后可用。",
+  "approval.denyReasonPrompt": "我拒绝了刚才请求的操作，原因：{reason}",
+  "approval.unsupported.always": "{adapter} 不支持对这个请求“本会话内允许”，请用 /confirm 或 /deny。",
+  "approval.unsupported.abort": "{adapter} 不支持对这个请求“拒绝并停止”，可以先 /deny 再 /stop。",
+  "approval.moreDecisions": "其他回复：{items}",
+  "approval.decision.always": "/always 本会话内允许",
+  "approval.decision.denyReason": "/deny <理由> 拒绝并说明原因",
+  "approval.decision.abort": "/abort 拒绝并停止本轮",
+  "approval.decision.separator": "；",
   "approval.noPending": "没有待处理的审批请求。",
-  "approval.batchConfirmed": "已批量确认 {count} 个审批。",
-  "approval.batchDenied": "已批量拒绝 {count} 个审批。",
 
   // === Hook 健康检查 ===
   "hook.healthCheck.warning": "[警告] 15 秒内未收到 Claude hook 事件。\nhook 系统可能未正常工作 — Claude 的输出将无法到达微信。",

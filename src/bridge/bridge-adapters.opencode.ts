@@ -32,7 +32,9 @@ import {
   delay,
 } from "./bridge-adapters.shared.ts";
 import type {
+  ApprovalDecision,
   ApprovalRequest,
+  ApprovalResolveOptions,
   AutoApprovalKind,
   BridgeAdapter,
   BridgeAdapterState,
@@ -187,6 +189,7 @@ type OpenCodeSdkClient = {
       directory?: string;
       workspace?: string;
       reply: "once" | "always" | "reject";
+      message?: string;
     }): Promise<SdkResult<boolean>>;
   };
   question: {
@@ -887,11 +890,12 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     await this.start();
   }
 
-  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  async resolveApproval(action: ApprovalDecision, requestId?: string, options: ApprovalResolveOptions = {}): Promise<boolean> {
     const pending = requestId === undefined
       ? this.pendingPermission
       : this.pendingPermissions.get(requestId);
-    if (!pending || !this.client || this.resolvingPermissions.has(pending.permissionId)) {
+    // OpenCode's "always" saves a project rule; remote approvals stay within the session.
+    if (!pending || !this.client || this.resolvingPermissions.has(pending.permissionId) || action === "always") {
       return false;
     }
     this.resolvingPermissions.add(pending.permissionId);
@@ -902,6 +906,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         directory: this.options.cwd,
         workspace: this.activeWorkspaceId ?? undefined,
         reply: action === "confirm" ? "once" : "reject",
+        // A reason reaches the model as feedback instead of ending the step.
+        ...(action !== "confirm" && options.reason ? { message: options.reason } : {}),
       });
       if (result.error !== undefined) {
         throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
@@ -910,6 +916,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.pendingPermissions.delete(pending.permissionId);
       this.clearRemoteWorkingNotice();
       this.syncPendingPermissions();
+      if (action === "abort") void this.interrupt().catch(() => undefined);
       return true;
     } catch (err) {
       this.emit({
@@ -2479,8 +2486,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         toolName,
         detailPreview: typeof metadata.detail === "string" ? metadata.detail : undefined,
         detailLabel: typeof metadata.label === "string" ? metadata.label : undefined,
-        confirmInput: undefined,
-        denyInput: undefined,
+        extraDecisions: ["abort"],
+        denyReasonSupported: true,
       },
     };
   }

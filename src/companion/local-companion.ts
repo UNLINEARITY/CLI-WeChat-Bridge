@@ -240,7 +240,12 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
 
     sendLocalCompanionMessage(activeSocket, {
       type: "state",
-      state: { ...adapter.getState(), supportsLocaleUpdates: true, supportsAutoApprovalUpdates: true },
+      state: {
+        ...adapter.getState(),
+        supportsLocaleUpdates: true,
+        supportsAutoApprovalUpdates: true,
+        supportsApprovalDecisions: true,
+      },
     });
   };
 
@@ -372,7 +377,9 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
             true,
             message.payload.requestId === undefined
               ? false
-              : await adapter.resolveApproval(message.payload.action, message.payload.requestId),
+              : await adapter.resolveApproval(message.payload.action, message.payload.requestId, {
+                reason: message.payload.reason,
+              }),
           );
           break;
         case "submit_user_input":

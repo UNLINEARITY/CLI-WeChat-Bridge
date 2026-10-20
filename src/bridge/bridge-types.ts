@@ -35,6 +35,18 @@ export type ApprovalSource = "cli";
 /** What an automatically approved request was, for the per-turn summary. */
 export type AutoApprovalKind = "command" | "file_write" | "permissions" | "network" | "read" | "other";
 
+/**
+ * How the operator answers an approval: allow once, allow for the rest of the
+ * session, reject (optionally with a reason for the model), or reject and
+ * stop the turn.
+ */
+export type ApprovalDecision = "confirm" | "always" | "deny" | "abort";
+
+export type ApprovalResolveOptions = {
+  /** Why the operator rejected; given to the model where the CLI supports it. */
+  reason?: string;
+};
+
 export type ApprovalRequest = {
   source: ApprovalSource;
   summary: string;
@@ -45,6 +57,10 @@ export type ApprovalRequest = {
   requestId?: string;
   confirmInput?: string;
   denyInput?: string;
+  /** Decisions beyond confirm/deny that this request supports. */
+  extraDecisions?: Array<"always" | "abort">;
+  /** The CLI passes a rejection reason to the model. */
+  denyReasonSupported?: boolean;
 };
 
 export type PendingApproval = ApprovalRequest & {
@@ -131,6 +147,8 @@ export type BridgeAdapterState = {
   supportsUserInputRequestIds?: boolean;
   supportsLocaleUpdates?: boolean;
   supportsAutoApprovalUpdates?: boolean;
+  /** The companion accepts always/abort decisions and rejection reasons. */
+  supportsApprovalDecisions?: boolean;
   sharedSessionId?: string;
   sharedThreadId?: string;
   activeRuntimeSessionId?: string;
@@ -256,7 +274,7 @@ export interface BridgeAdapter {
   setAutoApproval?(enabled: boolean): Promise<boolean>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
-  resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean>;
+  resolveApproval(action: ApprovalDecision, requestId?: string, options?: ApprovalResolveOptions): Promise<boolean>;
   resolveAllApprovals(action: "confirm" | "deny"): Promise<number>;
   submitUserInput(answers: Record<string, string[]>, requestId?: string): Promise<boolean>;
   dispose(): Promise<void>;

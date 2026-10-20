@@ -13,7 +13,9 @@ export type BridgeControlCommand =
   | { type: "reset" }
   | { type: "auto"; enabled?: boolean; invalid?: boolean }
   | { type: "confirm"; index?: number }
-  | { type: "deny"; index?: number }
+  | { type: "always"; index?: number }
+  | { type: "deny"; index?: number; reason?: string }
+  | { type: "abort"; index?: number }
   | { type: "answer"; raw: string }
   | { type: "model"; target?: string }
   | { type: "plan"; enabled: boolean }
@@ -24,11 +26,19 @@ export type BridgeControlCommand =
  * one- or two-digit numbers count, so a legacy six-digit approval code
  * (`/confirm 123456`) still confirms the current request.
  */
-function withPendingIndex<T extends { type: "confirm" | "deny" }>(
+function withPendingIndex<T extends { type: "confirm" | "always" | "deny" | "abort" }>(
   command: T,
   argument: string,
 ): T & { index?: number } {
   return /^[1-9]\d?$/.test(argument) ? { ...command, index: Number(argument) } : command;
+}
+
+/** `/deny [number] [reason]`: the text after an optional list number is the reason. */
+function parseDenyCommand(argument: string): Extract<BridgeControlCommand, { type: "deny" }> {
+  const match = /^([1-9]\d?)(?:\s+([\s\S]+))?$/.exec(argument);
+  if (match) return { type: "deny", index: Number(match[1]), ...(match[2] ? { reason: match[2].trim() } : {}) };
+  if (!argument || /^\d{6}$/.test(argument)) return { type: "deny" };
+  return { type: "deny", reason: argument };
 }
 
 /** Parse the canonical control command grammar shared by all channels. */
@@ -68,9 +78,13 @@ export function parseBridgeControlCommand(
     case "/confirm":
     case "/yes":
       return withPendingIndex({ type: "confirm" }, argument);
+    case "/always":
+      return withPendingIndex({ type: "always" }, argument);
     case "/deny":
     case "/no":
-      return withPendingIndex({ type: "deny" }, argument);
+      return parseDenyCommand(argument);
+    case "/abort":
+      return withPendingIndex({ type: "abort" }, argument);
     case "/answer":
       // A bare /answer lists the waiting questions.
       return { type: "answer", raw: argument };

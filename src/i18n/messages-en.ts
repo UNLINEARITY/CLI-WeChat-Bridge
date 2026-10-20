@@ -108,11 +108,22 @@ export const messages: Record<string, string> = {
 
   // === Approval ===
   "approval.prompt": "{adapter} permission request.\n{summary}\n\nReply /confirm or /deny.",
-  "approval.confirmed": "Approval confirmed. Continuing...",
-  "approval.denied": "Approval denied.",
+  "approval.resolved.confirm": "Approval confirmed. Continuing...",
+  "approval.resolved.always": "Allowed. Similar requests will not ask again in this session.",
+  "approval.resolved.deny": "Approval denied.",
+  "approval.resolved.abort": "Denied, and the current turn is stopped.",
+  "approval.resolved.denyWithReason": "Denied. The reason was passed to the model.",
+  "approval.resolved.denyReasonQueued": "Denied. Codex cannot take a reason with a rejection, so the reason will be sent as the next message when this turn ends.",
+  "approval.resolved.denyReasonDropped": "Denied, but this CLI window runs an older version and the reason was not delivered; restart the window to use reasons.",
+  "approval.denyReasonPrompt": "I rejected the operation you just requested. Reason: {reason}",
+  "approval.unsupported.always": "{adapter} cannot allow this request for the session. Use /confirm or /deny.",
+  "approval.unsupported.abort": "{adapter} cannot deny and stop for this request. Use /deny, then /stop.",
+  "approval.moreDecisions": "Other replies: {items}",
+  "approval.decision.always": "/always allow for this session",
+  "approval.decision.denyReason": "/deny <reason> deny and explain",
+  "approval.decision.abort": "/abort deny and stop the turn",
+  "approval.decision.separator": "; ",
   "approval.noPending": "No pending approval request.",
-  "approval.batchConfirmed": "Batch confirmed {count} approval(s).",
-  "approval.batchDenied": "Batch denied {count} approval(s).",
 
   // === Hook health check ===
   "hook.healthCheck.warning": "[Warning] No hook events received from Claude after 15s.\nThe hook system may not be working — Claude output will not reach WeChat.",

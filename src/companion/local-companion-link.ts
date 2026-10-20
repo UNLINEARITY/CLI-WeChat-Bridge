@@ -15,6 +15,7 @@ import {
 } from "../wechat/channel-config.ts";
 import { writeJsonFileAtomic } from "../utils/atomic-file.ts";
 import type {
+  ApprovalDecision,
   BridgeAdapterState,
   BridgeEvent,
   BridgeWorkerStatus,
@@ -40,7 +41,7 @@ export type LocalCompanionCommand =
   | { command: "interrupt" }
   | { command: "reset" }
   | { command: "dispose" }
-  | { command: "resolve_approval"; action: "confirm" | "deny"; requestId?: string }
+  | { command: "resolve_approval"; action: ApprovalDecision; requestId?: string; reason?: string }
   | { command: "submit_user_input"; answers: Record<string, string[]>; requestId?: string };
 
 export type LocalCompanionCloseReason =

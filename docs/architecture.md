@@ -86,6 +86,7 @@
 - **附加**：`--attach-current-session` 让 daemon 增加一个无窗口的 codex slot，加入 Codex 共享 daemon 的活线程，不随窗口结束；它在模式判断中视同一个 codex 窗口。
 - **输出**：前缀按上表的模式决定。审批和问题跨窗口时用 `/confirm <编号>`、`/answer #<编号>` 指定。
 - **审批**：Codex、Claude Code 和 OpenCode 的审批按到达顺序逐项处理，本地终端已处理的请求会同步移除；`/confirm` 只处理用户已经看到的请求，没看到时先展示当前请求。子代理的权限请求由所属父任务接收，审批不会切换当前会话或改变回复目标。
+- **审批决策**：`ApprovalDecision` 为 confirm / always / deny / abort，拒绝可带理由。adapter 在请求上标出支持的额外决策（`extraDecisions`）与是否接受理由（`denyReasonSupported`）：Codex 映射为 `acceptForSession` / `cancel`（命令按 `availableDecisions`，权限申请用 `scope: session`，MCP 审批按 `_meta.persist`）；Claude 把 `permission_suggestions` 改写为 `destination: session` 的 `updatedPermissions`，abort 用 `interrupt: true`，理由写入 deny `message`；OpenCode 的理由走 reject `message`，abort 为 reject 后中断，不发 `always`。Codex 不接受理由时，daemon 在拒绝后把理由放入延后队列，本轮结束后作为下一条输入。旧版 companion 不声明 `supportsApprovalDecisions` 时只发送 confirm / deny。
 - **自动放行**：三个 adapter 把权限请求翻译成统一的操作描述，交给 `src/bridge/approval-policy.ts` 判断。危险命令、对外操作、工作区外写入、MCP 工具与需要操作者决定的请求转发确认，其余自动放行；`CLI_BRIDGE_STRICT_APPROVAL=1` 时默认全部转发。`/auto on|off` 在 daemon 进程内切换，并通过 companion 的 `set_auto_approval` 请求与 `hello_ack` 同步到 Claude Code、OpenCode 所在进程。自动放行时 adapter 发出 `approval_auto_resolved` 事件，slot 按类别计数，在下一条最终回复的附件块之前附一行汇总。
 - **会话**：每个 slot 跟随的会话保存在 `workspaces/<目录>/slot-session-<cli>.json`（编号实例为 `slot-session-<cli>-<n>.json`），供显式 `--session-start-mode restore` 恢复。
 - **出站**：`OutboundDispatcher`（`src/core`）串行发送文本与附件；目标会话失效时暂存到 `PendingMessageStore`，下一条入站消息到达后补发。

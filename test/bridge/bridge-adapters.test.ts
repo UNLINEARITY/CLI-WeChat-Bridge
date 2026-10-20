@@ -439,6 +439,7 @@ describe("buildCodexApprovalRequest", () => {
       summary:
         "Codex needs approval before running a command: Network access is required to push this branch.",
       commandPreview: "git push origin main (C:\\repo)",
+      extraDecisions: ["always", "abort"],
     });
   });
 
@@ -456,6 +457,7 @@ describe("buildCodexApprovalRequest", () => {
       summary:
         "Codex needs approval before applying a file change: Extra write access is required for generated assets.",
       commandPreview: "C:\\repo\\generated",
+      extraDecisions: ["always", "abort"],
     });
   });
 
@@ -526,6 +528,7 @@ describe("buildCodexApprovalRequest", () => {
         "Codex needs approval before granting extra permissions: Need to inspect generated files.",
       commandPreview:
         "network access; read: C:\\repo\\generated; write: C:\\repo\\generated",
+      extraDecisions: ["always", "abort"],
     });
 
     expect(buildCodexPermissionsRequestApprovalResponse()).toEqual({

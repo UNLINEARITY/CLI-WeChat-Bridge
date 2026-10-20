@@ -187,6 +187,16 @@ export function formatAutoApprovalSummary(counts: Partial<Record<AutoApprovalKin
   return items.length ? t("approval.auto.summary", { items: items.join(t("approval.auto.separator")) }) : null;
 }
 
+/** The replies beyond confirm/deny this request accepts. */
+function formatMoreDecisions(pending: PendingApproval): string[] {
+  const items = [
+    ...(pending.extraDecisions?.includes("always") ? [t("approval.decision.always")] : []),
+    t("approval.decision.denyReason"),
+    ...(pending.extraDecisions?.includes("abort") ? [t("approval.decision.abort")] : []),
+  ];
+  return [t("approval.moreDecisions", { items: items.join(t("approval.decision.separator")) })];
+}
+
 /** "N more waiting" for the requests queued behind the one shown. */
 function formatQueuedApprovals(adapterState: BridgeAdapterState): string[] {
   const queued = (adapterState.pendingApprovals?.length ?? 0) - 1;
@@ -214,6 +224,7 @@ export function formatApprovalMessage(
           : []),
       t("approval.confirmInstructions"),
       t("approval.denyInstructions"),
+      ...formatMoreDecisions(pending),
       ...formatQueuedApprovals(adapterState),
     ].join("\n");
   }
@@ -225,6 +236,7 @@ export function formatApprovalMessage(
     `${t("approval.target")}: ${pending.commandPreview}`,
     t("approval.confirmInstructions"),
     t("approval.denyInstructions"),
+    ...formatMoreDecisions(pending),
     ...formatQueuedApprovals(adapterState),
   ].join("\n");
 }

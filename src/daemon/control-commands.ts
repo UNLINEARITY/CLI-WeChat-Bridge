@@ -11,6 +11,7 @@ import { LANGUAGE_FILE } from "../wechat/channel-config.ts";
 import { nowIso, parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
 import { parsePendingUserInputAnswerCommand } from "../bridge/user-input-messages.ts";
 import { formatApprovalMessage } from "../bridge/message-formatting.ts";
+import type { ApprovalDecision } from "../bridge/bridge-types.ts";
 import { isAutoApprovalEnabled, setAutoApprovalOverride } from "../bridge/approval-policy.ts";
 import { isRemoteResumeEnabled } from "../bridge/bridge-session-resume.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
@@ -120,8 +121,14 @@ export class DaemonControlCommands {
       case "confirm":
         await this.confirmPendingApproval(message, activeSlot, command.index);
         return;
+      case "always":
+        await this.resolveApproval("always", message, activeSlot, command.index);
+        return;
       case "deny":
-        await this.denyPendingApproval(message, activeSlot, command.index);
+        await this.denyPendingApproval(message, activeSlot, command.index, command.reason);
+        return;
+      case "abort":
+        await this.resolveApproval("abort", message, activeSlot, command.index);
         return;
       case "answer":
         await this.answerPendingUserInput(message, activeSlot, command.raw);
@@ -370,15 +377,17 @@ export class DaemonControlCommands {
     message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     index?: number,
+    reason?: string,
   ): Promise<void> {
-    await this.resolveApproval("deny", message, activeSlot, index);
+    await this.resolveApproval("deny", message, activeSlot, index, reason);
   }
 
   private async resolveApproval(
-    action: "confirm" | "deny",
+    action: ApprovalDecision,
     message: BridgeInboundMessage,
     activeSlot: DaemonSlot | null,
     index: number | undefined,
+    reason?: string,
   ): Promise<void> {
     const slot = await this.resolveApprovalTarget(message.senderId, activeSlot, index);
     if (!slot) {
@@ -404,32 +413,41 @@ export class DaemonControlCommands {
       }
       requestId = shown;
     }
-    const count = await slot.runtime.resolveApproval(action, requestId) ? 1 : 0;
+    const request = liveState.pendingApprovals?.find((candidate) => candidate.requestId === requestId) ?? pending;
+    const reply = (text: string) => this.host.queueMessage(message.senderId, this.host.slotManager.prefix(slot, text));
+    if ((action === "always" || action === "abort") && !request.extraDecisions?.includes(action)) {
+      await reply(t(`approval.unsupported.${action}`, { adapter: slot.adapter }));
+      return;
+    }
+    const nativeReason = action !== "confirm" && action !== "always" && reason && request.denyReasonSupported;
+    const count = await slot.runtime.resolveApproval(action, requestId, nativeReason ? { reason } : undefined) ? 1 : 0;
     if (!count) {
-      await this.host.queueMessage(
-        message.senderId,
-        this.host.slotManager.prefix(
-          slot,
-          t(action === "confirm" ? "bridge.approval.applyFailed" : "bridge.approval.denyFailed"),
-        ),
-      );
+      await reply(t(action === "confirm" || action === "always" ? "bridge.approval.applyFailed" : "bridge.approval.denyFailed"));
       return;
     }
     const adapterState = slot.runtime.getState();
     slot.pendingConfirmations = (adapterState.pendingApprovals ?? (adapterState.pendingApproval ? [adapterState.pendingApproval] : []))
       .map((request) => toPendingApproval({ type: "approval_required", request, timestamp: nowIso() }));
     this.host.daemonLog(
-      action === "confirm"
-        ? `approval_confirmed: adapter=${slot.adapter} count=${count} command=${truncatePreview(pending.commandPreview)}`
-        : `approval_denied: adapter=${slot.adapter} count=${count}`,
+      `approval_resolved: adapter=${slot.adapter} decision=${action} reason=${reason ? (nativeReason ? "native" : "deferred") : "none"}`
+        + ` command=${truncatePreview(request.commandPreview)}`,
     );
-    await this.host.queueMessage(
-      message.senderId,
-      this.host.slotManager.prefix(
-        slot,
-        t(action === "confirm" ? "approval.confirmed" : "approval.denied"),
-      ),
-    );
+    if (!reason || action === "confirm" || action === "always") {
+      await reply(t(`approval.resolved.${action}`));
+      return;
+    }
+    if (nativeReason) {
+      await reply(t("approval.resolved.denyWithReason"));
+      return;
+    }
+    // The CLI cannot take a reason with the rejection: send it as the next
+    // message once the turn settles (the deferred queue drains for Codex).
+    if (slot.adapter === "codex") {
+      slot.deferredInputs.push({ message: { ...message, text: t("approval.denyReasonPrompt", { reason }) } });
+      await reply(t("approval.resolved.denyReasonQueued"));
+      return;
+    }
+    await reply(t("approval.resolved.denyReasonDropped"));
   }
 
   /**

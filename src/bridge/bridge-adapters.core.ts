@@ -24,7 +24,9 @@ import {
   type LocalCompanionMessage,
 } from "../companion/local-companion-link.ts";
 import type {
+  ApprovalDecision,
   ApprovalRequest,
+  ApprovalResolveOptions,
   BridgeAdapter,
   BridgeAdapterKind,
   BridgeAdapterState,
@@ -289,16 +291,19 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     });
   }
 
-  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  async resolveApproval(action: ApprovalDecision, requestId?: string, options: ApprovalResolveOptions = {}): Promise<boolean> {
     if (!this.state.supportsApprovalRequestIds) {
       throw new Error("Restart the visible CLI to upgrade its companion before approving remotely.");
     }
+    // Older companions treat any action other than confirm as deny.
+    if ((action === "always" || action === "abort") && !this.state.supportsApprovalDecisions) return false;
     const expectedId = requestId ?? this.state.pendingApproval?.requestId;
     if (!expectedId) return false;
     const result = await this.sendRequest({
       command: "resolve_approval",
       action,
       requestId: expectedId,
+      ...(options.reason && this.state.supportsApprovalDecisions ? { reason: options.reason } : {}),
     });
     return Boolean(result);
   }
@@ -485,6 +490,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.state.supportsUserInputRequestIds = undefined;
         this.state.supportsLocaleUpdates = undefined;
     this.state.supportsAutoApprovalUpdates = undefined;
+    this.state.supportsApprovalDecisions = undefined;
         this.state.pendingUserInput = null;
         this.state.pendingUserInputOrigin = undefined;
         this.state.sharedSessionId = undefined;
@@ -576,6 +582,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     this.state.supportsUserInputRequestIds = undefined;
     this.state.supportsLocaleUpdates = undefined;
     this.state.supportsAutoApprovalUpdates = undefined;
+    this.state.supportsApprovalDecisions = undefined;
     this.state.pendingUserInput = null;
     this.state.pendingUserInputOrigin = undefined;
     this.state.activeTurnId = undefined;
@@ -1021,11 +1028,12 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     await this.start();
   }
 
-  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  async resolveApproval(action: ApprovalDecision, requestId?: string, _options?: ApprovalResolveOptions): Promise<boolean> {
     if (requestId !== undefined && this.pendingApproval?.requestId !== requestId) {
       return false;
     }
-    if (!this.pendingApproval) {
+    // Terminal prompts only know yes and no.
+    if (!this.pendingApproval || (action !== "confirm" && action !== "deny")) {
       return false;
     }
 

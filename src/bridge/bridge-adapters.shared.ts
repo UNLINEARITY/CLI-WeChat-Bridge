@@ -15,6 +15,7 @@ import { getInstalledPackageName } from "../utils/version-checker.ts";
 import { spawn as spawnPty } from "node-pty";
 
 import type {
+  ApprovalDecision,
   ApprovalRequest,
   AutoApprovalKind,
   BridgeAdapterKind,
@@ -176,6 +177,7 @@ export type ClaudePendingHookApproval = {
   socket: net.Socket;
   request: ApprovalRequest;
   toolCallKey: string;
+  permissionSuggestions?: unknown;
   origin?: BridgeTurnOrigin;
 };
 
@@ -341,6 +343,30 @@ export function shouldIncludeClaudeNoAltScreen(command: string): boolean {
   return supported;
 }
 
+function persistOptions(meta: unknown): string[] {
+  if (!isRecord(meta)) return [];
+  return typeof meta.persist === "string" ? [meta.persist] : collectStringValues(meta.persist);
+}
+
+/**
+ * Decisions beyond accept/decline the request offers: Codex lists them in
+ * `availableDecisions` for commands (absent on older servers, which accept
+ * all), and MCP approvals name the remember options they allow in `persist`.
+ */
+function codexExtraDecisions(method: string, params: Record<string, unknown>): Array<"always" | "abort"> {
+  if (method === "mcpServer/elicitation/request") {
+    return persistOptions(params._meta).includes("session") ? ["always", "abort"] : ["abort"];
+  }
+  if (method === "item/commandExecution/requestApproval" && Array.isArray(params.availableDecisions)) {
+    const available = params.availableDecisions;
+    return [
+      ...(available.includes("acceptForSession") ? ["always" as const] : []),
+      ...(available.includes("cancel") ? ["abort" as const] : []),
+    ];
+  }
+  return ["always", "abort"];
+}
+
 export function buildCodexApprovalRequest(
   method: string,
   params: unknown,
@@ -348,7 +374,14 @@ export function buildCodexApprovalRequest(
   if (!isRecord(params)) {
     return null;
   }
+  const request = buildCodexApprovalRequestBody(method, params);
+  return request ? { ...request, extraDecisions: codexExtraDecisions(method, params) } : null;
+}
 
+function buildCodexApprovalRequestBody(
+  method: string,
+  params: Record<string, unknown>,
+): ApprovalRequest | null {
   if (method === "item/commandExecution/requestApproval") {
     const command = typeof params.command === "string" ? params.command : "";
     const cwd = typeof params.cwd === "string" ? params.cwd : "";
@@ -638,11 +671,12 @@ function clonePermissionObject(value: unknown): Record<string, unknown> | null {
 
 export function buildCodexPermissionsRequestApprovalResponse(
   params?: unknown,
-  action: "confirm" | "deny" = "deny",
+  action: ApprovalDecision = "deny",
   options: { strictAutoReview?: boolean } = {},
 ): Record<string, unknown> {
   const permissions: Record<string, unknown> = {};
-  if (action === "confirm" && isRecord(params) && isRecord(params.permissions)) {
+  const granted = action === "confirm" || action === "always";
+  if (granted && isRecord(params) && isRecord(params.permissions)) {
     const network = clonePermissionObject(params.permissions.network);
     const fileSystem = clonePermissionObject(params.permissions.fileSystem);
     if (network) {
@@ -655,7 +689,7 @@ export function buildCodexPermissionsRequestApprovalResponse(
 
   const response: Record<string, unknown> = {
     permissions,
-    scope: "turn",
+    scope: action === "always" ? "session" : "turn",
   };
   if (options.strictAutoReview) {
     response.strictAutoReview = true;
@@ -674,11 +708,26 @@ export function isCodexMcpToolApprovalElicitation(params: unknown): boolean {
     && params._meta.codex_approval_kind === "mcp_tool_call";
 }
 
-/** Accepting the approval form needs no content; declining denies the call. */
-export function buildCodexMcpToolApprovalResponse(action: "confirm" | "deny"): Record<string, unknown> {
-  return action === "confirm"
-    ? { action: "accept", content: {}, _meta: null }
-    : { action: "decline", content: null, _meta: null };
+/**
+ * Accepting the approval form needs no content; `persist: session` remembers
+ * the tool for the session, decline denies the call, cancel also stops the turn.
+ */
+export function buildCodexMcpToolApprovalResponse(action: ApprovalDecision): Record<string, unknown> {
+  switch (action) {
+    case "confirm":
+      return { action: "accept", content: {}, _meta: null };
+    case "always":
+      return { action: "accept", content: {}, _meta: { persist: "session" } };
+    case "deny":
+      return { action: "decline", content: null, _meta: null };
+    case "abort":
+      return { action: "cancel", content: null, _meta: null };
+  }
+}
+
+/** Codex `decision` values for command and file-change approvals. */
+export function toCodexReviewDecision(action: ApprovalDecision): string {
+  return { confirm: "accept", always: "acceptForSession", deny: "decline", abort: "cancel" }[action];
 }
 
 export function buildCodexUserInputRequest(params: unknown): UserInputRequest | null {

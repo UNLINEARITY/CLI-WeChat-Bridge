@@ -435,6 +435,9 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/confirm`, `/yes` | Direct launch, daemon | Approve the current pending permission request; when only other terminals or directories have one, reply with a numbered list |
 | `/confirm <number>`, `/deny <number>` | Daemon | Resolve the approval with that number in the list |
 | `/deny`, `/no` | Direct launch, daemon | Reject the current pending permission request |
+| `/deny <reason>`, `/deny <number> <reason>` | Direct launch, daemon | Deny and pass the reason to the model; Codex cannot take a reason with a rejection, so it receives the reason as the next message after the turn |
+| `/always` | Codex, Claude Code | Allow the current request and stop asking about similar operations for this session; no settings files change. OpenCode's "always" saves a project rule, so it is not offered |
+| `/abort` | Codex, Claude Code, OpenCode | Deny the current request and stop the turn |
 | `confirm`, `yes` | Pending approval | Text aliases for `/confirm` |
 | `deny`, `no` | Pending approval | Text aliases for `/deny` |
 | `/auto`, `/auto on`, `/auto off` | Direct launch, daemon | View, enable, or disable auto-approval for every window; the default returns when the daemon restarts |

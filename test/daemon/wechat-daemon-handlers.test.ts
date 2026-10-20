@@ -7,6 +7,7 @@
 import { setLocale } from "../../src/i18n/index.ts";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { isAutoApprovalEnabled, setAutoApprovalOverride } from "../../src/bridge/approval-policy.ts";
+import type { ApprovalDecision } from "../../src/bridge/bridge-types.ts";
 
 import type {
   BridgeAdapter,
@@ -95,7 +96,7 @@ class FakeBridgeRuntime implements BridgeAdapter {
   readonly adapter: DaemonAdapterKind;
   state: BridgeAdapterState;
   readonly inputs: string[] = [];
-  readonly approvals: Array<"confirm" | "deny"> = [];
+  readonly approvals: ApprovalDecision[] = [];
   readonly userInput: Record<string, string[]>[] = [];
   private holdInput = false;
   private sink: ((event: BridgeEvent) => void) | null = null;
@@ -199,8 +200,11 @@ class FakeBridgeRuntime implements BridgeAdapter {
     this.setStatus("idle");
   }
 
-  async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  readonly approvalReasons: Array<string | undefined> = [];
+
+  async resolveApproval(action: ApprovalDecision, requestId?: string, options?: { reason?: string }): Promise<boolean> {
     this.approvals.push(action);
+    this.approvalReasons.push(options?.reason);
     if (this.state.pendingApprovals !== undefined) {
       const pending = this.state.pendingApprovals.find((request) => request.requestId === requestId);
       if (!pending) return false;
@@ -551,6 +555,67 @@ describe("daemon auto-approval visibility and switch", () => {
     expect(env.wecom.sent.at(-1)?.text).toContain("Usage: /auto on");
     await send(daemon, "/auto on");
     expect(isAutoApprovalEnabled({ CLI_BRIDGE_STRICT_APPROVAL: "1" })).toBe(true);
+  });
+});
+
+describe("daemon approval decisions", () => {
+  const send = (daemon: BridgeDaemon, text: string) => (daemon as unknown as {
+    handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
+  }).handleInboundMessage({
+    senderId: OPERATOR_ID, sender: OPERATOR_ID, sessionId: OPERATOR_ID, text, attachments: [],
+    createdAt: new Date().toISOString(), createdAtMs: Date.now(),
+  });
+
+  async function pendingSlot(adapter: DaemonAdapterKind, extra: Record<string, unknown>) {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon("wecom");
+    await forwardInput(daemon, { adapter, text: "task", conversationId: "conv-1" });
+    const runtime = env.runtime(adapter);
+    const request = { ...pendingApproval, requestId: "r1", ...extra };
+    runtime.state.pendingApproval = request;
+    runtime.state.pendingApprovals = [request];
+    runtime.state.status = "awaiting_approval";
+    runtime.emit({ type: "approval_required", request, timestamp: new Date().toISOString() });
+    await tick(20);
+    return { env, daemon, runtime, slot: (daemon as any).slots.get(adapter) };
+  }
+
+  test("lists the extra replies a request supports and refuses the others", async () => {
+    const { env, daemon, runtime } = await pendingSlot("claude", { extraDecisions: ["abort"], denyReasonSupported: true });
+    const prompt = env.wecom.sent.find((message) => message.kind === "approval_required")!.text;
+    expect(prompt).toContain("/deny <reason>");
+    expect(prompt).toContain("/abort");
+    expect(prompt).not.toContain("/always");
+    await send(daemon, "/always");
+    expect(runtime.approvals).toEqual([]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("cannot allow this request for the session");
+    await send(daemon, "/abort");
+    expect(runtime.approvals).toEqual(["abort"]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("the current turn is stopped");
+  });
+
+  test("passes a rejection reason to CLIs that accept one", async () => {
+    const { env, daemon, runtime } = await pendingSlot("claude", { extraDecisions: ["always", "abort"], denyReasonSupported: true });
+    await send(daemon, "/deny 先别删，移到 tmp");
+    expect(runtime.approvals).toEqual(["deny"]);
+    expect(runtime.approvalReasons).toEqual(["先别删，移到 tmp"]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("reason was passed to the model");
+  });
+
+  test("sends a Codex rejection reason as the next message", async () => {
+    const { env, daemon, runtime, slot } = await pendingSlot("codex", { extraDecisions: ["always", "abort"] });
+    await send(daemon, "/no use the staging branch");
+    expect(runtime.approvals).toEqual(["deny"]);
+    expect(runtime.approvalReasons).toEqual([undefined]);
+    expect(slot.deferredInputs.map((input: any) => input.message.text))
+      .toEqual(["I rejected the operation you just requested. Reason: use the staging branch"]);
+    expect(env.wecom.sent.at(-1)?.text).toContain("sent as the next message");
+  });
+
+  test("/always allows for the session when supported", async () => {
+    const { daemon, runtime } = await pendingSlot("codex", { extraDecisions: ["always", "abort"] });
+    await send(daemon, "/always");
+    expect(runtime.approvals).toEqual(["always"]);
   });
 });
 

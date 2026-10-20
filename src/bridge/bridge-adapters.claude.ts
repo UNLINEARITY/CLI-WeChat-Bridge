@@ -36,7 +36,9 @@ import {
   type PendingInjectedClaudePrompt,
 } from "./claude-hooks.ts";
 import type {
+  ApprovalDecision,
   ApprovalRequest,
+  ApprovalResolveOptions,
   BridgeNoticeLevel,
   BridgeModelOption,
   BridgeResumeSessionCandidate,
@@ -819,10 +821,14 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     await this.start();
   }
 
-  override async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  override async resolveApproval(
+    action: ApprovalDecision,
+    requestId?: string,
+    options: ApprovalResolveOptions = {},
+  ): Promise<boolean> {
     const id = requestId ?? this.pendingApproval?.requestId;
     if (id && this.pendingHookApprovals.has(id)) {
-      const handled = await this.respondToClaudeHookApproval(id, action);
+      const handled = await this.respondToClaudeHookApproval(id, action, options.reason);
       if (handled) {
         this.clearRemoteWorkingNotice();
         this.syncPendingHookApprovals();
@@ -831,7 +837,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     }
     if (!this.pendingApproval || (requestId !== undefined && requestId !== this.pendingApproval.requestId)) return false;
     // Hook requests never fall through to keystrokes after their socket expires.
-    if (this.pendingApproval.requestId) return false;
+    if (this.pendingApproval.requestId || (action !== "confirm" && action !== "deny")) return false;
     const input = action === "confirm" ? this.pendingApproval.confirmInput : this.pendingApproval.denyInput;
     if (!input) {
       throw new Error(t("adapter.claude.approvalLocal"));
@@ -1918,6 +1924,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       socket,
       request,
       toolCallKey: getClaudeToolCallKey(payload),
+      permissionSuggestions: payload.permission_suggestions,
       origin: this.state.activeTurnOrigin,
     });
     this.pendingCliApprovalHints = null;
@@ -2065,7 +2072,8 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
   private async respondToClaudeHookApproval(
     requestId: string,
-    action: "confirm" | "deny",
+    action: ApprovalDecision,
+    reason?: string,
   ): Promise<boolean> {
     const pending = this.pendingHookApprovals.get(requestId);
     if (!pending) {
@@ -2075,7 +2083,12 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     if (pending.socket.destroyed || pending.socket.writableEnded || this.resolvingHookApprovals.has(requestId)) return false;
     this.resolvingHookApprovals.add(requestId);
     try {
-      await this.writeClaudeHookResponse(pending.socket, requestId, buildClaudePermissionDecisionHookOutput(action));
+      if (action === "always" && !pending.request.extraDecisions?.includes("always")) return false;
+      await this.writeClaudeHookResponse(
+        pending.socket,
+        requestId,
+        buildClaudePermissionDecisionHookOutput(action, reason || undefined, pending.permissionSuggestions),
+      );
       this.pendingHookApprovals.delete(requestId);
       return true;
     } catch {

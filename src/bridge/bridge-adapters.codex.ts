@@ -14,6 +14,7 @@ import { spawn as spawnChild, spawnSync } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { WebSocket as WsPackageWebSocket } from "ws";
 import type {
+  ApprovalDecision,
   BridgeModelOption,
   BridgeResumeSessionCandidate,
   BridgeThreadSwitchReason,
@@ -219,6 +220,7 @@ const {
   buildCodexApprovalRequest,
   buildCodexCliArgs,
   buildCodexMcpToolApprovalResponse,
+  toCodexReviewDecision,
   buildCodexPermissionsRequestApprovalResponse,
   buildCodexUserInputRequest,
   coerceWebSocketMessageData,
@@ -693,12 +695,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return true;
   }
 
-  override async resolveApproval(action: "confirm" | "deny", requestId?: string): Promise<boolean> {
+  override async resolveApproval(action: ApprovalDecision, requestId?: string): Promise<boolean> {
     const pending = requestId === undefined
       ? this.pendingApprovalRequests[0]
       : this.pendingApprovalRequests.find((request) => this.rpcRequestKey(request.requestId) === requestId);
     if (!pending) {
       return this.pendingApprovalRequests.length ? false : await super.resolveApproval(action, requestId);
+    }
+    if ((action === "always" || action === "abort")
+      && !buildCodexApprovalRequest(pending.method, pending.params)?.extraDecisions?.includes(action)) {
+      return false;
     }
     const id = this.rpcRequestKey(pending.requestId);
     if (this.resolvingApprovalIds.has(id)) return false;
@@ -3194,7 +3200,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   private async respondToApprovalRequest(
     request: CodexPendingApprovalRequest,
-    action: "confirm" | "deny",
+    action: ApprovalDecision,
   ): Promise<void> {
     if (request.method === "mcpServer/elicitation/request") {
       this.sendRpcMessage({ id: request.requestId, result: buildCodexMcpToolApprovalResponse(action) });
@@ -3205,13 +3211,14 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         id: request.requestId,
         result: buildCodexPermissionsRequestApprovalResponse(request.params, action),
       });
+      // A permission grant has no cancel decision; stop the turn directly.
+      if (action === "abort") void this.interrupt().catch(() => undefined);
       return;
     }
 
-    const decision = action === "confirm" ? "accept" : "decline";
     this.sendRpcMessage({
       id: request.requestId,
-      result: { decision },
+      result: { decision: toCodexReviewDecision(action) },
     });
   }
 

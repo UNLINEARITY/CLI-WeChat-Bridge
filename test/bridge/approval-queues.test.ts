@@ -372,3 +372,104 @@ describe("approval queues", () => {
     expect(await adapter.resolveAllApprovals("deny")).toBe(0);
   });
 });
+
+describe("approval decisions", () => {
+  test("parses /always, /abort, and /deny reasons", async () => {
+    const { parseBridgeControlCommand } = await import("../../src/core/bridge-control.ts");
+    expect(parseBridgeControlCommand("/always")).toEqual({ type: "always" });
+    expect(parseBridgeControlCommand("/abort 2")).toEqual({ type: "abort", index: 2 });
+    expect(parseBridgeControlCommand("/deny 别删")).toEqual({ type: "deny", reason: "别删" });
+    expect(parseBridgeControlCommand("/no 2 use staging")).toEqual({ type: "deny", index: 2, reason: "use staging" });
+    expect(parseBridgeControlCommand("/deny 123456")).toEqual({ type: "deny" });
+    expect(parseBridgeControlCommand("/deny")).toEqual({ type: "deny" });
+  });
+
+  test("Codex maps decisions to its review decisions and honors availableDecisions", async () => {
+    const { adapter, replies, ask } = codex();
+    ask("a"); ask("b");
+    expect(adapter.getState().pendingApproval.extraDecisions).toEqual(["always", "abort"]);
+    expect(await adapter.resolveApproval("always", adapter.getState().pendingApproval.requestId)).toBe(true);
+    expect(await adapter.resolveApproval("abort", adapter.getState().pendingApproval.requestId)).toBe(true);
+    expect(replies.map((reply) => reply.result.decision)).toEqual(["acceptForSession", "cancel"]);
+
+    adapter.handleRpcServerRequest("c", "item/commandExecution/requestApproval",
+      { threadId: "parent", turnId: "parent-turn", command: "rm -rf x", availableDecisions: ["accept", "decline"] });
+    expect(adapter.getState().pendingApproval.extraDecisions).toEqual([]);
+    expect(await adapter.resolveApproval("always", adapter.getState().pendingApproval.requestId)).toBe(false);
+    expect(adapter.getState().pendingApprovals).toHaveLength(1);
+  });
+
+  test("Codex permission and MCP approvals grant for the session only when offered", async () => {
+    const { adapter, replies } = codex();
+    adapter.handleRpcServerRequest("p", "item/permissions/requestApproval",
+      { threadId: "parent", turnId: "parent-turn", permissions: { fileSystem: { write: ["/etc"] } } });
+    expect(await adapter.resolveApproval("always", adapter.getState().pendingApproval.requestId)).toBe(true);
+    expect(replies[0].result).toMatchObject({ scope: "session", permissions: { fileSystem: { write: ["/etc"] } } });
+
+    const mcp = (id: string, persist?: unknown) => adapter.handleRpcServerRequest(id, "mcpServer/elicitation/request", {
+      threadId: "parent", turnId: "parent-turn", serverName: "github", mode: "form", message: "Allow?",
+      requestedSchema: { type: "object", properties: {} },
+      _meta: { codex_approval_kind: "mcp_tool_call", ...(persist === undefined ? {} : { persist }) },
+    });
+    mcp("m1", ["session", "always"]);
+    expect(await adapter.resolveApproval("always", adapter.getState().pendingApproval.requestId)).toBe(true);
+    expect(replies[1].result).toEqual({ action: "accept", content: {}, _meta: { persist: "session" } });
+    mcp("m2");
+    const m2 = adapter.getState().pendingApproval.requestId;
+    expect(await adapter.resolveApproval("always", m2)).toBe(false);
+    expect(await adapter.resolveApproval("abort", m2)).toBe(true);
+    expect(replies[2].result).toEqual({ action: "cancel", content: null, _meta: null });
+  });
+
+  test("Claude turns /always into session-only permission updates, /abort into an interrupt", async () => {
+    const { adapter, replies } = claude();
+    const socket = { end: (reply: string) => replies.push(JSON.parse(reply)), destroy() {} };
+    adapter.handleClaudePermissionRequest("s", { tool_name: "Bash", tool_input: { command: "rm -rf /tmp/a" },
+      permission_suggestions: [{ type: "addRules", rules: [{ toolName: "Bash" }], behavior: "allow", destination: "localSettings" }] }, socket);
+    adapter.handleClaudePermissionRequest("n", { tool_name: "Bash", tool_input: { command: "rm -rf /tmp/b" } }, socket);
+    expect(await adapter.resolveApproval("always", "s")).toBe(true);
+    expect(JSON.parse(replies[0].stdout).hookSpecificOutput.decision).toEqual({ behavior: "allow",
+      updatedPermissions: [{ type: "addRules", rules: [{ toolName: "Bash" }], behavior: "allow", destination: "session" }] });
+    expect(await adapter.resolveApproval("always", "n")).toBe(false);
+    expect(await adapter.resolveApproval("abort", "n", { reason: "stop" })).toBe(true);
+    expect(JSON.parse(replies[1].stdout).hookSpecificOutput.decision).toEqual({ behavior: "deny", message: "stop", interrupt: true });
+  });
+
+  test("Claude passes a rejection reason as the deny message", async () => {
+    const { adapter, replies, ask } = claude();
+    ask("r");
+    expect(adapter.getState().pendingApproval).toMatchObject({ extraDecisions: ["abort"], denyReasonSupported: true });
+    expect(await adapter.resolveApproval("deny", "r", { reason: "move it to tmp instead" })).toBe(true);
+    expect(JSON.parse(replies[0].stdout).hookSpecificOutput.decision)
+      .toEqual({ behavior: "deny", message: "move it to tmp instead", interrupt: false });
+  });
+
+  test("OpenCode rejects with a reason, aborts by interrupting, and never saves an always rule", async () => {
+    const { adapter, replies, ask } = opencode();
+    let interrupts = 0;
+    adapter.interrupt = async () => { interrupts++; return true; };
+    ask("o1"); ask("o2");
+    expect(await adapter.resolveApproval("always", "o1")).toBe(false);
+    expect(await adapter.resolveApproval("deny", "o1", { reason: "use the fixture" })).toBe(true);
+    expect(replies[0]).toMatchObject({ requestID: "o1", reply: "reject", message: "use the fixture" });
+    expect(await adapter.resolveApproval("abort", "o2")).toBe(true);
+    expect(replies[1]).toMatchObject({ requestID: "o2", reply: "reject" });
+    expect(interrupts).toBe(1);
+  });
+
+  test("companion proxies send new decisions only to companions that support them", async () => {
+    const adapter = new LocalCompanionProxyAdapter({ kind: "claude", command: "claude", cwd: process.cwd() }) as any;
+    const requests: unknown[] = [];
+    adapter.sendRequest = async (payload: unknown) => { requests.push(payload); return true; };
+    adapter.state.supportsApprovalRequestIds = true;
+    adapter.state.pendingApproval = { requestId: "x" };
+    expect(await adapter.resolveApproval("always", "x")).toBe(false);
+    expect(await adapter.resolveApproval("deny", "x", { reason: "why" })).toBe(true);
+    adapter.state.supportsApprovalDecisions = true;
+    expect(await adapter.resolveApproval("abort", "x", { reason: "why" })).toBe(true);
+    expect(requests).toEqual([
+      { command: "resolve_approval", action: "deny", requestId: "x" },
+      { command: "resolve_approval", action: "abort", requestId: "x", reason: "why" },
+    ]);
+  });
+});

@@ -14,6 +14,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import type {
+  ApprovalDecision,
   BridgeAdapter,
   BridgeAdapterState,
   BridgeEvent,
@@ -506,7 +507,7 @@ export class PiTuiAdapter implements BridgeAdapter {
     await this.createSession();
   }
 
-  async resolveApproval(_action: "confirm" | "deny"): Promise<boolean> {
+  async resolveApproval(_action: ApprovalDecision): Promise<boolean> {
     return false;
   }
 

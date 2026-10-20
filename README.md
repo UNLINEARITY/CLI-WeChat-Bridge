@@ -435,6 +435,9 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/confirm`、`/yes` | 直接启动、daemon | 有待审批时批准当前权限请求；当前终端没有而其他终端或目录有时，回复带编号的列表 |
 | `/confirm <编号>`、`/deny <编号>` | daemon | 处理列表中对应编号的审批请求 |
 | `/deny`、`/no` | 直接启动、daemon | 有待审批时拒绝当前权限请求 |
+| `/deny <理由>`、`/deny <编号> <理由>` | 直接启动、daemon | 拒绝并把理由交给模型；Codex 不支持随拒绝附带理由，本轮结束后把理由作为下一条消息发送 |
+| `/always` | Codex、Claude Code | 允许当前请求，并在本会话内不再询问同类操作；不修改配置文件。OpenCode 的"总是允许"会写入项目规则，因此不提供 |
+| `/abort` | Codex、Claude Code、OpenCode | 拒绝当前请求并停止本轮任务 |
 | `confirm`、`yes` | 有待审批时 | `/confirm` 的文本别名 |
 | `deny`、`no` | 有待审批时 | `/deny` 的文本别名 |
 | `/auto`、`/auto on`、`/auto off` | 直接启动、daemon | 查看、开启或关闭自动放行；作用于所有窗口，daemon 重启后恢复默认 |
