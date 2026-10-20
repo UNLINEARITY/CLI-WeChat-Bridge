@@ -1379,9 +1379,41 @@ export function listCodexSessionFilesRecursively(rootDirectory: string): string[
   return files;
 }
 
+const CODEX_SESSION_META_READ_CHUNK_BYTES = 64 * 1024;
+const CODEX_SESSION_META_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Read only the first line of a session file. Rollouts grow to hundreds of
+ * megabytes, and session scans run on the daemon's event loop.
+ */
+function readFirstLine(filePath: string): string {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (total < CODEX_SESSION_META_MAX_BYTES) {
+      const chunk = Buffer.alloc(CODEX_SESSION_META_READ_CHUNK_BYTES);
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, total);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const newlineIndex = chunk.subarray(0, bytesRead).indexOf(0x0a);
+      if (newlineIndex >= 0) {
+        chunks.push(chunk.subarray(0, newlineIndex));
+        break;
+      }
+      chunks.push(chunk.subarray(0, bytesRead));
+      total += bytesRead;
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 export function readCodexSessionMeta(filePath: string): CodexSessionMeta | null {
   try {
-    const firstLine = fs.readFileSync(filePath, "utf8").split(/\r?\n/, 1)[0]?.trim();
+    const firstLine = readFirstLine(filePath).trim();
     if (!firstLine) {
       return null;
     }
