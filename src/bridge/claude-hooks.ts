@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { AGENT_BUS_MCP_SERVER_NAME, isAgentBusEnabled } from "../mcp/agent-bus-mcp-spec.ts";
 import { t } from "../i18n/index.ts";
 import type { ApprovalDecision, ApprovalRequest, AutoApprovalKind, UserInputRequest } from "./bridge-types.ts";
 import {
@@ -155,7 +156,12 @@ export function buildClaudeHookSettings(
   return {
     ...(env.CLI_BRIDGE_STRICT_APPROVAL === "1"
       ? {}
-      : { permissions: { allow: ["WebFetch(domain:*)"] } }),
+      : {
+          permissions: {
+            // The bridge's own agent tools: every call is mirrored to the operator.
+            allow: ["WebFetch(domain:*)", ...(isAgentBusEnabled(env) ? [`mcp__${AGENT_BUS_MCP_SERVER_NAME}`] : [])],
+          },
+        }),
     hooks: {
       SessionStart: [hook],
       SessionEnd: [hook],

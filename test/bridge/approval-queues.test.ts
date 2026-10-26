@@ -314,7 +314,8 @@ describe("approval queues", () => {
   });
 
   test("Claude non-strict network settings use the documented WebFetch wildcard rule", () => {
-    expect(buildClaudeHookSettings("hook", {})).toMatchObject({ permissions: { allow: ["WebFetch(domain:*)"] } });
+    expect(buildClaudeHookSettings("hook", {})).toMatchObject({ permissions: { allow: ["WebFetch(domain:*)", "mcp__cli-bridge"] } });
+    expect(buildClaudeHookSettings("hook", { CLI_BRIDGE_AGENT_BUS: "0" })).toMatchObject({ permissions: { allow: ["WebFetch(domain:*)"] } });
     expect(buildClaudeHookSettings("hook", { CLI_BRIDGE_STRICT_APPROVAL: "1" })).not.toHaveProperty("permissions");
     expect(buildClaudeHookSettings("hook", {})).not.toHaveProperty("sandbox");
   });

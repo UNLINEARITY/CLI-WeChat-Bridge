@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { buildClaudeAgentBusMcpConfig, isAgentBusEnabled } from "../mcp/agent-bus-mcp-spec.ts";
 import { NativeTerminalControl, readClaudePermissionMode } from "./native-terminal-control.ts";
 import { ClaudeNativeControls } from "./claude-native-controls.ts";
 import fs from "node:fs";
@@ -851,6 +852,9 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
 
     return buildClaudeCliArgs({
       settingsFilePath: this.settingsFilePath,
+      ...(isAgentBusEnabled()
+        ? { mcpConfig: buildClaudeAgentBusMcpConfig({ cwd: this.options.cwd, adapter: "claude", instance: this.options.slotInstance }) }
+        : {}),
       resumeConversationId: this.resumeConversationId,
       profile: this.options.profile,
       includeNoAltScreen: shouldIncludeClaudeNoAltScreen(this.options.command),

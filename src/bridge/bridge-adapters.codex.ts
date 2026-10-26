@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import { buildCodexAgentBusConfigArgs, isAgentBusEnabled } from "../mcp/agent-bus-mcp-spec.ts";
 import fs from "node:fs";
 import { t } from "../i18n/index.ts";
 import net from "node:net";
@@ -1797,6 +1798,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       [
         ...spawnTarget.args,
         "app-server",
+        // A guest of a shared daemon cannot add tools; every other app-server
+        // carries the agent bus.
+        ...(!this.options.codexAttachDaemon && isAgentBusEnabled()
+          ? buildCodexAgentBusConfigArgs({ cwd: this.options.cwd, adapter: "codex", instance: this.options.slotInstance })
+          : []),
         "--listen",
         `ws://${CODEX_APP_SERVER_HOST}:${port}`,
         "--ws-auth",

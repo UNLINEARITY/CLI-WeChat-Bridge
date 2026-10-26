@@ -177,6 +177,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
     sessionStartMode: options.sessionStartMode,
     renderMode: initialEndpoint.kind === "codex" ? "panel" : "companion",
     extraCliArgs: options.cliArgs,
+    ...(options.slotInstance && options.slotInstance > 1 ? { slotInstance: options.slotInstance } : {}),
   });
 
   let shuttingDown = false;
