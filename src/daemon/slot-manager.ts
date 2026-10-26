@@ -56,6 +56,7 @@ import {
   isSameWorkspace,
   prefixSourceMessage,
   slotName,
+  WORKER_INSTANCE_BASE,
   workspaceKeyOf,
   workspaceLabels,
 } from "./daemon-slot.ts";
@@ -110,6 +111,8 @@ export class SlotManager {
   private readonly registeredWorkspaces: string[] = [];
   /** Admitted windows whose slot is still being created. */
   private readonly reservedWindows: BridgeWindow[] = [];
+  /** Worker instance numbers whose slot is still being created. */
+  private readonly reservedWorkers: BridgeWindow[] = [];
   /** How much of the multi-bridge surface is exposed; only moves up. */
   mode: BridgeMode = NO_BRIDGE_MODE;
   private currentCwd: string;
@@ -138,8 +141,18 @@ export class SlotManager {
     return this.currentCwd;
   }
 
+  /** The operator's slots; workers opened by agents are left out. */
   allSlots(): DaemonSlot[] {
+    return this.everySlot().filter((slot) => !slot.worker);
+  }
+
+  /** Every slot, workers included. */
+  everySlot(): DaemonSlot[] {
     return Array.from(this.slotMap.values());
+  }
+
+  workerSlots(): DaemonSlot[] {
+    return this.everySlot().filter((slot) => slot.worker);
   }
 
   /**
@@ -230,6 +243,7 @@ export class SlotManager {
 
   /** Name of one slot for the operator, e.g. `pi-2` or `my-app/codex`. */
   slotSourceName(slot: DaemonSlot): string {
+    if (slot.worker) return this.workerSourceName(slot);
     return windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd)) ??
       slotName(slot);
   }
@@ -239,8 +253,20 @@ export class SlotManager {
    * `[my-app/codex]`; a single bridge adds none.
    */
   prefix(slot: DaemonSlot, text: string): string {
+    if (slot.worker) return prefixSourceMessage(this.workerSourceName(slot), text);
     const source = windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd));
     return source ? prefixSourceMessage(source, text) : text;
+  }
+
+  /** `claude→codex-w1`, widened with the workspace once the bridge spans several. */
+  private workerSourceName(slot: DaemonSlot): string {
+    const name = slot.worker?.ownerName ? `${slot.worker.ownerName}→${slotName(slot)}` : slotName(slot);
+    return this.sourceName(slot.cwd, name);
+  }
+
+  /** An agent closes a worker it opened. */
+  closeWorker(slot: DaemonSlot): void {
+    this.removeSlot(slot, "worker_closed");
   }
 
   /**
@@ -291,7 +317,7 @@ export class SlotManager {
       this.activeAdapter = null;
     }
     this.host.daemonLog(`${event}: adapter=${slot.adapter} instance=${slot.instance} cwd=${slot.cwd}`);
-    const mode = modeAfterWindowClosed(this.mode, this.windows().length, !this.host.isEphemeral());
+    const mode = slot.worker ? this.mode : modeAfterWindowClosed(this.mode, this.windows().length, !this.host.isEphemeral());
     if (mode !== this.mode) {
       // A resident daemon left without windows starts over from its home.
       this.host.daemonLog(`bridge_mode_reset: from=${this.mode.kind}`);
@@ -343,6 +369,9 @@ export class SlotManager {
     // and the second slots.set would orphan the first (duplicate PTY child,
     // double visible client, endpoint files overwriting each other).
     const cwd = options.cwd ?? this.activeCwd;
+    if (options.worker) {
+      return this.ensureWorkerSlot(adapter, cwd, options);
+    }
     let instance = options.instance ??
       (options.newInstance ? undefined : this.getSlot(cwd, adapter)?.instance);
     let reservation: BridgeWindow | undefined;
@@ -399,6 +428,26 @@ export class SlotManager {
     }
   }
 
+  /** A new worker slot under its own instance number; the bridge mode stays as it is. */
+  private async ensureWorkerSlot(
+    adapter: DaemonAdapterKind,
+    cwd: string,
+    options: EnsureSlotOptions,
+  ): Promise<EnsureSlotResult> {
+    const taken = [...this.everySlot(), ...this.reservedWorkers]
+      .filter((window) => window.adapter === adapter && isSameWorkspace(window.cwd, cwd))
+      .map((window) => window.instance);
+    let instance = WORKER_INSTANCE_BASE + 1;
+    while (taken.includes(instance)) instance += 1;
+    const reservation: BridgeWindow = { cwd, adapter, instance };
+    this.reservedWorkers.push(reservation);
+    try {
+      return await this.runEnsureSlot(adapter, cwd, instance, { ...options, activate: false });
+    } finally {
+      this.reservedWorkers.splice(this.reservedWorkers.indexOf(reservation), 1);
+    }
+  }
+
   private refusedResult(
     adapter: DaemonAdapterKind,
     cwd: string,
@@ -443,10 +492,13 @@ export class SlotManager {
       slot = await this.createSlot(adapter, cwd, instance, {
         profile: options.profile ?? this.host.profile,
         sessionStartMode: options.codexAttach ? "new" : createSessionStartMode,
-        // An attached slot follows the Codex TUI that owns the thread, not a window.
-        boundToWindow: !options.codexAttach &&
-          (options.boundToWindow === true || this.host.isEphemeral()),
+        // An attached slot follows the Codex TUI that owns the thread, not a
+        // window; a worker ends with its window when it has one.
+        boundToWindow: options.worker
+          ? options.openVisible !== false
+          : !options.codexAttach && (options.boundToWindow === true || this.host.isEphemeral()),
         codexAttach: options.codexAttach,
+        worker: options.worker,
       });
       this.slotMap.set(slotKey(cwd, adapter, instance), slot);
       created = true;
@@ -613,6 +665,7 @@ export class SlotManager {
       sessionStartMode?: BridgeSessionStartMode;
       boundToWindow: boolean;
       codexAttach?: { threadId?: string };
+      worker?: EnsureSlotOptions["worker"];
     },
   ): Promise<DaemonSlot> {
     clearLocalCompanionEndpoint(cwd, undefined, { adapter, instance });
@@ -647,6 +700,7 @@ export class SlotManager {
       instance,
       boundToWindow: options.boundToWindow,
       attached: Boolean(options.codexAttach),
+      ...(options.worker ? { worker: options.worker } : {}),
       createdAtMs: Date.now(),
       activatedAtMs: 0,
       runtime,
@@ -723,7 +777,7 @@ export class SlotManager {
    * slot.
    */
   releaseClosedWindows(nowMs = Date.now()): void {
-    for (const slot of this.allSlots()) {
+    for (const slot of this.everySlot()) {
       if (!slot.boundToWindow) {
         continue;
       }
@@ -748,6 +802,8 @@ export class SlotManager {
 
   /** Save the session a slot follows whenever it changes. */
   syncSession(slot: DaemonSlot): void {
+    // A worker's session is the agent's business; it is never restored.
+    if (slot.worker) return;
     const record = toSlotSessionRecord(slot.runtime.getState());
     if (!record.sharedSessionId || sameSlotSession(slot.savedSession ?? null, record)) {
       return;
@@ -762,7 +818,7 @@ export class SlotManager {
 
   /** Remove every slot (shutdown); returns the removed slots. */
   clear(): DaemonSlot[] {
-    const removed = this.allSlots();
+    const removed = this.everySlot();
     this.slotMap.clear();
     return removed;
   }

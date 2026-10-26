@@ -7,6 +7,7 @@
 // LICENSE.txt. Network services built on it must offer source to users.
 import { fileSlotSessionStore, type SlotSessionStore } from "./slot-session-store.ts";
 import { TypingTracker } from "./typing-tracker.ts";
+import { AgentBus } from "./agent-bus.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
 import { t } from "../i18n/index.ts";
@@ -180,6 +181,7 @@ export class BridgeDaemon {
   private readonly controls: DaemonControlCommands;
   private readonly slotManager: SlotManager;
   private readonly inbound: InboundRouter;
+  private readonly agentBus: AgentBus;
   private readonly deps: BridgeDaemonDeps;
   private shutdownPromise: Promise<void> | null = null;
   /** Started by a launcher; exits after the last window closes. */
@@ -295,10 +297,21 @@ export class BridgeDaemon {
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
       isEphemeral: () => this.ephemeral,
       sessions: this.deps.slotSessions ?? fileSlotSessionStore,
-      onSlotRemoved: () => this.exitIfIdle(),
+      onSlotRemoved: (slot) => {
+        this.agentBus.onSlotRemoved(slot);
+        this.exitIfIdle();
+      },
       onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
       daemonLog: (message) => this.daemonLog(message),
     });
+    this.agentBus = new AgentBus({
+      slotManager: this.slotManager,
+      typing: this.typing,
+      operatorId: this.authorizedUserId,
+      queueMessage: (senderId, text, context) => this.queueMessage(senderId, text, context),
+      daemonLog: (message) => this.daemonLog(message),
+    });
+    this.slotEventHost.agentBus = this.agentBus;
     this.controls = new DaemonControlCommands({
       driver: this.channelDriver,
       typing: this.typing,
@@ -637,7 +650,7 @@ export class BridgeDaemon {
     }
     clearDaemonEndpoint();
 
-    for (const slot of this.slotManager.allSlots()) {
+    for (const slot of this.slotManager.everySlot()) {
       try {
         await slot.outputBatcher.flushNow();
       } catch {
@@ -685,6 +698,24 @@ export class BridgeDaemon {
         return await this.handleDaemonSendText(request);
       case "forward_input":
         return await this.inbound.forwardInput(request);
+      case "agent_list":
+        return this.agentBus.list();
+      case "agent_open":
+        return await this.agentBus.open(request);
+      case "agent_close":
+        return this.agentBus.close(request);
+      case "agent_new_session":
+        return await this.agentBus.newSession(request);
+      case "agent_call":
+        return await this.agentBus.call(request);
+      case "agent_get":
+        return this.agentBus.get(request);
+      case "agent_wait":
+        return await this.agentBus.wait(request);
+      case "agent_interrupt":
+        return await this.agentBus.interrupt(request);
+      case "agent_approve":
+        return await this.agentBus.approve(request);
     }
   }
 

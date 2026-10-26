@@ -15,6 +15,7 @@ import {
 import type { BridgeSessionStartMode } from "../bridge/bridge-types.ts";
 import { isBridgeChannelId, type BridgeChannelId } from "../core/channel-types.ts";
 import type { ChannelSendKind } from "../channels/wechat/wechat-forwarding.ts";
+import type { AgentApprovalDecision, AgentRef } from "./agent-bus.ts";
 
 export const DAEMON_PROTOCOL_VERSION = 1;
 export type DaemonAdapterKind = "codex" | "claude" | "opencode" | "pi";
@@ -119,6 +120,22 @@ export type DaemonRequest =
       recipientId?: string;
       contextToken?: string;
       metadata?: Record<string, string>;
+    }
+  | { command: "agent_list" }
+  | { command: "agent_open"; caller?: AgentRef; adapter: DaemonAdapterKind; cwd?: string; visible?: boolean }
+  | { command: "agent_close"; caller?: AgentRef; target: AgentRef }
+  | { command: "agent_new_session"; caller?: AgentRef; target: AgentRef }
+  | { command: "agent_call"; caller?: AgentRef; target: AgentRef; text: string }
+  | { command: "agent_get"; callId: string; consume?: boolean }
+  | { command: "agent_wait"; callId: string; waitMs?: number; consume?: boolean }
+  | { command: "agent_interrupt"; callId: string }
+  | {
+      command: "agent_approve";
+      callId: string;
+      caller: AgentRef;
+      decision: AgentApprovalDecision;
+      requestId?: string;
+      reason?: string;
     }
   | { command: "status" }
   | { command: "shutdown" }

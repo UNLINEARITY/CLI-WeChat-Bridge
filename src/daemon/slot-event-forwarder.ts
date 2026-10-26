@@ -34,6 +34,7 @@ import type {
 import { log, logError } from "./daemon-shared.ts";
 import type { TypingTracker } from "./typing-tracker.ts";
 import type { OutboundDispatcher } from "../core/outbound-dispatcher.ts";
+import type { AgentBus } from "./agent-bus.ts";
 import {
   type DaemonSlot,
   toPendingApproval,
@@ -68,6 +69,8 @@ export type SlotEventHost = {
   ) => Promise<boolean>;
   resolveSlotOutputTarget: (slot: DaemonSlot) => ChannelConversationRef;
   maybeDrainDeferredInputs: (slot: DaemonSlot) => Promise<void>;
+  /** Calls between slots; absent in hosts without the agent bus. */
+  agentBus?: Pick<AgentBus, "onFinalReply" | "onDecisionRequired" | "onTurnSettled" | "drain">;
   disposeDeadSlot: (slot: DaemonSlot) => void;
   releaseSlot: (slot: DaemonSlot) => void;
   /** Persist the session the slot now follows. */
@@ -80,6 +83,11 @@ export type SlotEventHost = {
   prefix: (slot: DaemonSlot, text: string) => string;
   daemonLog: (message: string) => void;
 };
+
+/** Drain chat input deferred by the slot first, then agent calls and results. */
+function drainSlotInputs(host: SlotEventHost, slot: DaemonSlot): void {
+  void host.maybeDrainDeferredInputs(slot).then(() => host.agentBus?.drain(slot));
+}
 
 function createSlotChannelPort(host: SlotEventHost, slot: DaemonSlot): BridgeChannelPort {
   const adapter = slot.adapter;
@@ -154,6 +162,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       const autoSummary = formatAutoApprovalSummary(slot.autoApprovals);
       slot.autoApprovals = {};
       const text = autoSummary ? appendBeforeAttachmentBlock(next.text, autoSummary) : next.text;
+      host.agentBus?.onFinalReply(eventTask, next.text);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         await channelPort.send({
           target: eventTarget,
@@ -173,6 +182,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       if (STOPPED_TYPING_STATUSES.has(next.status) && STOPPED_TYPING_STATUSES.has(slot.runtime.getState().status)) {
         host.typing.stop(slot, `status_${next.status}`);
       }
+      if (next.status === "idle") void host.agentBus?.drain(slot);
     },
     notice: (next) => {
       slot.lastOutputAt = Date.now();
@@ -201,6 +211,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
         if (slot.runtime.getState().pendingApproval?.requestId === pending.requestId) {
           slot.displayedApprovalRequestId = pending.requestId;
         }
+        host.agentBus?.onDecisionRequired(slot, eventTask, "approval");
       }));
     },
     userInputRequired: (next) => {
@@ -209,6 +220,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       const pending = toPendingUserInput(next.request);
       slot.pendingUserInput = pending;
       host.daemonLog(`user_input_required: adapter=${slot.adapter} questions=${pending.questions.length}`);
+      host.agentBus?.onDecisionRequired(slot, eventTask, "user_input");
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {
         if (pending.requestId !== undefined && slot.runtime.getState().pendingUserInput?.requestId !== pending.requestId) return;
         await host.queueMessage(host.operatorId, host.prefix(slot, formatUserInputRequestMessage(pending, adapterState)), "user_input_required", eventTarget);
@@ -264,7 +276,8 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
         if (eventTask) {
           slot.turns.complete(eventTask);
         }
-        void host.maybeDrainDeferredInputs(slot);
+        host.agentBus?.onTurnSettled(eventTask);
+        drainSlotInputs(host, slot);
       }));
     },
     taskFailed: (next) => {
@@ -276,7 +289,8 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
         if (eventTask) {
           slot.turns.complete(eventTask);
         }
-        void host.maybeDrainDeferredInputs(slot);
+        host.agentBus?.onTurnSettled(eventTask, next.message);
+        drainSlotInputs(host, slot);
         await host.queueMessage(host.operatorId, host.prefix(slot, formatTaskFailedMessage(slot.adapter, next.message)), "task_failed", eventTarget);
       }));
     },
@@ -290,6 +304,7 @@ export function handleSlotEvent(host: SlotEventHost, slot: DaemonSlot, event: Br
       if (eventTask) {
         slot.turns.complete(eventTask);
       }
+      host.agentBus?.onTurnSettled(eventTask, next.message);
       void host.maybeDrainDeferredInputs(slot);
       host.disposeDeadSlot(slot);
       host.outbound.trackForwardTask(slot.outputBatcher.flushNow().then(async () => {

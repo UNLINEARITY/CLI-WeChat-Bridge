@@ -243,7 +243,7 @@ export class DaemonControlCommands {
     await this.host.queueMessage(senderId, await handleLanguageControl({
       target,
       settingsFile: this.host.localeSettingsFile ?? LANGUAGE_FILE,
-      adapters: this.host.slotManager.allSlots().map((slot) => slot.runtime),
+      adapters: this.host.slotManager.everySlot().map((slot) => slot.runtime),
     }));
   }
 
@@ -301,13 +301,17 @@ export class DaemonControlCommands {
 
   /** `workspace/adapter`, as shown in cross-workspace lists. */
   private sourceOf(slot: DaemonSlot): string {
-    return `${this.host.slotManager.workspaceLabel(slot.cwd)}/${slot.adapter}`;
+    const name = slot.worker ? slotName(slot) : slot.adapter;
+    return `${this.host.slotManager.workspaceLabel(slot.cwd)}/${name}`;
   }
 
-  /** Slots matching a predicate, ordered by workspace list then adapter. */
+  /**
+   * Slots matching a predicate, ordered by workspace list then adapter;
+   * workers opened by agents come last so the operator can still decide for them.
+   */
   private slotsWhere(predicate: (slot: DaemonSlot) => boolean): DaemonSlot[] {
     const slots = this.host.slotManager;
-    return slots.workspaces().flatMap((cwd) => slots.slotsIn(cwd)).filter(predicate);
+    return [...slots.workspaces().flatMap((cwd) => slots.slotsIn(cwd)), ...slots.workerSlots()].filter(predicate);
   }
 
   /**

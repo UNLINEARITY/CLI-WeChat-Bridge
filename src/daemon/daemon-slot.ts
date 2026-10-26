@@ -27,6 +27,10 @@ import type { DaemonAdapterKind } from "./daemon-link.ts";
 export type ActiveTask = {
   startedAt: number;
   inputPreview: string;
+  /** The turn runs an agent call made by another slot (see agent-bus.ts). */
+  agentCallId?: string;
+  /** The turn tells this slot the outcome of a call it made. */
+  agentCallback?: string;
 };
 
 export type DaemonSlot = {
@@ -41,6 +45,8 @@ export type DaemonSlot = {
   boundToWindow: boolean;
   /** Attached to a live Codex shared-daemon thread; the owning TUI keeps it. */
   attached: boolean;
+  /** Opened by an agent (see agent-bus.ts); outside the bridge mode and operator switching. */
+  worker?: SlotWorker;
   /** When the slot was created (ms). */
   createdAtMs: number;
   /** When the operator last switched to this slot (ms); 0 if never. */
@@ -69,6 +75,20 @@ export type DaemonSlot = {
   deferredInputs: DeferredDaemonInput[];
   drainingDeferredInputs: boolean;
 };
+
+export type SlotWorker = {
+  /** Agent key of the slot that opened the worker; absent for an external tool. */
+  ownerKey?: string;
+  /** Display name of the owner, e.g. `claude`. */
+  ownerName?: string;
+};
+
+/** Worker instances are numbered from here, apart from the operator's windows. */
+export const WORKER_INSTANCE_BASE = 100;
+
+export function isWorkerInstance(instance: number): boolean {
+  return instance > WORKER_INSTANCE_BASE;
+}
 
 export type DeferredDaemonInput = {
   message: BridgeInboundMessage;
@@ -146,6 +166,8 @@ export type EnsureSlotOptions = {
   instance?: number;
   /** Ask for another window of the adapter even when the workspace has one. */
   newInstance?: boolean;
+  /** Open a worker for an agent: outside the bridge mode, never made current. */
+  worker?: SlotWorker;
 };
 
 export type EnsureSlotResult = {
@@ -170,8 +192,9 @@ export type EnsureSlotResult = {
   sharedThreadId?: string;
 };
 
-/** Display name of a slot: `codex`, or `codex-2` for a second instance. */
+/** Display name of a slot: `codex`, `codex-2` for a second instance, `codex-w1` for a worker. */
 export function slotName(slot: Pick<DaemonSlot, "adapter" | "instance">): string {
+  if (isWorkerInstance(slot.instance)) return `${slot.adapter}-w${slot.instance - WORKER_INSTANCE_BASE}`;
   return slot.instance > 1 ? `${slot.adapter}-${slot.instance}` : slot.adapter;
 }
 
