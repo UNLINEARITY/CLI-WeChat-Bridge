@@ -58,7 +58,8 @@
     "telegram-pi": "bin/telegram-pi.mjs",
     "telegram-daemon": "bin/telegram-daemon.mjs",
     "telegram-setup": "bin/telegram-setup.mjs",
-    "telegram-check-update": "bin/telegram-check-update.mjs"
+    "telegram-check-update": "bin/telegram-check-update.mjs",
+    "cli-bridge-mcp": "bin/cli-bridge-mcp.mjs"
   },
   "scripts": {
     "postinstall": "node scripts/ensure-node-pty-permissions.mjs",

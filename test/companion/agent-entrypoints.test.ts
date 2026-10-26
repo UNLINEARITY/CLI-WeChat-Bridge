@@ -47,6 +47,7 @@ describe("agent CLI entrypoints", () => {
     };
 
     expect(Object.keys(packageJson.bin ?? {}).sort()).toEqual([
+      "cli-bridge-mcp",
       "telegram-check-update",
       "telegram-claude",
       "telegram-codex",

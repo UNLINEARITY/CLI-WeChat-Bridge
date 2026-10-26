@@ -257,6 +257,8 @@ export function hasClaudeNoAltScreenOption(helpText: string): boolean {
 
 export function buildClaudeCliArgs(options: {
   settingsFilePath: string;
+  /** Extra MCP servers, as a `--mcp-config` JSON value. */
+  mcpConfig?: string;
   resumeConversationId?: string | null;
   profile?: string;
   includeNoAltScreen?: boolean;
@@ -271,6 +273,10 @@ export function buildClaudeCliArgs(options: {
   const args: string[] = [];
   if (options.includeNoAltScreen) {
     args.push("--no-alt-screen");
+  }
+  // `--mcp-config` takes several values; an option must follow it.
+  if (options.mcpConfig) {
+    args.push("--mcp-config", options.mcpConfig);
   }
   args.push("--settings", options.settingsFilePath);
   if (options.resumeConversationId) {
