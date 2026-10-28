@@ -428,6 +428,7 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/all <prompt>` | daemon（多 CLI、同类型多实例、多目录模式） | 将同一段提示词同时下发给当前目录全部已启动的窗口；未启动的 CLI 列为跳过，任一窗口忙碌时整条取消 |
 | `/open` | daemon（单桥接、同类型多实例、多目录模式） | 在当前目录再打开一个当前 CLI 的窗口 |
 | `/1`、`/2` …（可带 prompt） | daemon（同类型多实例、多目录模式） | 切换到当前 CLI 的对应编号窗口；可选 prompt 在切换成功后转发 |
+| `/pin`、`/pin <窗口>`、`/unpin`、`/pins` | daemon | 把当前聊天固定到一个窗口：`/pin` 固定到当前窗口，`/pin codex-2` 固定到指定窗口（不存在则打开）。固定后该聊天发来的消息始终进入绑定窗口，不再随活动窗口切换；`/unpin` 取消固定并回落到活动窗口路由，`/pins` 查看已固定的聊天。绑定关系保存在 `~/.cli-bridge/pins.json`，daemon 重启后仍生效 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
 | `/lang`、`/lang zh`、`/lang en` | 直接启动、daemon | 查看或切换中文 / English 桥接提示；立即生效并保存偏好，`/language` 为别名 |
 | `/model`、`/model <编号>` | Codex、Claude Code、OpenCode、Pi | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |

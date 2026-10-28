@@ -4,6 +4,9 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { setLocale } from "../../src/i18n/index.ts";
 import type {
@@ -24,9 +27,11 @@ import type { PendingMessageStore } from "../../src/core/pending-message-store.t
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
 import {
   conversationPinKey,
+  createFileSlotPins,
   createMemorySlotPins,
   formatPinsListMessage,
   parsePinCommand,
+  parsePinWindowName,
   type ConversationPinTarget,
 } from "../../src/daemon/slot-pins.ts";
 
@@ -238,6 +243,52 @@ describe("slot pins", () => {
     expect(text).toContain("codex-1");
     expect(formatPinsListMessage([], () => "")).toContain("No chats");
   });
+
+  test("parsePinWindowName accepts valid window names and rejects others", () => {
+    expect(parsePinWindowName("codex")).toEqual({ adapter: "codex", instance: 1 });
+    expect(parsePinWindowName("codex-2")).toEqual({ adapter: "codex", instance: 2 });
+    expect(parsePinWindowName("codex-99")).toEqual({ adapter: "codex", instance: 99 });
+    expect(parsePinWindowName("CODEX-2")).toEqual({ adapter: "codex", instance: 2 });
+    expect(parsePinWindowName("codex-2 ")).toEqual({ adapter: "codex", instance: 2 });
+    expect(parsePinWindowName("claude")).toEqual({ adapter: "claude", instance: 1 });
+    expect(parsePinWindowName("pi-3")).toEqual({ adapter: "pi", instance: 3 });
+    expect(parsePinWindowName("opencode")).toEqual({ adapter: "opencode", instance: 1 });
+    // Unknown adapters, zero instances, too-large instances and junk are rejected.
+    expect(parsePinWindowName("bogus")).toBeNull();
+    expect(parsePinWindowName("codex-0")).toBeNull();
+    expect(parsePinWindowName("codex-100")).toBeNull();
+    expect(parsePinWindowName("codex--2")).toBeNull();
+    expect(parsePinWindowName("")).toBeNull();
+  });
+
+  test("file pins persist across instances and survive malformed input", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pins-test-"));
+    try {
+      const pinsFile = path.join(dir, "pins.json");
+      const first = createFileSlotPins(pinsFile);
+      const key = conversationPinKey("wechat", "conv-1");
+      first.set(key, { cwd: TEST_CWD, adapter: "codex", instance: 2 });
+
+      // A fresh instance re-reads the same file.
+      const second = createFileSlotPins(pinsFile);
+      expect(second.get(key)).toEqual({ cwd: TEST_CWD, adapter: "codex", instance: 2 });
+      expect(second.list()).toHaveLength(1);
+
+      // Removing persists too.
+      expect(second.remove(key)).toBe(true);
+      const third = createFileSlotPins(pinsFile);
+      expect(third.get(key)).toBeUndefined();
+
+      // A corrupt file falls back to an empty store instead of crashing.
+      fs.writeFileSync(pinsFile, "{ not json");
+      const broken = createFileSlotPins(pinsFile);
+      expect(broken.list()).toHaveLength(0);
+      broken.set(key, { cwd: TEST_CWD, adapter: "codex", instance: 1 });
+      expect(broken.get(key)).toBeDefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("daemon conversation pinning", () => {
@@ -363,5 +414,54 @@ describe("daemon conversation pinning", () => {
     const reply = env.wechat.sent.at(-1)?.text ?? "";
     expect(reply.toLowerCase()).toContain("unknown window");
     expect(env.deps.slotPins!.list()).toHaveLength(0);
+  });
+
+  test("/pin <window> followed by /unpin falls back to active routing", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // /open upgrades the bridge to multi_instance so numbered /1 switching
+    // is available; /pin codex-2 then reuses the existing second window.
+    await send(daemon, "/codex");
+    await send(daemon, "/open");
+    await send(daemon, "/pin codex-2");
+    await send(daemon, "/1");
+    await send(daemon, "/unpin");
+    const key = conversationPinKey("wechat", "conv-a");
+    expect(env.deps.slotPins!.get(key)).toBeUndefined();
+
+    await send(daemon, "after-unpin");
+    expect(env.runtime("codex", 1).inputs).toContain("after-unpin");
+    expect(env.runtime("codex", 2).inputs).not.toContain("after-unpin");
+  });
+
+  test("/pins shows the window name a conversation was pinned to", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin codex-2");
+    await send(daemon, "/pins");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain("conv-a");
+    expect(reply).toContain("codex-2");
+  });
+
+  test("a pin from another channel does not route this channel's messages", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // Pin the same conversation key shape under a different channel prefix.
+    env.deps.slotPins!.set(conversationPinKey("telegram", "conv-a"), {
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 2,
+    });
+
+    // The wechat conversation is unpinned: it follows the active window.
+    await send(daemon, "/codex");
+    await send(daemon, "wechat-msg");
+    expect(env.runtime("codex", 1).inputs).toContain("wechat-msg");
+    expect(env.deps.slotPins!.get(conversationPinKey("wechat", "conv-a"))).toBeUndefined();
   });
 });

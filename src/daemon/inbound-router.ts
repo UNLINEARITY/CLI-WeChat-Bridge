@@ -33,7 +33,7 @@ import type { TurnDispatchResult } from "../core/turn-coordinator.ts";
 import type { TypingTracker } from "./typing-tracker.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
-import type { DaemonAdapterKind, DaemonForwardInputResult, DaemonRequest } from "./daemon-link.ts";
+import type { DaemonForwardInputResult, DaemonRequest } from "./daemon-link.ts";
 import {
   parseDaemonSwitchCommand,
   parseDaemonSwitchDirective,
@@ -52,28 +52,15 @@ import { SlotManager } from "./slot-manager.ts";
 import {
   conversationPinKey,
   formatPinsListMessage,
+  parsePinCommand,
+  parsePinWindowName,
   type ConversationPinTarget,
   type PinCommand,
-  parsePinCommand,
   type SlotPins,
 } from "./slot-pins.ts";
 import { modeAllowsCommand } from "./bridge-mode.ts";
 
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
-
-const PIN_WINDOW_PATTERN = /^(codex|claude|opencode|pi)(?:-([1-9]\d?))?$/i;
-
-/** Parse a pin window name like `codex` or `codex-2` into a slot reference. */
-function parsePinWindowName(window: string): { adapter: DaemonAdapterKind; instance: number } | null {
-  const match = window.trim().match(PIN_WINDOW_PATTERN);
-  if (!match) {
-    return null;
-  }
-  return {
-    adapter: match[1]!.toLowerCase() as DaemonAdapterKind,
-    instance: match[2] ? Number(match[2]) : 1,
-  };
-}
 
 export type InboundRouterHost = {
   typing: TypingTracker;

@@ -61,9 +61,9 @@ type PinFileShape = {
   updatedAt?: string;
 };
 
-function readPinFile(): Record<string, ConversationPinTarget> {
+function readPinFile(pinsFile: string): Record<string, ConversationPinTarget> {
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(PIN_BINDINGS_FILE, "utf8"));
+    const parsed: unknown = JSON.parse(fs.readFileSync(pinsFile, "utf8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const pins = (parsed as PinFileShape).pins;
       if (pins && typeof pins === "object" && !Array.isArray(pins)) {
@@ -76,19 +76,22 @@ function readPinFile(): Record<string, ConversationPinTarget> {
   return {};
 }
 
-function writePinFile(pins: Map<string, ConversationPinTarget>): void {
-  writeJsonFileAtomic(PIN_BINDINGS_FILE, {
+function writePinFile(
+  pinsFile: string,
+  pins: Map<string, ConversationPinTarget>,
+): void {
+  writeJsonFileAtomic(pinsFile, {
     pins: Object.fromEntries(pins),
     updatedAt: new Date().toISOString(),
   });
 }
 
-/** Pins persisted next to the channel's other state. */
-export const fileSlotPins: SlotPins = (() => {
+/** Pins persisted at `pinsFile` (lazily loaded; writes are atomic). */
+export function createFileSlotPins(pinsFile: string): SlotPins {
   let map: Map<string, ConversationPinTarget> | null = null;
   const ensureLoaded = (): Map<string, ConversationPinTarget> => {
     if (!map) {
-      map = new Map(Object.entries(readPinFile()));
+      map = new Map(Object.entries(readPinFile(pinsFile)));
     }
     return map;
   };
@@ -98,12 +101,12 @@ export const fileSlotPins: SlotPins = (() => {
     },
     set(key, target) {
       ensureLoaded().set(key, { ...target });
-      writePinFile(ensureLoaded());
+      writePinFile(pinsFile, ensureLoaded());
     },
     remove(key) {
       const removed = ensureLoaded().delete(key);
       if (removed) {
-        writePinFile(ensureLoaded());
+        writePinFile(pinsFile, ensureLoaded());
       }
       return removed;
     },
@@ -114,7 +117,10 @@ export const fileSlotPins: SlotPins = (() => {
       }));
     },
   };
-})();
+}
+
+/** Pins persisted next to the channel's other state. */
+export const fileSlotPins: SlotPins = createFileSlotPins(PIN_BINDINGS_FILE);
 
 // --- Pin command parsing (daemon) ---
 
@@ -141,6 +147,25 @@ export function parsePinCommand(text: string): PinCommand | null {
     return { type: "list" };
   }
   return null;
+}
+
+const PIN_WINDOW_PATTERN = /^(codex|claude|opencode|pi)(?:-([1-9]\d?))?$/i;
+
+/**
+ * Parse a pin window name like `codex` or `codex-2` into a slot reference.
+ * Instances are 1-based; `codex` means instance 1.
+ */
+export function parsePinWindowName(
+  window: string,
+): { adapter: DaemonAdapterKind; instance: number } | null {
+  const match = window.trim().match(PIN_WINDOW_PATTERN);
+  if (!match) {
+    return null;
+  }
+  return {
+    adapter: match[1]!.toLowerCase() as DaemonAdapterKind,
+    instance: match[2] ? Number(match[2]) : 1,
+  };
 }
 
 export function formatPinUsage(): string {
