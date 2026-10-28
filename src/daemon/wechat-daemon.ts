@@ -6,6 +6,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { fileSlotSessionStore, type SlotSessionStore } from "./slot-session-store.ts";
+import { fileSlotPins, type SlotPins } from "./slot-pins.ts";
 import { TypingTracker } from "./typing-tracker.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
@@ -128,6 +129,8 @@ export type BridgeDaemonDeps = {
   fatalNoticeGraceMs?: number;
   /** Where slots save their sessions; tests keep them in memory. */
   slotSessions?: SlotSessionStore;
+  /** Conversation-to-window pins; tests keep them in memory. */
+  slotPins?: SlotPins;
   /** Ends the process once an ephemeral daemon has shut down. */
   exitProcess?: (code: number) => void;
 };
@@ -321,6 +324,7 @@ export class BridgeDaemon {
       inboundConversationContext: this.inboundConversationContext,
       slotManager: this.slotManager,
       controls: this.controls,
+      pins: this.deps.slotPins ?? fileSlotPins,
       queueMessage: (senderId, text, context, targetOverride) =>
         this.queueMessage(senderId, text, context, targetOverride),
       shutdown: () => this.shutdown(),

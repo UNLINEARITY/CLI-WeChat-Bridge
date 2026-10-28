@@ -150,6 +150,18 @@ export const messages: Record<string, string> = {
   "binding.listEmpty": "未配置 emoji 绑定。",
   "binding.listHeader": "Emoji 绑定列表:",
 
+  // === 聊天窗口固定 ===
+  "pin.usage": "用法:\n/pin - 把当前聊天固定到当前窗口\n/pin <窗口> - 固定到指定窗口（如 /pin codex、/pin codex-2）\n/unpin - 取消当前聊天的窗口固定\n/pins - 查看已固定的聊天",
+  "pin.invalidWindow": "无法识别窗口名称 {window}。可用名称如 codex、codex-2、claude、pi。",
+  "pin.bound": "已把当前聊天固定到窗口 {window}。之后该聊天发来的消息都会进入这个窗口。",
+  "pin.unbound": "已取消当前聊天的窗口固定。",
+  "pin.notPinned": "当前聊天没有固定的窗口。",
+  "pin.noActiveSlot": "当前没有可固定的窗口，请先打开一个窗口。",
+  "pin.listEmpty": "还没有固定任何聊天。",
+  "pin.listHeader": "窗口固定列表:",
+  "pin.entry": "{conversation} → {window}",
+  "pin.pinFailed": "无法切换到固定窗口 {window}：{detail}",
+
   // === 版本检查 ===
   "update.available": "[有新版本] 版本 {latest} 可用（当前: {current}）。\n运行: npm install -g {package}@latest",
   // === Doctor ===

@@ -150,6 +150,18 @@ export const messages: Record<string, string> = {
   "binding.listEmpty": "No emoji bindings configured.",
   "binding.listHeader": "Emoji bindings:",
 
+  // === Conversation pinning ===
+  "pin.usage": "Usage:\n/pin - pin the current chat to the current window\n/pin <window> - pin to a named window (e.g. /pin codex, /pin codex-2)\n/unpin - unpin the current chat\n/pins - list pinned chats",
+  "pin.invalidWindow": "Unknown window name {window}. Use names like codex, codex-2, claude, pi.",
+  "pin.bound": "Pinned this chat to window {window}. Messages from this chat now always go to that window.",
+  "pin.unbound": "Unpinned this chat from its window.",
+  "pin.notPinned": "This chat is not pinned to any window.",
+  "pin.noActiveSlot": "No window to pin to; open a window first.",
+  "pin.listEmpty": "No chats are pinned.",
+  "pin.listHeader": "Pinned chats:",
+  "pin.entry": "{conversation} → {window}",
+  "pin.pinFailed": "Could not switch to pinned window {window}: {detail}",
+
   // === Version checker ===
   "update.available": "[Update Available] Version {latest} is available (current: {current}).\nRun: npm install -g {package}@latest",
   // === Doctor ===

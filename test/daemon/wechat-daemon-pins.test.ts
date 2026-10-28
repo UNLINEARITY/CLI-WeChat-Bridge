@@ -1,0 +1,367 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 UNLINEARITY <unlinearity@gmail.com>
+// Source: https://github.com/UNLINEARITY/CLI-WeChat-Bridge
+// This file is part of CLI-WeChat-Bridge. Modifications and derivative works
+// must be released under AGPL-3.0-or-later with full source code; see
+// LICENSE.txt. Network services built on it must offer source to users.
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setLocale } from "../../src/i18n/index.ts";
+import type {
+  BridgeAdapter,
+  BridgeAdapterState,
+  BridgeEvent,
+  BridgeWorkerStatus,
+} from "../../src/bridge/bridge-types.ts";
+import type { BridgeInboundMessage } from "../../src/core/channel-types.ts";
+import type {
+  BridgeDaemonDeps,
+} from "../../src/daemon/wechat-daemon.ts";
+import {
+  BridgeDaemon,
+} from "../../src/daemon/wechat-daemon.ts";
+import type { WeChatTransport } from "../../src/wechat/wechat-transport.ts";
+import type { PendingMessageStore } from "../../src/core/pending-message-store.ts";
+import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
+import {
+  conversationPinKey,
+  createMemorySlotPins,
+  formatPinsListMessage,
+  parsePinCommand,
+  type ConversationPinTarget,
+} from "../../src/daemon/slot-pins.ts";
+
+beforeEach(() => setLocale("en"));
+
+const TEST_CWD = "C:\\Users\\test\\daemon-pins";
+const OPERATOR_ID = "operator-001";
+
+type SentWechatMessage = { recipientId: string; text: string };
+
+class FakeWeChatTransport {
+  readonly sent: SentWechatMessage[] = [];
+
+  async sendText(recipientId: string, text: string): Promise<void> {
+    this.sent.push({ recipientId, text });
+  }
+}
+
+class FakePendingStore {
+  list(): [] {
+    return [];
+  }
+  enqueue(): null {
+    return null;
+  }
+  remove(): boolean {
+    return false;
+  }
+}
+
+class FakeBridgeRuntime implements BridgeAdapter {
+  readonly adapter: "codex";
+  readonly instance: number;
+  state: BridgeAdapterState;
+  readonly inputs: string[] = [];
+  private sink: ((event: BridgeEvent) => void) | null = null;
+
+  constructor(adapter: "codex", cwd: string, command: string, instance = 1) {
+    this.adapter = adapter;
+    this.instance = instance;
+    this.state = {
+      kind: adapter,
+      status: "idle",
+      cwd,
+      command,
+      sharedThreadId: "thread-visible",
+      lastThreadSwitchSource: "local" as const,
+    };
+  }
+
+  setEventSink(sink: (event: BridgeEvent) => void): void {
+    this.sink = sink;
+  }
+
+  emit(event: BridgeEvent): void {
+    this.sink?.(event);
+  }
+
+  async start(): Promise<void> {}
+  async sendInput(text: string): Promise<void> {
+    this.inputs.push(text);
+    // Complete the turn so the slot accepts the next message.
+    this.emit({ type: "task_complete", taskId: "t", timestamp: new Date().toISOString() });
+  }
+  async listResumeSessions(): Promise<[]> {
+    return [];
+  }
+  async resumeSession(): Promise<void> {}
+  async interrupt(): Promise<boolean> {
+    return true;
+  }
+  async reset(): Promise<void> {
+    this.state = { ...this.state, status: "idle" };
+  }
+  async resolveApproval(): Promise<boolean> {
+    return true;
+  }
+  async setAutoApproval(): Promise<boolean> {
+    return true;
+  }
+  async submitUserInput(): Promise<boolean> {
+    return true;
+  }
+  async dispose(): Promise<void> {}
+
+  getState(): BridgeAdapterState {
+    return this.state;
+  }
+}
+
+class MemorySessionStore implements SlotSessionStore {
+  readonly records = new Map<string, SlotSessionRecord>();
+
+  read(cwd: string, adapter: string): SlotSessionRecord | null {
+    return this.records.get(`${cwd}|${adapter}`) ?? null;
+  }
+
+  write(cwd: string, adapter: string, record: SlotSessionRecord): void {
+    this.records.set(`${cwd}|${adapter}`, record);
+  }
+}
+
+class FakeDaemonEnvironment {
+  readonly wechat = new FakeWeChatTransport();
+  readonly runtimes = new Map<string, FakeBridgeRuntime>();
+  readonly logs: string[] = [];
+  readonly openedVisible: string[] = [];
+  visibleAlive = true;
+
+  readonly deps: BridgeDaemonDeps = {
+    createRuntime: (params) => {
+      const instance = params.slotInstance ?? 1;
+      const runtime = new FakeBridgeRuntime(
+        params.kind as "codex",
+        params.cwd,
+        params.command,
+        instance,
+      );
+      this.runtimes.set(`${params.kind}-${instance}`, runtime);
+      return runtime;
+    },
+    openVisibleClient: (params) => {
+      this.openedVisible.push(`${params.adapter}-${params.instance ?? 1}`);
+      return { command: "fake-visible-client", args: [] };
+    },
+    isVisibleClientAlive: () => this.visibleAlive,
+    daemonLog: (message) => {
+      this.logs.push(message);
+    },
+    pendingMessages: new FakePendingStore() as unknown as PendingMessageStore,
+    visibleClientConnectTimeoutMs: 50,
+    fatalNoticeGraceMs: 0,
+    slotSessions: new MemorySessionStore(),
+    slotPins: createMemorySlotPins(),
+  };
+
+  buildDaemon(): BridgeDaemon {
+    return new BridgeDaemon({
+      cwd: TEST_CWD,
+      authorizedUserId: OPERATOR_ID,
+      transport: this.wechat as unknown as WeChatTransport,
+      channelId: "wechat",
+      wecomTransport: null,
+      deps: this.deps,
+    });
+  }
+
+  runtime(adapter: string, instance = 1): FakeBridgeRuntime {
+    const runtime = this.runtimes.get(`${adapter}-${instance}`);
+    if (!runtime) {
+      throw new Error(`runtime ${adapter}-${instance} not created`);
+    }
+    return runtime;
+  }
+}
+
+function send(
+  daemon: BridgeDaemon,
+  text: string,
+  sessionId = "conv-a",
+): Promise<void> {
+  return (daemon as unknown as {
+    handleInboundMessage(message: BridgeInboundMessage): Promise<void>;
+  }).handleInboundMessage({
+    senderId: OPERATOR_ID,
+    sender: OPERATOR_ID,
+    sessionId,
+    text,
+    attachments: [],
+    createdAt: new Date().toISOString(),
+    createdAtMs: Date.now(),
+  });
+}
+
+describe("slot pins", () => {
+  test("memory store round-trips pins", () => {
+    const pins = createMemorySlotPins();
+    const key = conversationPinKey("wechat", "conv-1");
+    expect(pins.get(key)).toBeUndefined();
+    const target: ConversationPinTarget = { cwd: TEST_CWD, adapter: "codex", instance: 2 };
+    pins.set(key, target);
+    expect(pins.get(key)).toEqual(target);
+    expect(pins.list()).toHaveLength(1);
+    expect(pins.remove(key)).toBe(true);
+    expect(pins.get(key)).toBeUndefined();
+    expect(pins.remove(key)).toBe(false);
+  });
+
+  test("conversation pin keys combine channel and conversation id", () => {
+    expect(conversationPinKey("wechat", "conv-1")).toBe("wechat:conv-1");
+  });
+
+  test("parsePinCommand accepts pin, unpin and pins exactly", () => {
+    expect(parsePinCommand("/pin")).toEqual({ type: "pin" });
+    expect(parsePinCommand("/pin codex")).toEqual({ type: "pin-to", window: "codex" });
+    expect(parsePinCommand("/pin codex-2")).toEqual({ type: "pin-to", window: "codex-2" });
+    expect(parsePinCommand("/unpin")).toEqual({ type: "unpin" });
+    expect(parsePinCommand("/pins")).toEqual({ type: "list" });
+    expect(parsePinCommand("/pins now")).toBeNull();
+    expect(parsePinCommand("hello")).toBeNull();
+  });
+
+  test("formatPinsListMessage lists pins with window names", () => {
+    const pins = [
+      { key: "wechat:conv-a", target: { cwd: TEST_CWD, adapter: "codex", instance: 1 } },
+    ];
+    const text = formatPinsListMessage(pins, (target) => `codex-${target.instance}`);
+    expect(text).toContain("conv-a");
+    expect(text).toContain("codex-1");
+    expect(formatPinsListMessage([], () => "")).toContain("No chats");
+  });
+});
+
+describe("daemon conversation pinning", () => {
+  afterEach(() => setLocale("en"));
+
+  test("/pin without any window replies with the no-active-slot message", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pin");
+    expect(env.wechat.sent.some((m) => m.text.includes("No window to pin"))).toBe(true);
+    expect(env.deps.slotPins!.list()).toHaveLength(0);
+  });
+
+  test("pinned conversations route to their window even after switching away", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // Open codex window #1 (switch directive creates the first slot).
+    await send(daemon, "/codex");
+    expect(env.runtime("codex", 1)).toBeDefined();
+
+    // Open a second codex window; it becomes active.
+    await send(daemon, "/open");
+    const codex2 = env.runtime("codex", 2);
+    expect(codex2).toBeDefined();
+
+    // Pin the conversation to the current window (codex-2).
+    await send(daemon, "/pin");
+    const key = conversationPinKey("wechat", "conv-a");
+    expect(env.deps.slotPins!.get(key)).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 2,
+    });
+    expect(env.logs.some((line) => line.startsWith("conversation_pinned:"))).toBe(true);
+
+    // Switch back to codex-1; a plain message must still go to codex-2.
+    await send(daemon, "/1");
+    expect(env.runtime("codex", 1)).toBeDefined();
+    await send(daemon, "pinned-msg");
+    expect(codex2.inputs).toContain("pinned-msg");
+    expect(env.runtime("codex", 1).inputs).not.toContain("pinned-msg");
+
+    // A second message keeps following the pin.
+    await send(daemon, "pinned-msg-2");
+    expect(codex2.inputs).toContain("pinned-msg-2");
+  });
+
+  test("a different conversation is not affected by another conversation's pin", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", "conv-a");
+    await send(daemon, "/pin", "conv-a");
+    await send(daemon, "/open", "conv-a");
+
+    // conv-b is not pinned: it follows the active window (codex-2).
+    await send(daemon, "from-conv-b", "conv-b");
+    expect(env.runtime("codex", 2).inputs).toContain("from-conv-b");
+  });
+
+  test("/unpin restores active-slot routing for the conversation", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/open");
+    await send(daemon, "/pin");
+    await send(daemon, "/1");
+    await send(daemon, "before-unpin");
+    expect(env.runtime("codex", 2).inputs).toContain("before-unpin");
+
+    await send(daemon, "/unpin");
+    const key = conversationPinKey("wechat", "conv-a");
+    expect(env.deps.slotPins!.get(key)).toBeUndefined();
+
+    await send(daemon, "after-unpin");
+    expect(env.runtime("codex", 1).inputs).toContain("after-unpin");
+    expect(env.runtime("codex", 2).inputs).not.toContain("after-unpin");
+  });
+
+  test("/pins lists the pinned conversations of the channel", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin");
+    await send(daemon, "/pins");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain("conv-a");
+    expect(reply).toContain("codex");
+  });
+
+  test("/pin <window> pins to the named window even when another is active", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // codex-1 is the active window.
+    await send(daemon, "/codex");
+
+    // Pin to codex-2 (creates it if missing).
+    await send(daemon, "/pin codex-2");
+    const key = conversationPinKey("wechat", "conv-a");
+    expect(env.deps.slotPins!.get(key)).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 2,
+    });
+    expect(env.runtime("codex", 2)).toBeDefined();
+
+    // Messages follow the pin, not the active window.
+    await send(daemon, "to-codex-2");
+    expect(env.runtime("codex", 2).inputs).toContain("to-codex-2");
+    expect(env.runtime("codex", 1).inputs).not.toContain("to-codex-2");
+  });
+
+  test("/pin <window> rejects unknown window names", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin bogus");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply.toLowerCase()).toContain("unknown window");
+    expect(env.deps.slotPins!.list()).toHaveLength(0);
+  });
+});
