@@ -58,7 +58,7 @@ import {
   type PinCommand,
   type SlotPins,
 } from "./slot-pins.ts";
-import { modeAllowsCommand } from "./bridge-mode.ts";
+import { admitWindow, modeAllowsCommand } from "./bridge-mode.ts";
 
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
 
@@ -717,12 +717,43 @@ export class InboundRouter {
         return;
       }
       const cwd = this.host.slotManager.activeCwd;
-      const ensure = await this.host.slotManager.ensureSlot(parsed.adapter, {
-        cwd,
-        instance: parsed.instance,
-        openVisible: true,
-        reuseExistingVisible: true,
-      });
+      const existing = this.host.slotManager.getSlot(cwd, parsed.adapter, parsed.instance);
+      let ensure: EnsureSlotResult;
+      if (existing) {
+        // Window already exists: reuse it without touching the bridge mode.
+        ensure = await this.host.slotManager.ensureSlot(parsed.adapter, {
+          cwd,
+          instance: parsed.instance,
+          openVisible: true,
+          reuseExistingVisible: true,
+        });
+      } else {
+        // The window does not exist yet. Ask admission what instance a new
+        // window would get: when it matches the requested number, take the
+        // standard new-window path so the bridge mode upgrades with the window
+        // (e.g. /pin codex-2 after a single codex window upgrades to
+        // multi_instance and /1, /2 become available). Only when the requested
+        // number is a gap in the numbering (say /pin codex-5 with instance 2
+        // free) fall back to creating that exact instance directly.
+        const admission = admitWindow(
+          this.host.slotManager.mode,
+          this.host.slotManager.windows(),
+          { cwd, adapter: parsed.adapter },
+        );
+        ensure = admission.admitted && admission.instance === parsed.instance
+          ? await this.host.slotManager.ensureSlot(parsed.adapter, {
+            cwd,
+            newInstance: true,
+            openVisible: true,
+            reuseExistingVisible: true,
+          })
+          : await this.host.slotManager.ensureSlot(parsed.adapter, {
+            cwd,
+            instance: parsed.instance,
+            openVisible: true,
+            reuseExistingVisible: true,
+          });
+      }
       if (!ensure.activated) {
         await queue(this.describePinSwitchFailure({ cwd, ...parsed }, ensure));
         return;

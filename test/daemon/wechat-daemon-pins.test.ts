@@ -464,4 +464,48 @@ describe("daemon conversation pinning", () => {
     expect(env.runtime("codex", 1).inputs).toContain("wechat-msg");
     expect(env.deps.slotPins!.get(conversationPinKey("wechat", "conv-a"))).toBeUndefined();
   });
+
+  test("/pin <window> to a missing window upgrades the mode so numbered switching works", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // A single codex window (mode: single). /pin codex-2 must take the
+    // standard new-window path: the bridge upgrades to multi_instance and
+    // /1, /2 become available instead of leaving the operator stuck.
+    await send(daemon, "/codex");
+    await send(daemon, "/pin codex-2");
+    await send(daemon, "/1");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).not.toContain("not available in this mode");
+
+    // The pin still wins over the now-active codex-1.
+    await send(daemon, "pinned-msg");
+    expect(env.runtime("codex", 2).inputs).toContain("pinned-msg");
+    expect(env.runtime("codex", 1).inputs).not.toContain("pinned-msg");
+
+    // /1 did switch back to codex-1: after unpinning, the message follows it.
+    await send(daemon, "/unpin");
+    await send(daemon, "after-unpin");
+    expect(env.runtime("codex", 1).inputs).toContain("after-unpin");
+    expect(env.runtime("codex", 2).inputs).not.toContain("after-unpin");
+  });
+
+  test("/pin <window> to a gap in the numbering keeps explicit creation without mode upgrade", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    // codex-2 is the next free instance, so /pin codex-3 targets a gap: the
+    // window is created exactly as named, but the mode is left untouched and
+    // /1 stays unavailable (consistent with the mode semantics).
+    await send(daemon, "/codex");
+    await send(daemon, "/pin codex-3");
+    await send(daemon, "/1");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain("not available in this mode");
+
+    // The exact instance was created and pinned.
+    await send(daemon, "pinned-msg");
+    expect(env.runtime("codex", 3).inputs).toContain("pinned-msg");
+    expect(env.runtime("codex", 1).inputs).not.toContain("pinned-msg");
+  });
 });
