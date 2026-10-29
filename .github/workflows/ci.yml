@@ -4,14 +4,18 @@
 # macOS, and Windows. The matrix exists because node-pty is a native module
 # whose spawn-helper behavior is platform-specific (see the postinstall fix in
 # scripts/ensure-node-pty-permissions.mjs), so a regression on one OS is not
-# caught by the others.
+# caught by the others. Tests run under Bun, so the Node version only affects
+# lint, typecheck, and build: every OS uses Node 24, and one extra Ubuntu job
+# checks the minimum supported Node (engines.node).
+#
+# release.yml calls this workflow (workflow_call) before creating a release.
 #
 # To make this gate actually block merges, enable branch protection on `main`:
 #   Settings -> Branches -> Edit rule for `main`
 #   -> "Require status checks to pass before merging"
-#   -> select all six `Quality (<os>, Node <version>)` checks
+#   -> select all four `Quality (<os>, Node <version>)` checks
 # 让该门禁真正阻止不合格 PR 合并,需在 main 分支保护规则里勾选
-# "Require status checks to pass before merging" 并选中上面的六个 Quality 检查。
+# "Require status checks to pass before merging" 并选中上面的四个 Quality 检查。
 
 name: CI
 
@@ -21,6 +25,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -43,8 +48,10 @@ jobs:
           - macos-latest
           - windows-latest
         node_version:
-          - "22.13.0"
           - "24"
+        include:
+          - os: ubuntu-latest
+            node_version: "22.13.0"
 
     steps:
       - name: Checkout

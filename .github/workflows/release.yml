@@ -1,6 +1,7 @@
 # Release automation for version tags (e.g. 1.1.7).
 #
-# Pushing a plain x.y.z tag runs the full quality gate, then creates a
+# Pushing a plain x.y.z tag runs the full CI quality gate (ci.yml, on
+# Linux, macOS, and Windows), then creates a
 # GitHub Release whose body combines the English docs/releases/<tag>.md, a
 # link to the Chinese docs/releases/<tag>_CN.md, and the notes GitHub
 # auto-generates (commit/PR list and full-changelog diff link).
@@ -23,46 +24,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  quality:
+    name: Quality gate
+    uses: ./.github/workflows/ci.yml
+
   release:
-    name: Quality gate and GitHub release
+    name: GitHub release
+    needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-
-      - name: Cache Bun install
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Lint
-        run: bun run lint
-
-      - name: Typecheck
-        run: bun run typecheck:src
-
-      - name: Test
-        run: bun test test
-
-      - name: Build
-        run: bun run build
 
       - name: Verify release notes exist
         run: |

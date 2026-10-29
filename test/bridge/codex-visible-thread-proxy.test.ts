@@ -87,6 +87,8 @@ test("rejects unauthenticated visible-client connections", async () => {
   });
   closeables.push(() => proxy.close());
   const client = new WebSocket(proxy.url);
+  // terminate() on a rejected handshake emits an error; ignore it.
+  client.on("error", () => {});
   const status = await new Promise<number>((resolve) => {
     client.once("unexpected-response", (_request, response) => resolve(response.statusCode));
   });
