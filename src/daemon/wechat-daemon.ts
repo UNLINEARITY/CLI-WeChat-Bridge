@@ -670,13 +670,22 @@ export class BridgeDaemon {
     }
     await this.outbound.waitForForwardTasks();
     await this.outbound.drainSendChains();
+    // A resident daemon shutting down detaches its codex windows: the app-server
+    // keeps running the task and the endpoint stays on disk so the next daemon
+    // adopts it on startup. Ephemeral daemons (which follow window lifecycles)
+    // still tear everything down.
+    const detachSlots = !this.ephemeral;
     for (const slot of this.slotManager.clear()) {
       try {
+        const runtime = slot.runtime as { setDetachOnDispose?: (value: boolean) => void };
+        runtime.setDetachOnDispose?.(detachSlots);
         await slot.runtime.dispose();
       } catch {
         // Best effort shutdown.
       }
-      slot.controller.clearLocalClientEndpoint();
+      if (!detachSlots) {
+        slot.controller.clearLocalClientEndpoint();
+      }
     }
 
     await this.ipcServer.close();

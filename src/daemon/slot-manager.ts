@@ -24,7 +24,6 @@ import { TurnCoordinator } from "../core/turn-coordinator.ts";
 import { invalidateModelSnapshot } from "../bridge/adapter-control.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
 import {
-  clearLocalCompanionEndpoint,
   readLocalCompanionEndpoint,
 } from "../companion/local-companion-link.ts";
 import type { DaemonAdapterKind } from "./daemon-link.ts";
@@ -645,7 +644,10 @@ export class SlotManager {
       codexAttach?: { threadId?: string };
     },
   ): Promise<DaemonSlot> {
-    clearLocalCompanionEndpoint(cwd, undefined, { adapter, instance });
+    // Keep any persisted companion endpoint: the codex adapter reads it in
+    // startAppServer to adopt a surviving app-server (daemon restart) instead
+    // of spawning a second runtime. Dead endpoints are cleaned up by
+    // isVisibleClientAlive / the adapter's own companion-liveness check.
     // An explicit restore resumes the session this slot followed last time.
     const restored = options.sessionStartMode === "restore"
       ? this.host.sessions.read(cwd, adapter, instance)
