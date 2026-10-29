@@ -264,13 +264,13 @@ describe("daemon behaviors kept after the standalone merge", () => {
     claude.emit(event("final_reply", { text: "Tests pass now." }));
     await tick(20);
     // A single window still registers its cwd-named session tag.
-    expect(env.texts()).toEqual(["[daemon-parit]\nTests pass now."]);
+    expect(env.texts()).toEqual(["[daemon-parity]\nTests pass now."]);
 
     await send(daemon, "/codex");
     env.wechat.sent.length = 0;
     claude.emit(event("final_reply", { text: "Still green." }));
     await tick(20);
-    expect(env.texts()).toEqual(["[daemon-parit]\nStill green."]);
+    expect(env.texts()).toEqual(["[daemon-parity]\nStill green."]);
   });
 
   test("disposes a slot after a fatal error and rebuilds it on the next switch", async () => {
@@ -436,7 +436,7 @@ describe("multi-directory daemon", () => {
     // With two workspaces listed, every message names its session tag.
     expect(env.texts()).toEqual([
       "[other-app]\nBuild finished.",
-      "[daemon-parit]\nTests pass.",
+      "[daemon-parity]\nTests pass.",
     ]);
     expect(daemon.getStatus().cwd).toBe(TEST_CWD);
   });
@@ -929,7 +929,7 @@ describe("remote commands per bridge mode", () => {
     env.wechat.sent.length = 0;
     second.emit(event("final_reply", { text: "Done." }));
     await tick(20);
-    expect(env.texts()).toEqual(["[daemon-par-2]\nDone."]);
+    expect(env.texts()).toEqual(["[daemon-parity-2]\nDone."]);
   });
 
   test("multi-instance mode refuses switching to another CLI type", async () => {
@@ -1095,7 +1095,7 @@ describe("Telegram final replies through the daemon", () => {
     await tick(30);
 
     expect(telegram.texts.filter((entry) => entry.text.includes("Report ready."))).toEqual([
-      { conversationId: "chat-1", text: "[daemon-parit]\nReport ready." },
+      { conversationId: "chat-1", text: "[daemon-parity]\nReport ready." },
     ]);
     expect(telegram.attachments).toEqual([{ conversationId: "chat-1", path: "/tmp/report.pdf" }]);
   });

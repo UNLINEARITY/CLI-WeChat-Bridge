@@ -56,7 +56,7 @@ export function pinTagKey(key: string, tag: string): string {
  * follows the tag, so a bare `[A]` is left untouched.
  */
 export function parseMessageTag(text: string): { tag: string; remainder: string } | null {
-  const match = text.match(/^\s*\[([^[\]]{1,12})\]\s*([\s\S]+)$/);
+  const match = text.match(/^\s*\[([^[\]]{1,20})\]\s*([\s\S]+)$/);
   if (!match) {
     return null;
   }
@@ -158,7 +158,7 @@ export function parsePinCommand(text: string): PinCommand | null {
   if (trimmed.toLowerCase() === "/pin") {
     return { type: "pin" };
   }
-  const pinTag = trimmed.match(/^\/pin\s+\[([^[\]]{1,12})\]\s*(.*)$/i);
+  const pinTag = trimmed.match(/^\/pin\s+\[([^[\]]{1,20})\]\s*(.*)$/i);
   if (pinTag) {
     const window = pinTag[2]?.trim();
     return window
@@ -172,7 +172,7 @@ export function parsePinCommand(text: string): PinCommand | null {
   if (trimmed.toLowerCase() === "/unpin") {
     return { type: "unpin" };
   }
-  const unpinTag = trimmed.match(/^\/unpin\s+\[([^[\]]{1,12})\]\s*$/i);
+  const unpinTag = trimmed.match(/^\/unpin\s+\[([^[\]]{1,20})\]\s*$/i);
   if (unpinTag) {
     return { type: "unpin-tag", tag: unpinTag[1]! };
   }

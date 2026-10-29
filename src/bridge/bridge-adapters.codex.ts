@@ -672,6 +672,28 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return { model: thread.model, effort: thread.reasoningEffort, collaborationMode: thread.collaborationMode };
   }
 
+  /**
+   * The window's own session name (set with codex /rename), or null when the
+   * running thread has no explicit name. Only the `name` field counts: the
+   * thread `preview` fallback would turn a [tag] into a moving content
+   * excerpt, which makes a terrible session label.
+   */
+  async readCodexThreadTitle(): Promise<string | null> {
+    if (!this.sharedThreadId || !this.usesRpcTurnTransport()) {
+      return null;
+    }
+    try {
+      const response = await this.sendRpcRequest("thread/read", {
+        threadId: this.sharedThreadId,
+        includeTurns: false,
+      });
+      const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
+      return thread && typeof thread.name === "string" ? normalizeOutput(thread.name).trim() || null : null;
+    } catch {
+      return null;
+    }
+  }
+
   override async interrupt(): Promise<boolean> {
     if (this.usesRpcTurnTransport()) {
       return await this.interruptPanelTurn();

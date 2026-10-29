@@ -263,9 +263,9 @@ describe("slot pins", () => {
     });
     // Over-length tags fall back to a window-name pin, which the window
     // parser then rejects with pin.invalidWindow.
-    expect(parsePinCommand("/pin [abcdefghijklmnop] codex")).toEqual({
+    expect(parsePinCommand("/pin [abcdefghijklmnopqrstuv] codex")).toEqual({
       type: "pin-to",
-      window: "[abcdefghijklmnop] codex",
+      window: "[abcdefghijklmnopqrstuv] codex",
     });
   });
 
@@ -671,7 +671,7 @@ describe("auto sessions", () => {
 
     // A second window in the same directory gets a suffixed session name.
     await send(daemon, "/open", OPERATOR_ID);
-    const suffixed = `${base.slice(0, 10)}-2`.slice(0, 12);
+    const suffixed = `${base.slice(0, 18)}-2`.slice(0, 20);
     expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, suffixed))).toEqual({
       cwd: TEST_CWD,
       adapter: "codex",
@@ -736,6 +736,76 @@ describe("auto sessions", () => {
     expect(heartbeat).toBeDefined();
     expect(heartbeat!.text).toContain("running for");
     expect(heartbeat!.recipientId).toBe(OPERATOR_ID);
+  });
+
+  test("a window with its own CLI session name uses it as the [tag]", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    // The cwd-basename tag is registered first.
+    expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, base))).toBeDefined();
+
+    // The window carries its own name (codex /rename); re-run registration as
+    // the daemon does after hydrating the session title.
+    const slot = daemon.slots.get("codex")!;
+    slot.sessionTitle = "paas-issues#96";
+    const inbound = (daemon as unknown as {
+      inbound: {
+        autoRegisterSession(
+          s: unknown,
+          info: { openedVisible: boolean; visibleReady: boolean },
+        ): Promise<void>;
+      };
+    }).inbound;
+    await inbound.autoRegisterSession(slot, { openedVisible: false, visibleReady: true });
+
+    // The title tag replaces the basename tag for this window.
+    const pins = env.deps.slotPins!;
+    expect(pins.get(pinTagKey(`wechat:${OPERATOR_ID}`, "paas-issues#96"))).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 1,
+    });
+    expect(pins.get(pinTagKey(`wechat:${OPERATOR_ID}`, base))).toBeUndefined();
+
+    // [title] messages route to the window and replies carry the title tag.
+    await send(daemon, `[paas-issues#96] handle issue`, OPERATOR_ID);
+    expect(env.runtime("codex", 1).inputs).toContain("handle issue");
+    env.runtime("codex", 1).emit({
+      type: "final_reply",
+      text: "fixed",
+      timestamp: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain("[paas-issues#96]");
+    expect(reply).toContain("fixed");
+  });
+
+  test("session tags support names up to 20 characters", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    const slot = daemon.slots.get("codex")!;
+    slot.sessionTitle = "paas-issue-123456789";
+    const inbound = (daemon as unknown as {
+      inbound: {
+        autoRegisterSession(
+          s: unknown,
+          info: { openedVisible: boolean; visibleReady: boolean },
+        ): Promise<void>;
+      };
+    }).inbound;
+    await inbound.autoRegisterSession(slot, { openedVisible: false, visibleReady: true });
+
+    const longName = "paas-issue-123456789";
+    expect(
+      env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, longName)),
+    ).toBeDefined();
+    await send(daemon, `[${longName}] ping`, OPERATOR_ID);
+    expect(env.runtime("codex", 1).inputs).toContain("ping");
   });
 
   test("closing the window unregisters its session", async () => {

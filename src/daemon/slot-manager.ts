@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import path from "node:path";
 import {
   sameSlotSession,
   toSlotSessionRecord,
@@ -714,7 +715,31 @@ export class SlotManager {
       `slot_started: adapter=${adapter} instance=${instance} command=${resolveDefaultAdapterCommand(adapter)} cwd=${cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
     this.startProgressHeartbeat(slot);
+    void this.hydrateSlotSessionTitle(slot);
     return slot;
+  }
+
+  /**
+   * A window may carry its own session name (codex /rename). Read it once the
+   * window is connected and, when it differs from the cwd basename, re-run the
+   * auto-session registration so the [tag] follows the CLI's own name.
+   */
+  private async hydrateSlotSessionTitle(slot: DaemonSlot): Promise<void> {
+    const runtime = slot.runtime as { readCodexThreadTitle?: () => Promise<string | null> };
+    if (typeof runtime.readCodexThreadTitle !== "function") {
+      return;
+    }
+    try {
+      const title = await runtime.readCodexThreadTitle();
+      const cleaned = title?.replace(/\[|\]/g, "").trim();
+      if (!cleaned || cleaned === path.basename(slot.cwd)) {
+        return;
+      }
+      slot.sessionTitle = cleaned.slice(0, 20);
+      this.host.onSlotCreated?.(slot, { openedVisible: false, visibleReady: true });
+    } catch {
+      // Best effort: keep the cwd-basename tag when the title cannot be read.
+    }
   }
 
   /**

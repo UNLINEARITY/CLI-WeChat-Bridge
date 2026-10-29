@@ -385,7 +385,7 @@ export class InboundRouter {
     // `/use [tag]` switches the active window to the tagged slot without
     // sending a prompt, so a long directory name needs no typing: `/use [p1]`
     // or the shortest bound tag wins.
-    const useTag = message.text.trim().match(/^\/use\s+\[([^[\]]{1,12})\]\s*$/i);
+    const useTag = message.text.trim().match(/^\/use\s+\[([^[\]]{1,20})\]\s*$/i);
     if (useTag) {
       await this.useTaggedWindow(message, useTag[1]!);
       return;
@@ -497,7 +497,7 @@ export class InboundRouter {
 
     // A bare `[name]` (no content) on a bound session reports the window
     // instead of routing an empty prompt.
-    const bareTag = message.text.trim().match(/^\[([^[\]]{1,12})\]$/);
+    const bareTag = message.text.trim().match(/^\[([^[\]]{1,20})\]$/);
     if (bareTag) {
       const tagPinned = this.host.pins.get(
         pinTagKey(this.pinKeyOf(message), bareTag[1]!),
@@ -970,19 +970,27 @@ export class InboundRouter {
 
 
   /**
-   * Session name for a window's auto-registered tag: the sanitized cwd
-   * basename (max 12 chars, brackets stripped), suffixed with the instance
-   * number when the same directory runs several windows (codex-1, codex-2)
-   * or the plain name is already taken.
+   * Session name for a window's auto-registered tag. A window that carries
+   * its own CLI session name (codex /rename, e.g. "paas-issues#96") uses that
+   * first; otherwise the sanitized cwd basename (max 20 chars, brackets
+   * stripped) with an instance suffix when the same directory runs several
+   * windows (codex-1, codex-2) or the plain name is already taken.
    */
+  private pinTargetsSameSlot(left: ConversationPinTarget, right: ConversationPinTarget): boolean {
+    return (
+      left.cwd === right.cwd &&
+      left.adapter === right.adapter &&
+      left.instance === right.instance
+    );
+  }
+
   sessionNameFor(slot: DaemonSlot): string {
     const key = conversationPinKey(this.host.channelId, this.host.operatorId);
     const raw =
-      path
-        .basename(slot.cwd)
+      (slot.sessionTitle || path.basename(slot.cwd))
         .replace(/\[|\]/g, "")
         .trim() || "cwd";
-    const base = raw.slice(0, 12);
+    const base = raw.slice(0, 20);
     const existing = this.host.pins.get(pinTagKey(key, base));
     const ownsIt =
       existing &&
@@ -994,8 +1002,8 @@ export class InboundRouter {
     }
     // Same directory running several windows (codex-1, codex-2) or the name
     // already taken: make the session name unique per window. The full tag
-    // still has to fit the 12-char [tag] limit, so the suffix truncates it.
-    return `${raw.slice(0, 10)}-${slot.instance}`.slice(0, 12);
+    // still has to fit the 20-char [tag] limit, so the suffix truncates it.
+    return `${raw.slice(0, 18)}-${slot.instance}`.slice(0, 20);
   }
 
   /**
@@ -1014,7 +1022,30 @@ export class InboundRouter {
       adapter: slot.adapter,
       instance: slot.instance,
     };
-    this.host.pins.set(pinTagKey(key, name), target);
+    // The window changed its CLI session name (codex /rename read after the
+    // first registration): drop the cwd-basename tag this slot registered
+    // before, so one window ends up with exactly one auto tag.
+    const existingTag = this.host.pins.get(pinTagKey(key, name));
+    if (existingTag && this.pinTargetsSameSlot(existingTag, target)) {
+      this.host.daemonLog(
+        `auto_session_already_bound: name=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd}`,
+      );
+      return;
+    }
+    const newTagKey = pinTagKey(key, name);
+    for (const pinned of this.host.pins.list()) {
+      if (
+        pinned.key.startsWith(`${key}#`) &&
+        pinned.key !== newTagKey &&
+        this.pinTargetsSameSlot(pinned.target, target)
+      ) {
+        this.host.pins.remove(pinned.key);
+        this.host.daemonLog(
+          `auto_session_migrated: from=${pinned.key.slice(key.length + 1)} to=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd}`,
+        );
+      }
+    }
+    this.host.pins.set(newTagKey, target);
     this.host.daemonLog(
       `auto_session_registered: name=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd} opened_visible=${info.openedVisible} visible_ready=${info.visibleReady}`,
     );
