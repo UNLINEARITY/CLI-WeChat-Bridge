@@ -464,7 +464,10 @@ describe("daemon conversation pinning", () => {
     await send(daemon, "/pin bogus");
     const reply = env.wechat.sent.at(-1)?.text ?? "";
     expect(reply.toLowerCase()).toContain("unknown window");
-    expect(env.deps.slotPins!.list()).toHaveLength(0);
+    // Only the auto-registered session of the codex window exists; nothing pinned.
+    const pinKeys = env.deps.slotPins!.list().map((pin) => pin.key);
+    expect(pinKeys.some((key) => key.includes("#"))).toBe(true);
+    expect(pinKeys.some((key) => key.endsWith(":conv-a"))).toBe(false);
   });
 
   test("/pin <window> followed by /unpin falls back to active routing", async () => {
@@ -642,5 +645,65 @@ describe("daemon conversation pinning", () => {
     const reply = env.wechat.sent.at(-1)?.text ?? "";
     expect(reply).toContain("[A]");
     expect(reply).toContain("codex-2");
+  });
+});
+
+describe("auto sessions", () => {
+  const base = path.basename(TEST_CWD);
+
+  test("a new window registers itself as a cwd-named session and routes [name] messages", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, base))).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 1,
+    });
+    const notices = env.wechat.sent.map((m) => m.text);
+    expect(notices.some((text) => text.includes(base))).toBe(true);
+
+    // A second window in the same directory gets a suffixed session name.
+    await send(daemon, "/open", OPERATOR_ID);
+    const suffixed = `${base.slice(0, 10)}-2`.slice(0, 12);
+    expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, suffixed))).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 2,
+    });
+
+    // [name] routes to its window and strips the prefix; [name-2] to the other.
+    await send(daemon, `[${base}] hello one`, OPERATOR_ID);
+    expect(env.runtime("codex", 1).inputs).toContain("hello one");
+    expect(env.runtime("codex", 1).inputs).not.toContain(`[${base}]`);
+    expect(env.runtime("codex", 2).inputs).not.toContain("hello one");
+
+    await send(daemon, `[${suffixed}] hello two`, OPERATOR_ID);
+    expect(env.runtime("codex", 2).inputs).toContain("hello two");
+    expect(env.runtime("codex", 1).inputs).not.toContain("hello two");
+
+    // A bare [name] reports the window instead of routing an empty prompt.
+    await send(daemon, `[${base}]`, OPERATOR_ID);
+    const status = env.wechat.sent.at(-1)?.text ?? "";
+    expect(status).toContain(base);
+    expect(env.runtime("codex", 1).inputs).toHaveLength(1);
+  });
+
+  test("closing the window unregisters its session", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, base))).toBeDefined();
+
+    const slot = daemon.slots.get("codex")!;
+    const manager = (daemon as unknown as { slotManager: { releaseSlot(s: unknown): Promise<void> } })
+      .slotManager;
+    await manager.releaseSlot(slot);
+
+    expect(env.deps.slotPins!.get(pinTagKey(`wechat:${OPERATOR_ID}`, base))).toBeUndefined();
+    const notice = env.wechat.sent.at(-1)?.text ?? "";
+    expect(notice).toContain("unregistered");
   });
 });

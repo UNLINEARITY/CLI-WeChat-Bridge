@@ -29,6 +29,7 @@ import type {
   WeChatTransport,
 } from "../../src/wechat/wechat-transport.ts";
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
+import { createMemorySlotPins } from "../../src/daemon/slot-pins.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -188,6 +189,9 @@ class Env {
       this.exitCodes.push(code);
     },
     slotSessions: this.sessions,
+    // Auto sessions register into the pin store; keep each env's store private
+    // so parallel test files never share ~/.cli-bridge/pins.json.
+    slotPins: createMemorySlotPins(),
   };
   readonly exitCodes: number[] = [];
 
@@ -857,7 +861,9 @@ describe("progressive bridge modes", () => {
 
     expect(other.refused).toBeUndefined();
     expect(status(daemon)).toBe("multi_workspace");
-    expect(env.texts().at(-1)).toContain("other-app/codex joined");
+    // The upgrade notice is sent fire-and-forget; let it flush before reading.
+    await tick();
+    expect(env.texts().some((text) => text.includes("other-app/codex joined"))).toBe(true);
   });
 
   test("closing windows never steps down; a resident daemon left empty starts over", async () => {

@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import path from "node:path";
 import { t } from "../i18n/index.ts";
 import { parseBridgeControlCommand } from "../core/bridge-control.ts";
 import { formatPendingApprovalReminder } from "../bridge/message-formatting.ts";
@@ -83,6 +84,8 @@ export type InboundRouterHost = {
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   shutdown: () => Promise<void>;
+  /** True once daemon shutdown started; auto-session notices are suppressed. */
+  isShuttingDown: () => boolean;
   daemonLog: (message: string) => void;
 };
 
@@ -482,6 +485,35 @@ export class InboundRouter {
       return;
     }
 
+    // A bare `[name]` (no content) on a bound session reports the window
+    // instead of routing an empty prompt.
+    const bareTag = message.text.trim().match(/^\[([^[\]]{1,12})\]$/);
+    if (bareTag) {
+      const tagPinned = this.host.pins.get(
+        pinTagKey(this.pinKeyOf(message), bareTag[1]!),
+      );
+      if (tagPinned) {
+        const boundSlot = this.host.slotManager.getSlot(
+          tagPinned.cwd,
+          tagPinned.adapter,
+          tagPinned.instance,
+        );
+        if (boundSlot) {
+          await this.host.queueMessage(
+            message.senderId,
+            t("session.status", {
+              name: bareTag[1]!,
+              window: this.slotWindowName(tagPinned),
+              cwd: tagPinned.cwd,
+            }),
+            "notice",
+            this.host.inboundConversationContext.get(),
+          );
+          return;
+        }
+      }
+    }
+
     // A conversation pinned to a fixed window always routes there, even when
     // another window is active. Explicit switch commands (/open, /N, /codex,
     // /daemon-stop, /bind, /cd) were handled above and never reach this point.
@@ -847,6 +879,101 @@ export class InboundRouter {
         : t("pin.bound", { window: this.slotWindowName(target) }),
       "notice",
       this.host.inboundConversationContext.get(),
+    );
+  }
+
+  /**
+   * Session name for a window's auto-registered tag: the sanitized cwd
+   * basename (max 12 chars, brackets stripped), suffixed with the instance
+   * number when the same directory runs several windows (codex-1, codex-2)
+   * or the plain name is already taken.
+   */
+  sessionNameFor(slot: DaemonSlot): string {
+    const key = conversationPinKey(this.host.channelId, this.host.operatorId);
+    const raw =
+      path
+        .basename(slot.cwd)
+        .replace(/[\[\]]/g, "")
+        .trim() || "cwd";
+    const base = raw.slice(0, 12);
+    const existing = this.host.pins.get(pinTagKey(key, base));
+    const ownsIt =
+      existing &&
+      existing.cwd === slot.cwd &&
+      existing.adapter === slot.adapter &&
+      existing.instance === slot.instance;
+    if (!existing || ownsIt) {
+      return base;
+    }
+    // Same directory running several windows (codex-1, codex-2) or the name
+    // already taken: make the session name unique per window. The full tag
+    // still has to fit the 12-char [tag] limit, so the suffix truncates it.
+    return `${raw.slice(0, 10)}-${slot.instance}`.slice(0, 12);
+  }
+
+  /**
+   * A brand-new window finished opening: register it in the operator's
+   * conversation as a cwd-named session tag, so `[name] 内容` routes straight
+   * to that window with zero configuration.
+   */
+  async autoRegisterSession(
+    slot: DaemonSlot,
+    info: { openedVisible: boolean; visibleReady: boolean },
+  ): Promise<void> {
+    const name = this.sessionNameFor(slot);
+    const key = conversationPinKey(this.host.channelId, this.host.operatorId);
+    const target: ConversationPinTarget = {
+      cwd: slot.cwd,
+      adapter: slot.adapter,
+      instance: slot.instance,
+    };
+    this.host.pins.set(pinTagKey(key, name), target);
+    this.host.daemonLog(
+      `auto_session_registered: name=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd} opened_visible=${info.openedVisible} visible_ready=${info.visibleReady}`,
+    );
+    if (this.host.isShuttingDown()) {
+      return;
+    }
+    await this.host.queueMessage(
+      this.host.operatorId,
+      t("session.registered", {
+        name,
+        window: this.slotWindowName(target),
+        cwd: slot.cwd,
+      }),
+      "notice",
+      this.host.fallbackConversation,
+    );
+  }
+
+  /** The window went away: drop its auto-registered session tag. */
+  async autoUnregisterSession(slot: DaemonSlot): Promise<void> {
+    const name = this.sessionNameFor(slot);
+    const tagKey = pinTagKey(
+      conversationPinKey(this.host.channelId, this.host.operatorId),
+      name,
+    );
+    const existing = this.host.pins.get(tagKey);
+    if (
+      !existing ||
+      existing.cwd !== slot.cwd ||
+      existing.adapter !== slot.adapter ||
+      existing.instance !== slot.instance
+    ) {
+      return;
+    }
+    this.host.pins.remove(tagKey);
+    this.host.daemonLog(
+      `auto_session_unregistered: name=${name} window=${this.slotWindowName(existing)} cwd=${slot.cwd}`,
+    );
+    if (this.host.isShuttingDown()) {
+      return;
+    }
+    await this.host.queueMessage(
+      this.host.operatorId,
+      t("session.unregistered", { name }),
+      "notice",
+      this.host.fallbackConversation,
     );
   }
 

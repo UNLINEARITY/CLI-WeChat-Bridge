@@ -298,7 +298,13 @@ export class BridgeDaemon {
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
       isEphemeral: () => this.ephemeral,
       sessions: this.deps.slotSessions ?? fileSlotSessionStore,
-      onSlotRemoved: () => this.exitIfIdle(),
+      onSlotRemoved: (slot) => {
+        this.exitIfIdle();
+        this.inbound.autoUnregisterSession(slot);
+      },
+      onSlotCreated: (slot, info) => {
+        this.inbound.autoRegisterSession(slot, info);
+      },
       onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
       daemonLog: (message) => this.daemonLog(message),
     });
@@ -328,6 +334,7 @@ export class BridgeDaemon {
       queueMessage: (senderId, text, context, targetOverride) =>
         this.queueMessage(senderId, text, context, targetOverride),
       shutdown: () => this.shutdown(),
+      isShuttingDown: () => this.shutdownPromise !== null,
       daemonLog: (message) => this.daemonLog(message),
     });
   }

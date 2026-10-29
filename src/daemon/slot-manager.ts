@@ -83,6 +83,11 @@ export type SlotManagerHost = {
   isEphemeral: () => boolean;
   /** Called after a slot left the map (released or dead). */
   onSlotRemoved?: (slot: DaemonSlot) => void;
+  /** A brand-new window finished opening (activated); register it for routing. */
+  onSlotCreated?: (
+    slot: DaemonSlot,
+    info: { openedVisible: boolean; visibleReady: boolean },
+  ) => void;
   /** A new slot moved the bridge up a mode; tell the operator what opened up. */
   onModeUpgraded?: (mode: BridgeModeKind, slot: DaemonSlot) => void;
   daemonLog: (message: string) => void;
@@ -585,6 +590,9 @@ export class SlotManager {
     this.host.daemonLog(
       `switch_adapter: adapter=${adapter} instance=${instance} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} visible_ready=${visibleReady} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} cwd=${cwd} session_start_mode=${sessionStartMode}`,
     );
+    if (created && activated) {
+      this.host.onSlotCreated?.(slot, { openedVisible, visibleReady });
+    }
     return {
       activeAdapter: adapter,
       cwd,

@@ -165,6 +165,10 @@ export const messages: Record<string, string> = {
   "pin.tagUnbound": "已取消标签 [{tag}] 的窗口固定。",
   "pin.tagNotPinned": "标签 [{tag}] 没有固定的窗口。",
   "pin.pinFailed": "无法切换到固定窗口 {window}：{detail}",
+  // === 自动会话（新窗口自动注册）===
+  "session.registered": "已注册自动会话 [{name}] → {window}（{cwd}）。在这个聊天里发 [name] 加内容即可直达该窗口派活。",
+  "session.unregistered": "自动会话 [{name}] 已注销（窗口已关闭）。",
+  "session.status": "[{name}] → {window}（{cwd}）。窗口在线，发送 [name] 加内容即可派活。",
 
   // === 版本检查 ===
   "update.available": "[有新版本] 版本 {latest} 可用（当前: {current}）。\n运行: npm install -g {package}@latest",

@@ -165,6 +165,10 @@ export const messages: Record<string, string> = {
   "pin.tagUnbound": "Unpinned tag [{tag}] from its window.",
   "pin.tagNotPinned": "Tag [{tag}] is not pinned to any window.",
   "pin.pinFailed": "Could not switch to pinned window {window}: {detail}",
+  // === Auto sessions (new windows register themselves) ===
+  "session.registered": "Auto session [{name}] registered → {window} ({cwd}). Send [name] plus content in this chat to drive that window.",
+  "session.unregistered": "Auto session [{name}] unregistered (window closed).",
+  "session.status": "[{name}] → {window} ({cwd}). Window online; send [name] plus content to drive it.",
 
   // === Version checker ===
   "update.available": "[Update Available] Version {latest} is available (current: {current}).\nRun: npm install -g {package}@latest",
