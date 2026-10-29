@@ -193,6 +193,13 @@ export class BridgeDaemon {
     cwd: string;
     profile?: string;
     deps?: BridgeDaemonDeps;
+    /**
+     * How often a still-busy window pushes a short progress heartbeat to the
+     * operator (ms). Defaults to 10 minutes; only active once the window has
+     * been busy for `progressHeartbeatMinBusyMs` (default 5 minutes).
+     */
+    progressHeartbeatIntervalMs?: number;
+    progressHeartbeatMinBusyMs?: number;
   } & (
     | { setup: ChannelSetup }
     | {
@@ -307,6 +314,11 @@ export class BridgeDaemon {
       },
       onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
       sessionTagForSlot: (slot) => this.inbound.tagNameForSlot(slot),
+      progressHeartbeatIntervalMs: params.progressHeartbeatIntervalMs ??
+        (Number(process.env.CLI_BRIDGE_PROGRESS_HEARTBEAT_MS) > 0
+          ? Number(process.env.CLI_BRIDGE_PROGRESS_HEARTBEAT_MS)
+          : undefined),
+      progressHeartbeatMinBusyMs: params.progressHeartbeatMinBusyMs,
       daemonLog: (message) => this.daemonLog(message),
     });
     this.controls = new DaemonControlCommands({

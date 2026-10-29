@@ -170,7 +170,10 @@ class FakeDaemonEnvironment {
     slotPins: createMemorySlotPins(),
   };
 
-  buildDaemon(): BridgeDaemon {
+  buildDaemon(options?: {
+    progressHeartbeatIntervalMs?: number;
+    progressHeartbeatMinBusyMs?: number;
+  }): BridgeDaemon {
     return new BridgeDaemon({
       cwd: TEST_CWD,
       authorizedUserId: OPERATOR_ID,
@@ -178,6 +181,8 @@ class FakeDaemonEnvironment {
       channelId: "wechat",
       wecomTransport: null,
       deps: this.deps,
+      progressHeartbeatIntervalMs: options?.progressHeartbeatIntervalMs,
+      progressHeartbeatMinBusyMs: options?.progressHeartbeatMinBusyMs,
     });
   }
 
@@ -688,6 +693,49 @@ describe("auto sessions", () => {
     const status = env.wechat.sent.at(-1)?.text ?? "";
     expect(status).toContain(base);
     expect(env.runtime("codex", 1).inputs).toHaveLength(1);
+  });
+
+  test("a bare [name] reports the busy state and running duration", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    const runtime = env.runtime("codex", 1);
+    runtime.state = {
+      ...runtime.state,
+      status: "busy",
+      startedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    };
+
+    await send(daemon, `[${base}]`, OPERATOR_ID);
+    const status = env.wechat.sent.at(-1)?.text ?? "";
+    expect(status).toContain(base);
+    expect(status).toContain("working");
+    expect(status).toContain("running for");
+    expect(env.runtime("codex", 1).inputs).toHaveLength(0);
+  });
+
+  test("a long busy task pushes a progress heartbeat to the operator", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon({
+      progressHeartbeatIntervalMs: 25,
+      progressHeartbeatMinBusyMs: 0,
+    });
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    const runtime = env.runtime("codex", 1);
+    runtime.state = {
+      ...runtime.state,
+      status: "busy",
+      startedAt: new Date(Date.now() - 3_600_000).toISOString(),
+    };
+
+    // Let at least one heartbeat interval elapse while the slot stays busy.
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    const heartbeat = env.wechat.sent.find((m) => m.text.includes("Still working"));
+    expect(heartbeat).toBeDefined();
+    expect(heartbeat!.text).toContain("running for");
+    expect(heartbeat!.recipientId).toBe(OPERATOR_ID);
   });
 
   test("closing the window unregisters its session", async () => {

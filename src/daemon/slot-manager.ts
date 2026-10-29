@@ -96,6 +96,13 @@ export type SlotManagerHost = {
    */
   sessionTagForSlot?: (slot: DaemonSlot) => string | null;
   daemonLog: (message: string) => void;
+  /**
+   * Long-running progress heartbeat: while a slot stays busy, a short
+   * "still working" summary is pushed to the operator every interval.
+   * Both are ms; defaults are 10 min and 5 min.
+   */
+  progressHeartbeatIntervalMs?: number;
+  progressHeartbeatMinBusyMs?: number;
 };
 
 /** How long a window-bound slot waits for its window to connect. */
@@ -131,12 +138,18 @@ export class SlotManager {
   private activeAdapterVersion = 0;
   takenOverAdapter?: DaemonAdapterKind;
   private readonly host: SlotManagerHost;
+  private readonly progressHeartbeatIntervalMs: number;
+  private readonly progressHeartbeatMinBusyMs: number;
+  private readonly heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly lastHeartbeatAt = new Map<string, number>();
 
   constructor(host: SlotManagerHost) {
     this.host = host;
     this.currentCwd = host.cwd;
     this.home = host.cwd;
     this.registeredWorkspaces.push(host.cwd);
+    this.progressHeartbeatIntervalMs = host.progressHeartbeatIntervalMs ?? 600_000;
+    this.progressHeartbeatMinBusyMs = host.progressHeartbeatMinBusyMs ?? 300_000;
   }
 
   /** Current workspace; falls back to the startup workspace once it is gone. */
@@ -295,6 +308,7 @@ export class SlotManager {
       return; // Already replaced by a newer ensureSlot run.
     }
     this.slotMap.delete(key);
+    this.stopProgressHeartbeat(slot);
     if (
       this.activeAdapter === slot.adapter &&
       this.activeInstance === slot.instance &&
@@ -699,7 +713,73 @@ export class SlotManager {
     this.host.daemonLog(
       `slot_started: adapter=${adapter} instance=${instance} command=${resolveDefaultAdapterCommand(adapter)} cwd=${cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
+    this.startProgressHeartbeat(slot);
     return slot;
+  }
+
+  /**
+   * A compact progress snapshot for one slot: how long the current run has
+   * been going and the most recent output summary. Used by status queries
+   * (`[tag]` bare lookups) and by the long-task heartbeat.
+   */
+  slotProgressSummary(slot: DaemonSlot): { runningForMs: number; recentText: string } {
+    const state = slot.runtime.getState();
+    const startedAtMs = state.startedAt ? Date.parse(state.startedAt) : slot.createdAtMs;
+    const runningForMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : 0;
+    return {
+      runningForMs,
+      recentText: slot.outputBatcher.getRecentSummary(140),
+    };
+  }
+
+  private startProgressHeartbeat(slot: DaemonSlot): void {
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    if (this.heartbeatTimers.has(key)) {
+      return;
+    }
+    const timer = setInterval(() => this.maybeSendProgressHeartbeat(slot), this.progressHeartbeatIntervalMs);
+    // setInterval returns a NodeJS.Timer on Node and a number in the DOM; keep
+    // whatever unref-style unwrapping the runtime expects. Do not unref here:
+    // the daemon must stay alive to deliver the heartbeat.
+    this.heartbeatTimers.set(key, timer);
+  }
+
+  private stopProgressHeartbeat(slot: DaemonSlot): void {
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    const timer = this.heartbeatTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.heartbeatTimers.delete(key);
+      this.lastHeartbeatAt.delete(key);
+    }
+  }
+
+  private maybeSendProgressHeartbeat(slot: DaemonSlot): void {
+    const state = slot.runtime.getState();
+    if (state.status !== "busy") {
+      return;
+    }
+    const { runningForMs, recentText } = this.slotProgressSummary(slot);
+    if (runningForMs < this.progressHeartbeatMinBusyMs) {
+      return;
+    }
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    const last = this.lastHeartbeatAt.get(key) ?? 0;
+    if (Date.now() - last < this.progressHeartbeatIntervalMs) {
+      return;
+    }
+    this.lastHeartbeatAt.set(key, Date.now());
+    void this.host.queueMessage(
+      this.host.operatorId,
+      this.prefix(
+        slot,
+        t("daemon.heartbeat", {
+          runningFor: formatDuration(runningForMs),
+          recentText: recentText || t("daemon.heartbeat.noRecent"),
+        }),
+      ),
+      "message",
+    );
   }
 
   async startFreshSlotSession(slot: DaemonSlot): Promise<void> {

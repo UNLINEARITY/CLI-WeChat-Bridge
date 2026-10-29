@@ -10,6 +10,7 @@ import { parseBridgeControlCommand } from "../core/bridge-control.ts";
 import { formatPendingApprovalReminder } from "../bridge/message-formatting.ts";
 import { formatPendingUserInputReminder } from "../bridge/user-input-messages.ts";
 import { parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
+import { formatDuration } from "../core/text-utils.ts";
 import {
   formatUserFacingInboundError,
   type ChannelSendKind,
@@ -508,12 +509,19 @@ export class InboundRouter {
           tagPinned.instance,
         );
         if (boundSlot) {
+          const state = boundSlot.runtime.getState();
+          const { runningForMs, recentText } = this.host.slotManager.slotProgressSummary(boundSlot);
           await this.host.queueMessage(
             message.senderId,
             t("session.status", {
               name: bareTag[1]!,
               window: this.slotWindowName(tagPinned),
               cwd: tagPinned.cwd,
+              statusLabel: t(`daemon.state.${state.status}`),
+              runningFor: state.status === "busy"
+                ? t("daemon.runningFor", { duration: formatDuration(runningForMs) })
+                : "",
+              recentText: recentText || t("daemon.heartbeat.noRecent"),
             }),
             "notice",
             this.host.inboundConversationContext.get(),
