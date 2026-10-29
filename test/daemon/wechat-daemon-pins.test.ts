@@ -706,4 +706,69 @@ describe("auto sessions", () => {
     const notice = env.wechat.sent.at(-1)?.text ?? "";
     expect(notice).toContain("unregistered");
   });
+
+  test("replies from a registered window carry the session-name prefix", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    env.runtime("codex", 1).emit({
+      type: "final_reply",
+      text: "done the task",
+      timestamp: new Date().toISOString(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain(`[${base}]`);
+    expect(reply).toContain("done the task");
+  });
+
+  test("/use [tag] switches the active window to the tagged slot", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID); // window 1 active
+    await send(daemon, "/pin [A] codex-1", OPERATOR_ID); // tag A -> window 1
+    await send(daemon, "/open", OPERATOR_ID); // window 2 becomes active
+    await send(daemon, "/use [A]", OPERATOR_ID); // switch back to window 1
+
+    const confirm = env.wechat.sent.at(-1)?.text ?? "";
+    expect(confirm).toContain("[A]");
+
+    // The active slot is now window 1 again.
+    const manager = (daemon as unknown as {
+      slotManager: { getActiveSlot(): { cwd: string; adapter: string; instance: number } | null };
+    }).slotManager;
+    expect(manager.getActiveSlot()?.instance).toBe(1);
+
+    // [A] tagged traffic lands on window 1 with the tag stripped.
+    await send(daemon, "[A] tagged task", OPERATOR_ID);
+    expect(env.runtime("codex", 1).inputs).toContain("tagged task");
+    expect(env.runtime("codex", 2).inputs).not.toContain("tagged task");
+  });
+
+  test("/use reports when the tag or its window is missing", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/use [A]", OPERATOR_ID);
+    expect(env.wechat.sent.at(-1)?.text ?? "").toContain("No window is bound");
+
+    await send(daemon, "/codex", OPERATOR_ID);
+    await send(daemon, "/pin [B] codex-2", OPERATOR_ID); // creates and tags window 2
+
+    // Close window 2; the tag remains but the window is gone.
+    const manager = (daemon as unknown as {
+      slotManager: {
+        slotsIn(cwd: string): { instance: number }[];
+        releaseSlot(s: unknown): Promise<void>;
+      };
+    }).slotManager;
+    const slot2 = manager.slotsIn(TEST_CWD).find((slot) => slot.instance === 2)!;
+    await manager.releaseSlot(slot2);
+
+    await send(daemon, "/use [B]", OPERATOR_ID);
+    expect(env.wechat.sent.at(-1)?.text ?? "").toContain("not running");
+  });
 });

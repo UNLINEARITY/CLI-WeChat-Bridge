@@ -151,7 +151,7 @@ export const messages: Record<string, string> = {
   "binding.listHeader": "Emoji 绑定列表:",
 
   // === 聊天窗口固定 ===
-  "pin.usage": "用法:\n/pin - 把当前聊天固定到当前窗口\n/pin <窗口> - 固定到指定窗口（如 /pin codex、/pin codex-2）\n/pin [标签] - 把标签固定到当前窗口（如 /pin [A]）\n/pin [标签] <窗口> - 把标签固定到指定窗口（如 /pin [A] codex-2），之后发 [A] 开头的消息自动进入该窗口\n/unpin - 取消当前聊天的窗口固定\n/unpin [标签] - 取消标签的窗口固定\n/pins - 查看已固定的聊天和标签",
+  "pin.usage": "用法:\n/pin - 把当前聊天固定到当前窗口\n/pin <窗口> - 固定到指定窗口（如 /pin codex、/pin codex-2）\n/pin [标签] - 把标签固定到当前窗口（如 /pin [A]）\n/pin [标签] <窗口> - 把标签固定到指定窗口（如 /pin [A] codex-2），之后发 [A] 开头的消息自动进入该窗口\n/use [标签] - 切换到标签固定的窗口（不派活，如 /use [A]）\n/unpin - 取消当前聊天的窗口固定\n/unpin [标签] - 取消标签的窗口固定\n/pins - 查看已固定的聊天和标签",
   "pin.invalidWindow": "无法识别窗口名称 {window}。可用名称如 codex、codex-2、claude、pi。",
   "pin.bound": "已把当前聊天固定到窗口 {window}。之后该聊天发来的消息都会进入这个窗口。",
   "pin.unbound": "已取消当前聊天的窗口固定。",
@@ -169,6 +169,9 @@ export const messages: Record<string, string> = {
   "session.registered": "已注册自动会话 [{name}] → {window}（{cwd}）。在这个聊天里发 [name] 加内容即可直达该窗口派活。",
   "session.unregistered": "自动会话 [{name}] 已注销（窗口已关闭）。",
   "session.status": "[{name}] → {window}（{cwd}）。窗口在线，发送 [name] 加内容即可派活。",
+  "daemon.use.switched": "已切换到 [{name}] → {window}（{cwd}）。该窗口的回复会带 [{name}] 前缀；发 [name] 加内容即可派活。",
+  "daemon.use.notFound": "没有绑定标签 [{name}]。用 /pin [name] codex-N 绑定，或打开对应目录窗口会自动注册。",
+  "daemon.use.notRunning": "[{name}] 绑定的窗口没有在运行，无法切换。",
 
   // === 版本检查 ===
   "update.available": "[有新版本] 版本 {latest} 可用（当前: {current}）。\n运行: npm install -g {package}@latest",

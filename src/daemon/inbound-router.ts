@@ -381,6 +381,15 @@ export class InboundRouter {
       return;
     }
 
+    // `/use [tag]` switches the active window to the tagged slot without
+    // sending a prompt, so a long directory name needs no typing: `/use [p1]`
+    // or the shortest bound tag wins.
+    const useTag = message.text.trim().match(/^\/use\s+\[([^[\]]{1,12})\]\s*$/i);
+    if (useTag) {
+      await this.useTaggedWindow(message, useTag[1]!);
+      return;
+    }
+
     const languageCommand = parseBridgeControlCommand(message.text);
     if (languageCommand?.type === "language") {
       await this.host.controls.handleLanguageCommand(message.senderId, languageCommand.target);
@@ -883,6 +892,68 @@ export class InboundRouter {
   }
 
   /**
+   * `/use [tag]`: make the tagged window the active one without sending a
+   * prompt. Only windows already running can be switched to; closed windows
+   * report back instead of silently opening a new one.
+   */
+  private async useTaggedWindow(
+    message: BridgeInboundMessage,
+    tag: string,
+  ): Promise<void> {
+    const pinned = this.host.pins.get(pinTagKey(this.pinKeyOf(message), tag));
+    if (!pinned) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notFound", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const slots = this.host.slotManager;
+    if (!slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance)) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notRunning", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const result = await slots.ensureSlot(pinned.adapter, {
+      cwd: pinned.cwd,
+      instance: pinned.instance,
+      openVisible: false,
+      reuseExistingVisible: true,
+    });
+    if (!result.activated) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notRunning", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const slot = slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance)!;
+    this.bindCurrentConversation(slot);
+    this.host.daemonLog(
+      `session_activated: tag=${tag} window=${this.slotWindowName(pinned)}`,
+    );
+    await this.host.queueMessage(
+      message.senderId,
+      t("daemon.use.switched", {
+        name: tag,
+        window: slots.slotSourceName(slot),
+        cwd: slot.cwd,
+      }),
+      "notice",
+      this.host.inboundConversationContext.get(),
+    );
+  }
+
+
+  /**
    * Session name for a window's auto-registered tag: the sanitized cwd
    * basename (max 12 chars, brackets stripped), suffixed with the instance
    * number when the same directory runs several windows (codex-1, codex-2)
@@ -893,7 +964,7 @@ export class InboundRouter {
     const raw =
       path
         .basename(slot.cwd)
-        .replace(/[\[\]]/g, "")
+        .replace(/\[|\]/g, "")
         .trim() || "cwd";
     const base = raw.slice(0, 12);
     const existing = this.host.pins.get(pinTagKey(key, base));
@@ -975,6 +1046,45 @@ export class InboundRouter {
       "notice",
       this.host.fallbackConversation,
     );
+  }
+
+  /**
+   * The shortest conversation tag bound to this slot in the operator's
+   * conversation (an auto session or a manual `/pin [tag]`), or null. Used to
+   * prefix the slot's replies so the operator can tell windows apart. Auto
+   * session names are returned in their original case (`[daemon-pins]`, not
+   * the upper-cased pin key).
+   */
+  tagNameForSlot(slot: DaemonSlot): string | null {
+    const keyPrefix = `${conversationPinKey(this.host.channelId, this.host.operatorId)}#`;
+    let best: string | null = null;
+    for (const pin of this.host.pins.list()) {
+      if (!pin.key.startsWith(keyPrefix)) {
+        continue;
+      }
+      const target = pin.target;
+      if (
+        target.cwd !== slot.cwd ||
+        target.adapter !== slot.adapter ||
+        target.instance !== slot.instance
+      ) {
+        continue;
+      }
+      const tag = pin.key.slice(keyPrefix.length);
+      if (tag && (best === null || tag.length < best.length)) {
+        best = tag;
+      }
+    }
+    if (!best) {
+      return null;
+    }
+    // The pin store upper-cases tags; an auto session (the cwd-derived name)
+    // should display with its original case.
+    const autoName = this.sessionNameFor(slot);
+    if (best.toUpperCase() === autoName.toUpperCase()) {
+      return autoName;
+    }
+    return best;
   }
 
   async dispatchInboundText(

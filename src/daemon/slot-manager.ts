@@ -90,6 +90,11 @@ export type SlotManagerHost = {
   ) => void;
   /** A new slot moved the bridge up a mode; tell the operator what opened up. */
   onModeUpgraded?: (mode: BridgeModeKind, slot: DaemonSlot) => void;
+  /**
+   * Shortest conversation tag currently bound to this slot (auto session or
+   * manual `/pin [tag]`), used to prefix its replies, or null.
+   */
+  sessionTagForSlot?: (slot: DaemonSlot) => string | null;
   daemonLog: (message: string) => void;
 };
 
@@ -240,11 +245,13 @@ export class SlotManager {
   }
 
   /**
-   * Prefix slot output with its source, e.g. `[codex]`, `[pi-1]`, or
-   * `[my-app/codex]`; a single bridge adds none.
+   * Prefix slot output with its source, e.g. `[codex]`, `[pi-1]`,
+   * `[my-app/codex]`, or `[passt-2]` when the slot has a conversation tag
+   * (auto session or `/pin [tag]`); a single bridge adds none.
    */
   prefix(slot: DaemonSlot, text: string): string {
-    const source = windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd));
+    const tag = this.host.sessionTagForSlot?.(slot) ?? null;
+    const source = tag ?? windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd));
     return source ? prefixSourceMessage(source, text) : text;
   }
 

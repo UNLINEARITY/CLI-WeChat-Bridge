@@ -306,6 +306,7 @@ export class BridgeDaemon {
         this.inbound.autoRegisterSession(slot, info);
       },
       onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
+      sessionTagForSlot: (slot) => this.inbound.tagNameForSlot(slot),
       daemonLog: (message) => this.daemonLog(message),
     });
     this.controls = new DaemonControlCommands({

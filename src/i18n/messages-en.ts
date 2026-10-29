@@ -151,7 +151,7 @@ export const messages: Record<string, string> = {
   "binding.listHeader": "Emoji bindings:",
 
   // === Conversation pinning ===
-  "pin.usage": "Usage:\n/pin - pin the current chat to the current window\n/pin <window> - pin to a named window (e.g. /pin codex, /pin codex-2)\n/pin [tag] - pin a tag to the current window (e.g. /pin [A])\n/pin [tag] <window> - pin a tag to a named window (e.g. /pin [A] codex-2); messages starting with [A] now always go to that window\n/unpin - unpin the current chat\n/unpin [tag] - unpin a tag\n/pins - list pinned chats and tags",
+  "pin.usage": "Usage:\n/pin - pin the current chat to the current window\n/pin <window> - pin to a named window (e.g. /pin codex, /pin codex-2)\n/pin [tag] - pin a tag to the current window (e.g. /pin [A])\n/pin [tag] <window> - pin a tag to a named window (e.g. /pin [A] codex-2); messages starting with [A] now always go to that window\n/use [tag] - switch the active window to the tagged one (no prompt, e.g. /use [A])\n/unpin - unpin the current chat\n/unpin [tag] - unpin a tag\n/pins - list pinned chats and tags",
   "pin.invalidWindow": "Unknown window name {window}. Use names like codex, codex-2, claude, pi.",
   "pin.bound": "Pinned this chat to window {window}. Messages from this chat now always go to that window.",
   "pin.unbound": "Unpinned this chat from its window.",
@@ -169,6 +169,9 @@ export const messages: Record<string, string> = {
   "session.registered": "Auto session [{name}] registered → {window} ({cwd}). Send [name] plus content in this chat to drive that window.",
   "session.unregistered": "Auto session [{name}] unregistered (window closed).",
   "session.status": "[{name}] → {window} ({cwd}). Window online; send [name] plus content to drive it.",
+  "daemon.use.switched": "Switched to [{name}] → {window} ({cwd}). Replies from this window carry the [{name}] prefix; send [name] plus content to drive it.",
+  "daemon.use.notFound": "No window is bound to tag [{name}]. Pin one with /pin [name] codex-N, or open a window in that directory to register it automatically.",
+  "daemon.use.notRunning": "[{name}] is bound to a window that is not running; cannot switch.",
 
   // === Version checker ===
   "update.available": "[Update Available] Version {latest} is available (current: {current}).\nRun: npm install -g {package}@latest",
