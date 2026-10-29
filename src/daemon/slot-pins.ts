@@ -42,6 +42,27 @@ export function conversationPinKey(channelId: string, conversationId: string): s
   return `${channelId}:${conversationId}`;
 }
 
+/**
+ * Key of a conversation-scoped tag pin. Tags are matched case-insensitively
+ * and stored normalized to upper case, so `[a]` and `[A]` pin the same slot.
+ */
+export function pinTagKey(key: string, tag: string): string {
+  return `${key}#${tag.toUpperCase()}`;
+}
+
+/**
+ * Extract a leading `[tag] ` prefix from an inbound text, e.g. `[A] deploy
+ * now` → tag `A`, remainder `deploy now`. Only matches when real content
+ * follows the tag, so a bare `[A]` is left untouched.
+ */
+export function parseMessageTag(text: string): { tag: string; remainder: string } | null {
+  const match = text.match(/^\s*\[([^[\]]{1,12})\]\s*([\s\S]+)$/);
+  if (!match) {
+    return null;
+  }
+  return { tag: match[1]!, remainder: match[2]! };
+}
+
 /** In-memory pins; used by tests. */
 export function createMemorySlotPins(): SlotPins {
   const map = new Map<string, ConversationPinTarget>();
@@ -127,23 +148,35 @@ export const fileSlotPins: SlotPins = createFileSlotPins(PIN_BINDINGS_FILE);
 export type PinCommand =
   | { type: "pin" }
   | { type: "pin-to"; window: string }
+  | { type: "pin-tag"; tag: string; window?: string }
   | { type: "unpin" }
+  | { type: "unpin-tag"; tag: string }
   | { type: "list" };
 
 export function parsePinCommand(text: string): PinCommand | null {
   const trimmed = text.trim();
-  const lower = trimmed.toLowerCase();
-  if (lower === "/pin") {
+  if (trimmed.toLowerCase() === "/pin") {
     return { type: "pin" };
   }
-  const pinTo = lower.match(/^\/pin\s+(.+)$/);
+  const pinTag = trimmed.match(/^\/pin\s+\[([^[\]]{1,12})\]\s*(.*)$/i);
+  if (pinTag) {
+    const window = pinTag[2]?.trim();
+    return window
+      ? { type: "pin-tag", tag: pinTag[1]!, window }
+      : { type: "pin-tag", tag: pinTag[1]! };
+  }
+  const pinTo = trimmed.match(/^\/pin\s+(.+)$/);
   if (pinTo) {
     return { type: "pin-to", window: pinTo[1]!.trim() };
   }
-  if (lower === "/unpin") {
+  if (trimmed.toLowerCase() === "/unpin") {
     return { type: "unpin" };
   }
-  if (lower === "/pins") {
+  const unpinTag = trimmed.match(/^\/unpin\s+\[([^[\]]{1,12})\]\s*$/i);
+  if (unpinTag) {
+    return { type: "unpin-tag", tag: unpinTag[1]! };
+  }
+  if (trimmed.toLowerCase() === "/pins") {
     return { type: "list" };
   }
   return null;
@@ -181,6 +214,11 @@ export function formatPinsListMessage(
   }
   const lines = pins.map((pin) => {
     const separator = pin.key.indexOf(":");
+    const tagIndex = pin.key.indexOf("#", separator + 1);
+    if (tagIndex >= 0) {
+      const tag = pin.key.slice(tagIndex + 1);
+      return t("pin.tagEntry", { tag, window: windowName(pin.target) });
+    }
     const conversationId = separator >= 0 ? pin.key.slice(separator + 1) : pin.key;
     return t("pin.entry", {
       conversation: conversationId,

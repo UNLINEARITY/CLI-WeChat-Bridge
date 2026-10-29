@@ -33,7 +33,7 @@ import type { TurnDispatchResult } from "../core/turn-coordinator.ts";
 import type { TypingTracker } from "./typing-tracker.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
-import type { DaemonForwardInputResult, DaemonRequest } from "./daemon-link.ts";
+import type { DaemonForwardInputResult, DaemonRequest, DaemonAdapterKind } from "./daemon-link.ts";
 import {
   parseDaemonSwitchCommand,
   parseDaemonSwitchDirective,
@@ -52,8 +52,10 @@ import { SlotManager } from "./slot-manager.ts";
 import {
   conversationPinKey,
   formatPinsListMessage,
+  parseMessageTag,
   parsePinCommand,
   parsePinWindowName,
+  pinTagKey,
   type ConversationPinTarget,
   type PinCommand,
   type SlotPins,
@@ -487,9 +489,9 @@ export class InboundRouter {
     // pinned chat must not steal the operator's current window.
     const pinnedTarget = this.resolvePinnedTarget(message);
     if (pinnedTarget) {
-      const pinResult = await this.host.slotManager.ensureSlot(pinnedTarget.adapter, {
-        cwd: pinnedTarget.cwd,
-        instance: pinnedTarget.instance,
+      const pinResult = await this.host.slotManager.ensureSlot(pinnedTarget.target.adapter, {
+        cwd: pinnedTarget.target.cwd,
+        instance: pinnedTarget.target.instance,
         openVisible: true,
         reuseExistingVisible: true,
         activate: false,
@@ -497,16 +499,22 @@ export class InboundRouter {
       if (!pinResult.activated) {
         await this.host.queueMessage(
           message.senderId,
-          this.describePinSwitchFailure(pinnedTarget, pinResult),
+          this.describePinSwitchFailure(pinnedTarget.target, pinResult),
         );
         return;
       }
       const pinnedSlot = this.host.slotManager.getSlot(
-        pinnedTarget.cwd,
-        pinnedTarget.adapter,
-        pinnedTarget.instance,
+        pinnedTarget.target.cwd,
+        pinnedTarget.target.adapter,
+        pinnedTarget.target.instance,
       )!;
       this.bindCurrentConversation(pinnedSlot);
+      if (pinnedTarget.stripTag) {
+        // A tagged message is routed by its leading [tag] and the tag itself
+        // is removed before the prompt reaches the CLI.
+        const tagMatch = parseMessageTag(message.text)!;
+        message = { ...message, text: tagMatch.remainder };
+      }
       const pinnedCommand = parseControlCommand(message.text, {
         adapter: pinnedSlot.adapter,
         hasPendingConfirmation: pinnedSlot.pendingConfirmations.length > 0,
@@ -660,9 +668,19 @@ export class InboundRouter {
       : conversationPinKey(this.host.channelId, message.sessionId || message.senderId);
   }
 
-  /** The window this conversation is pinned to, if any. */
-  private resolvePinnedTarget(message: BridgeInboundMessage): ConversationPinTarget | undefined {
-    return this.host.pins.get(this.pinKeyOf(message));
+  /** The window this conversation (or its leading tag) is pinned to, if any. */
+  private resolvePinnedTarget(
+    message: BridgeInboundMessage,
+  ): { target: ConversationPinTarget; stripTag?: boolean } | undefined {
+    const tagMatch = parseMessageTag(message.text);
+    if (tagMatch) {
+      const tagged = this.host.pins.get(pinTagKey(this.pinKeyOf(message), tagMatch.tag));
+      if (tagged) {
+        return { target: tagged, stripTag: true };
+      }
+    }
+    const pinned = this.host.pins.get(this.pinKeyOf(message));
+    return pinned ? { target: pinned } : undefined;
   }
 
   private slotWindowName(target: ConversationPinTarget): string {
@@ -692,6 +710,46 @@ export class InboundRouter {
     return t("pin.pinFailed", { window: this.slotWindowName(target), detail });
   }
 
+  /**
+   * Ensure the window named by `/pin <window>` / `/pin [tag] <window>`.
+   * Reuses an existing window without touching the mode; opens a missing
+   * window through bridge admission (mode upgrades with the window), falling
+   * back to exact-instance creation when the requested number is a gap.
+   */
+  private async ensurePinWindow(
+    adapter: DaemonAdapterKind,
+    cwd: string,
+    instance: number,
+  ): Promise<EnsureSlotResult> {
+    const existing = this.host.slotManager.getSlot(cwd, adapter, instance);
+    if (existing) {
+      return this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        instance,
+        openVisible: true,
+        reuseExistingVisible: true,
+      });
+    }
+    const admission = admitWindow(
+      this.host.slotManager.mode,
+      this.host.slotManager.windows(),
+      { cwd, adapter },
+    );
+    return admission.admitted && admission.instance === instance
+      ? this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        newInstance: true,
+        openVisible: true,
+        reuseExistingVisible: true,
+      })
+      : this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        instance,
+        openVisible: true,
+        reuseExistingVisible: true,
+      });
+  }
+
   private async handlePinCommand(
     message: BridgeInboundMessage,
     command: PinCommand,
@@ -710,55 +768,54 @@ export class InboundRouter {
       await queue(removed ? t("pin.unbound") : t("pin.notPinned"));
       return;
     }
+    if (command.type === "unpin-tag") {
+      const key = pinTagKey(this.pinKeyOf(message), command.tag);
+      const removed = this.host.pins.remove(key);
+      await queue(
+        removed
+          ? t("pin.tagUnbound", { tag: command.tag })
+          : t("pin.tagNotPinned", { tag: command.tag }),
+      );
+      return;
+    }
+    const cwd = this.host.slotManager.activeCwd;
     if (command.type === "pin-to") {
       const parsed = parsePinWindowName(command.window);
       if (!parsed) {
         await queue(t("pin.invalidWindow", { window: command.window }));
         return;
       }
-      const cwd = this.host.slotManager.activeCwd;
-      const existing = this.host.slotManager.getSlot(cwd, parsed.adapter, parsed.instance);
-      let ensure: EnsureSlotResult;
-      if (existing) {
-        // Window already exists: reuse it without touching the bridge mode.
-        ensure = await this.host.slotManager.ensureSlot(parsed.adapter, {
-          cwd,
-          instance: parsed.instance,
-          openVisible: true,
-          reuseExistingVisible: true,
-        });
-      } else {
-        // The window does not exist yet. Ask admission what instance a new
-        // window would get: when it matches the requested number, take the
-        // standard new-window path so the bridge mode upgrades with the window
-        // (e.g. /pin codex-2 after a single codex window upgrades to
-        // multi_instance and /1, /2 become available). Only when the requested
-        // number is a gap in the numbering (say /pin codex-5 with instance 2
-        // free) fall back to creating that exact instance directly.
-        const admission = admitWindow(
-          this.host.slotManager.mode,
-          this.host.slotManager.windows(),
-          { cwd, adapter: parsed.adapter },
-        );
-        ensure = admission.admitted && admission.instance === parsed.instance
-          ? await this.host.slotManager.ensureSlot(parsed.adapter, {
-            cwd,
-            newInstance: true,
-            openVisible: true,
-            reuseExistingVisible: true,
-          })
-          : await this.host.slotManager.ensureSlot(parsed.adapter, {
-            cwd,
-            instance: parsed.instance,
-            openVisible: true,
-            reuseExistingVisible: true,
-          });
-      }
+      const ensure = await this.ensurePinWindow(parsed.adapter, cwd, parsed.instance);
       if (!ensure.activated) {
         await queue(this.describePinSwitchFailure({ cwd, ...parsed }, ensure));
         return;
       }
       await this.pinConversation(message, { cwd, ...parsed });
+      return;
+    }
+    if (command.type === "pin-tag") {
+      let target: ConversationPinTarget;
+      if (command.window) {
+        const parsed = parsePinWindowName(command.window);
+        if (!parsed) {
+          await queue(t("pin.invalidWindow", { window: command.window }));
+          return;
+        }
+        const ensure = await this.ensurePinWindow(parsed.adapter, cwd, parsed.instance);
+        if (!ensure.activated) {
+          await queue(this.describePinSwitchFailure({ cwd, ...parsed }, ensure));
+          return;
+        }
+        target = { cwd, ...parsed };
+      } else {
+        const slot = this.host.slotManager.getActiveSlot();
+        if (!slot) {
+          await queue(t("pin.noActiveSlot"));
+          return;
+        }
+        target = { cwd: slot.cwd, adapter: slot.adapter, instance: slot.instance };
+      }
+      await this.pinConversation(message, target, command.tag);
       return;
     }
     const slot = this.host.slotManager.getActiveSlot();
@@ -776,15 +833,18 @@ export class InboundRouter {
   private async pinConversation(
     message: BridgeInboundMessage,
     target: ConversationPinTarget,
+    tag?: string,
   ): Promise<void> {
-    const key = this.pinKeyOf(message);
+    const key = tag ? pinTagKey(this.pinKeyOf(message), tag) : this.pinKeyOf(message);
     this.host.pins.set(key, target);
     this.host.daemonLog(
       `conversation_pinned: key=${key} window=${this.slotWindowName(target)}`,
     );
     await this.host.queueMessage(
       message.senderId,
-      t("pin.bound", { window: this.slotWindowName(target) }),
+      tag
+        ? t("pin.tagBound", { tag, window: this.slotWindowName(target) })
+        : t("pin.bound", { window: this.slotWindowName(target) }),
       "notice",
       this.host.inboundConversationContext.get(),
     );

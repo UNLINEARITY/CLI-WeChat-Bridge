@@ -30,8 +30,10 @@ import {
   createFileSlotPins,
   createMemorySlotPins,
   formatPinsListMessage,
+  parseMessageTag,
   parsePinCommand,
   parsePinWindowName,
+  pinTagKey,
   type ConversationPinTarget,
 } from "../../src/daemon/slot-pins.ts";
 
@@ -232,6 +234,55 @@ describe("slot pins", () => {
     expect(parsePinCommand("/pins")).toEqual({ type: "list" });
     expect(parsePinCommand("/pins now")).toBeNull();
     expect(parsePinCommand("hello")).toBeNull();
+  });
+
+  test("parsePinCommand accepts tag pins with and without a window", () => {
+    expect(parsePinCommand("/pin [A]")).toEqual({ type: "pin-tag", tag: "A" });
+    expect(parsePinCommand("/pin [A] codex-2")).toEqual({
+      type: "pin-tag",
+      tag: "A",
+      window: "codex-2",
+    });
+    expect(parsePinCommand("/pin [work] claude")).toEqual({
+      type: "pin-tag",
+      tag: "work",
+      window: "claude",
+    });
+    expect(parsePinCommand("/pin [任务]")).toEqual({ type: "pin-tag", tag: "任务" });
+    expect(parsePinCommand("/unpin [A]")).toEqual({ type: "unpin-tag", tag: "A" });
+    expect(parsePinCommand("/unpin [A] extra")).toBeNull();
+    expect(parsePinCommand("/pin [a] [b]")).toEqual({
+      type: "pin-tag",
+      tag: "a",
+      window: "[b]",
+    });
+    // Over-length tags fall back to a window-name pin, which the window
+    // parser then rejects with pin.invalidWindow.
+    expect(parsePinCommand("/pin [abcdefghijklmnop] codex")).toEqual({
+      type: "pin-to",
+      window: "[abcdefghijklmnop] codex",
+    });
+  });
+
+  test("parseMessageTag extracts a leading tag and keeps the remainder", () => {
+    expect(parseMessageTag("[A] deploy now")).toEqual({ tag: "A", remainder: "deploy now" });
+    expect(parseMessageTag("[A]deploy now")).toEqual({ tag: "A", remainder: "deploy now" });
+    expect(parseMessageTag("  [task-1]  run tests  ")).toEqual({
+      tag: "task-1",
+      remainder: "run tests  ",
+    });
+    expect(parseMessageTag("[工作] 写周报")).toEqual({ tag: "工作", remainder: "写周报" });
+    // A bare tag with no content, nested brackets and missing brackets stay plain.
+    expect(parseMessageTag("[A]")).toBeNull();
+    expect(parseMessageTag("[[A]] text")).toBeNull();
+    expect(parseMessageTag("A] text")).toBeNull();
+    expect(parseMessageTag("text [A] tail")).toBeNull();
+  });
+
+  test("pinTagKey normalizes tags to upper case", () => {
+    expect(pinTagKey("wechat:conv-a", "A")).toBe("wechat:conv-a#A");
+    expect(pinTagKey("wechat:conv-a", "a")).toBe("wechat:conv-a#A");
+    expect(pinTagKey("wechat:conv-a", "work")).toBe("wechat:conv-a#WORK");
   });
 
   test("formatPinsListMessage lists pins with window names", () => {
@@ -507,5 +558,89 @@ describe("daemon conversation pinning", () => {
     await send(daemon, "pinned-msg");
     expect(env.runtime("codex", 3).inputs).toContain("pinned-msg");
     expect(env.runtime("codex", 1).inputs).not.toContain("pinned-msg");
+  });
+
+  test("/pin [tag] pins the current window and routes tagged messages to it", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin [A]");
+    expect(env.deps.slotPins!.get(pinTagKey("wechat:conv-a", "A"))).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 1,
+    });
+
+    // The tag prefix is stripped before the prompt reaches the CLI.
+    await send(daemon, "[A] hello task");
+    expect(env.runtime("codex", 1).inputs).toContain("hello task");
+    expect(env.runtime("codex", 1).inputs).not.toContain("[A]");
+
+    // A tagged pin matches case-insensitively.
+    await send(daemon, "[a] lowercase tag");
+    expect(env.runtime("codex", 1).inputs).toContain("lowercase tag");
+  });
+
+  test("/pin [tag] <window> opens the window, upgrades the mode and routes there", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin [A] codex-2");
+    expect(env.deps.slotPins!.get(pinTagKey("wechat:conv-a", "A"))).toEqual({
+      cwd: TEST_CWD,
+      adapter: "codex",
+      instance: 2,
+    });
+
+    // Mode upgraded with the new window: /1 is available again.
+    await send(daemon, "/1");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).not.toContain("not available in this mode");
+
+    // Tagged messages go to codex-2 even while codex-1 is active.
+    await send(daemon, "[A] tagged task");
+    expect(env.runtime("codex", 2).inputs).toContain("tagged task");
+    expect(env.runtime("codex", 1).inputs).not.toContain("tagged task");
+  });
+
+  test("a tag pin wins over the conversation pin; /unpin [tag] falls back to it", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex"); // codex-1 active, mode single
+    await send(daemon, "/pin"); // conversation pin → codex-1
+    await send(daemon, "/open"); // codex-2 active, mode multi_instance
+    await send(daemon, "/pin [A] codex-2"); // tag pin → codex-2
+    await send(daemon, "/1"); // switch back to codex-1
+
+    await send(daemon, "[A] tagged msg");
+    expect(env.runtime("codex", 2).inputs).toContain("tagged msg");
+    expect(env.runtime("codex", 1).inputs).not.toContain("tagged msg");
+
+    // Untagged messages follow the conversation pin (codex-1).
+    await send(daemon, "plain msg");
+    expect(env.runtime("codex", 1).inputs).toContain("plain msg");
+    expect(env.runtime("codex", 2).inputs).not.toContain("plain msg");
+
+    // Unpinning the tag falls back to the conversation pin; the tag prefix
+    // is no longer stripped because nothing is bound to it.
+    await send(daemon, "/unpin [A]");
+    await send(daemon, "[A] after unpin");
+    expect(env.runtime("codex", 1).inputs).toContain("[A] after unpin");
+    expect(env.runtime("codex", 2).inputs).not.toContain("after unpin");
+  });
+
+  test("/pins lists tag pins as [tag] → window", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex");
+    await send(daemon, "/pin [A] codex-2");
+    await send(daemon, "/pins");
+    const reply = env.wechat.sent.at(-1)?.text ?? "";
+    expect(reply).toContain("[A]");
+    expect(reply).toContain("codex-2");
   });
 });

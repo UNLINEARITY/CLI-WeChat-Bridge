@@ -151,7 +151,7 @@ export const messages: Record<string, string> = {
   "binding.listHeader": "Emoji bindings:",
 
   // === Conversation pinning ===
-  "pin.usage": "Usage:\n/pin - pin the current chat to the current window\n/pin <window> - pin to a named window (e.g. /pin codex, /pin codex-2)\n/unpin - unpin the current chat\n/pins - list pinned chats",
+  "pin.usage": "Usage:\n/pin - pin the current chat to the current window\n/pin <window> - pin to a named window (e.g. /pin codex, /pin codex-2)\n/pin [tag] - pin a tag to the current window (e.g. /pin [A])\n/pin [tag] <window> - pin a tag to a named window (e.g. /pin [A] codex-2); messages starting with [A] now always go to that window\n/unpin - unpin the current chat\n/unpin [tag] - unpin a tag\n/pins - list pinned chats and tags",
   "pin.invalidWindow": "Unknown window name {window}. Use names like codex, codex-2, claude, pi.",
   "pin.bound": "Pinned this chat to window {window}. Messages from this chat now always go to that window.",
   "pin.unbound": "Unpinned this chat from its window.",
@@ -160,6 +160,10 @@ export const messages: Record<string, string> = {
   "pin.listEmpty": "No chats are pinned.",
   "pin.listHeader": "Pinned chats:",
   "pin.entry": "{conversation} → {window}",
+  "pin.tagEntry": "[{tag}] → {window}",
+  "pin.tagBound": "Pinned tag [{tag}] to window {window}. Messages starting with [{tag}] now always go to that window.",
+  "pin.tagUnbound": "Unpinned tag [{tag}] from its window.",
+  "pin.tagNotPinned": "Tag [{tag}] is not pinned to any window.",
   "pin.pinFailed": "Could not switch to pinned window {window}: {detail}",
 
   // === Version checker ===

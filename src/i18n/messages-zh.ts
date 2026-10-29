@@ -151,7 +151,7 @@ export const messages: Record<string, string> = {
   "binding.listHeader": "Emoji 绑定列表:",
 
   // === 聊天窗口固定 ===
-  "pin.usage": "用法:\n/pin - 把当前聊天固定到当前窗口\n/pin <窗口> - 固定到指定窗口（如 /pin codex、/pin codex-2）\n/unpin - 取消当前聊天的窗口固定\n/pins - 查看已固定的聊天",
+  "pin.usage": "用法:\n/pin - 把当前聊天固定到当前窗口\n/pin <窗口> - 固定到指定窗口（如 /pin codex、/pin codex-2）\n/pin [标签] - 把标签固定到当前窗口（如 /pin [A]）\n/pin [标签] <窗口> - 把标签固定到指定窗口（如 /pin [A] codex-2），之后发 [A] 开头的消息自动进入该窗口\n/unpin - 取消当前聊天的窗口固定\n/unpin [标签] - 取消标签的窗口固定\n/pins - 查看已固定的聊天和标签",
   "pin.invalidWindow": "无法识别窗口名称 {window}。可用名称如 codex、codex-2、claude、pi。",
   "pin.bound": "已把当前聊天固定到窗口 {window}。之后该聊天发来的消息都会进入这个窗口。",
   "pin.unbound": "已取消当前聊天的窗口固定。",
@@ -160,6 +160,10 @@ export const messages: Record<string, string> = {
   "pin.listEmpty": "还没有固定任何聊天。",
   "pin.listHeader": "窗口固定列表:",
   "pin.entry": "{conversation} → {window}",
+  "pin.tagEntry": "[{tag}] → {window}",
+  "pin.tagBound": "已把标签 [{tag}] 固定到窗口 {window}。之后发 [{tag}] 开头的消息都会进入这个窗口。",
+  "pin.tagUnbound": "已取消标签 [{tag}] 的窗口固定。",
+  "pin.tagNotPinned": "标签 [{tag}] 没有固定的窗口。",
   "pin.pinFailed": "无法切换到固定窗口 {window}：{detail}",
 
   // === 版本检查 ===
