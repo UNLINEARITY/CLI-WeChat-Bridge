@@ -1865,6 +1865,12 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       instance: this.options.slotInstance,
     });
     const adopt = resolveAdoptableAppServer(existing, (pid) => this.isProcessAlive(pid));
+    appendBridgeLog(
+      BRIDGE_LOG_FILE,
+      `[codex-adopt] cwd=${this.options.cwd} instance=${this.options.slotInstance ?? 1} ` +
+        `endpoint=${existing ? JSON.stringify({ port: existing.port, companionPid: existing.companionPid }) : "null"} ` +
+        `companionAlive=${existing?.companionPid ? this.isProcessAlive(existing.companionPid) : "n/a"} adopt=${adopt ? "yes" : "no"}\n`,
+    );
     if (adopt) {
       this.appServerPort = adopt.port;
       this.appServerAuthToken = adopt.token;
