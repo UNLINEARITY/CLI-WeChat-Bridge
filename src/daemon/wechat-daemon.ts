@@ -6,6 +6,7 @@
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
 import { fileSlotSessionStore, type SlotSessionStore } from "./slot-session-store.ts";
+import { fileSlotPins, type SlotPins } from "./slot-pins.ts";
 import { TypingTracker } from "./typing-tracker.ts";
 import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
 import path from "node:path";
@@ -128,6 +129,8 @@ export type BridgeDaemonDeps = {
   fatalNoticeGraceMs?: number;
   /** Where slots save their sessions; tests keep them in memory. */
   slotSessions?: SlotSessionStore;
+  /** Conversation-to-window pins; tests keep them in memory. */
+  slotPins?: SlotPins;
   /** Ends the process once an ephemeral daemon has shut down. */
   exitProcess?: (code: number) => void;
 };
@@ -190,6 +193,13 @@ export class BridgeDaemon {
     cwd: string;
     profile?: string;
     deps?: BridgeDaemonDeps;
+    /**
+     * How often a still-busy window pushes a short progress heartbeat to the
+     * operator (ms). Defaults to 10 minutes; only active once the window has
+     * been busy for `progressHeartbeatMinBusyMs` (default 5 minutes).
+     */
+    progressHeartbeatIntervalMs?: number;
+    progressHeartbeatMinBusyMs?: number;
   } & (
     | { setup: ChannelSetup }
     | {
@@ -295,8 +305,20 @@ export class BridgeDaemon {
       onSlotEvent: (slot, event) => handleSlotEvent(this.slotEventHost, slot, event),
       isEphemeral: () => this.ephemeral,
       sessions: this.deps.slotSessions ?? fileSlotSessionStore,
-      onSlotRemoved: () => this.exitIfIdle(),
+      onSlotRemoved: (slot) => {
+        this.exitIfIdle();
+        this.inbound.autoUnregisterSession(slot);
+      },
+      onSlotCreated: (slot, info) => {
+        this.inbound.autoRegisterSession(slot, info);
+      },
       onModeUpgraded: (mode, slot) => this.announceModeUpgrade(mode, slot),
+      sessionTagForSlot: (slot) => this.inbound.tagNameForSlot(slot),
+      progressHeartbeatIntervalMs: params.progressHeartbeatIntervalMs ??
+        (Number(process.env.CLI_BRIDGE_PROGRESS_HEARTBEAT_MS) > 0
+          ? Number(process.env.CLI_BRIDGE_PROGRESS_HEARTBEAT_MS)
+          : undefined),
+      progressHeartbeatMinBusyMs: params.progressHeartbeatMinBusyMs,
       daemonLog: (message) => this.daemonLog(message),
     });
     this.controls = new DaemonControlCommands({
@@ -321,9 +343,11 @@ export class BridgeDaemon {
       inboundConversationContext: this.inboundConversationContext,
       slotManager: this.slotManager,
       controls: this.controls,
+      pins: this.deps.slotPins ?? fileSlotPins,
       queueMessage: (senderId, text, context, targetOverride) =>
         this.queueMessage(senderId, text, context, targetOverride),
       shutdown: () => this.shutdown(),
+      isShuttingDown: () => this.shutdownPromise !== null,
       daemonLog: (message) => this.daemonLog(message),
     });
   }
@@ -646,13 +670,22 @@ export class BridgeDaemon {
     }
     await this.outbound.waitForForwardTasks();
     await this.outbound.drainSendChains();
+    // A resident daemon shutting down detaches its codex windows: the app-server
+    // keeps running the task and the endpoint stays on disk so the next daemon
+    // adopts it on startup. Ephemeral daemons (which follow window lifecycles)
+    // still tear everything down.
+    const detachSlots = !this.ephemeral;
     for (const slot of this.slotManager.clear()) {
       try {
+        const runtime = slot.runtime as { setDetachOnDispose?: (value: boolean) => void };
+        runtime.setDetachOnDispose?.(detachSlots);
         await slot.runtime.dispose();
       } catch {
         // Best effort shutdown.
       }
-      slot.controller.clearLocalClientEndpoint();
+      if (!detachSlots) {
+        slot.controller.clearLocalClientEndpoint();
+      }
     }
 
     await this.ipcServer.close();

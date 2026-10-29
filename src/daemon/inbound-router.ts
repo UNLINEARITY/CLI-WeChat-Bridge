@@ -4,11 +4,13 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import path from "node:path";
 import { t } from "../i18n/index.ts";
 import { parseBridgeControlCommand } from "../core/bridge-control.ts";
 import { formatPendingApprovalReminder } from "../bridge/message-formatting.ts";
 import { formatPendingUserInputReminder } from "../bridge/user-input-messages.ts";
 import { parseControlCommand, truncatePreview } from "../bridge/bridge-utils.ts";
+import { formatDuration } from "../core/text-utils.ts";
 import {
   formatUserFacingInboundError,
   type ChannelSendKind,
@@ -33,7 +35,7 @@ import type { TurnDispatchResult } from "../core/turn-coordinator.ts";
 import type { TypingTracker } from "./typing-tracker.ts";
 import type { ChannelDriver } from "../core/channel-driver.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
-import type { DaemonForwardInputResult, DaemonRequest } from "./daemon-link.ts";
+import type { DaemonForwardInputResult, DaemonRequest, DaemonAdapterKind } from "./daemon-link.ts";
 import {
   parseDaemonSwitchCommand,
   parseDaemonSwitchDirective,
@@ -49,7 +51,18 @@ import {
 } from "./daemon-slot.ts";
 import { DaemonControlCommands } from "./control-commands.ts";
 import { SlotManager } from "./slot-manager.ts";
-import { modeAllowsCommand } from "./bridge-mode.ts";
+import {
+  conversationPinKey,
+  formatPinsListMessage,
+  parseMessageTag,
+  parsePinCommand,
+  parsePinWindowName,
+  pinTagKey,
+  type ConversationPinTarget,
+  type PinCommand,
+  type SlotPins,
+} from "./slot-pins.ts";
+import { admitWindow, modeAllowsCommand } from "./bridge-mode.ts";
 
 const MAX_DAEMON_DEFERRED_INPUTS = 32;
 
@@ -63,6 +76,8 @@ export type InboundRouterHost = {
   inboundConversationContext: InboundConversationContext;
   slotManager: SlotManager;
   controls: DaemonControlCommands;
+  /** Conversation-to-window pins; pinned chats always route to their window. */
+  pins: SlotPins;
   queueMessage: (
     senderId: string,
     text: string,
@@ -70,6 +85,8 @@ export type InboundRouterHost = {
     targetOverride?: ChannelConversationRef,
   ) => Promise<boolean>;
   shutdown: () => Promise<void>;
+  /** True once daemon shutdown started; auto-session notices are suppressed. */
+  isShuttingDown: () => boolean;
   daemonLog: (message: string) => void;
 };
 
@@ -359,6 +376,21 @@ export class InboundRouter {
 
     this.logInboundCommand(message.text);
 
+    const pinCommand = parsePinCommand(message.text);
+    if (pinCommand) {
+      await this.handlePinCommand(message, pinCommand);
+      return;
+    }
+
+    // `/use [tag]` switches the active window to the tagged slot without
+    // sending a prompt, so a long directory name needs no typing: `/use [p1]`
+    // or the shortest bound tag wins.
+    const useTag = message.text.trim().match(/^\/use\s+\[([^[\]]{1,20})\]\s*$/i);
+    if (useTag) {
+      await this.useTaggedWindow(message, useTag[1]!);
+      return;
+    }
+
     const languageCommand = parseBridgeControlCommand(message.text);
     if (languageCommand?.type === "language") {
       await this.host.controls.handleLanguageCommand(message.senderId, languageCommand.target);
@@ -463,6 +495,84 @@ export class InboundRouter {
       return;
     }
 
+    // A bare `[name]` (no content) on a bound session reports the window
+    // instead of routing an empty prompt.
+    const bareTag = message.text.trim().match(/^\[([^[\]]{1,20})\]$/);
+    if (bareTag) {
+      const tagPinned = this.host.pins.get(
+        pinTagKey(this.pinKeyOf(message), bareTag[1]!),
+      );
+      if (tagPinned) {
+        const boundSlot = this.host.slotManager.getSlot(
+          tagPinned.cwd,
+          tagPinned.adapter,
+          tagPinned.instance,
+        );
+        if (boundSlot) {
+          const state = boundSlot.runtime.getState();
+          const { runningForMs, recentText } = this.host.slotManager.slotProgressSummary(boundSlot);
+          await this.host.queueMessage(
+            message.senderId,
+            t("session.status", {
+              name: bareTag[1]!,
+              window: this.slotWindowName(tagPinned),
+              cwd: tagPinned.cwd,
+              statusLabel: t(`daemon.state.${state.status}`),
+              runningFor: state.status === "busy"
+                ? t("daemon.runningFor", { duration: formatDuration(runningForMs) })
+                : "",
+              recentText: recentText || t("daemon.heartbeat.noRecent"),
+            }),
+            "notice",
+            this.host.inboundConversationContext.get(),
+          );
+          return;
+        }
+      }
+    }
+
+    // A conversation pinned to a fixed window always routes there, even when
+    // another window is active. Explicit switch commands (/open, /N, /codex,
+    // /daemon-stop, /bind, /cd) were handled above and never reach this point.
+    // The pinned window is opened if needed but never becomes active: routing a
+    // pinned chat must not steal the operator's current window.
+    const pinnedTarget = this.resolvePinnedTarget(message);
+    if (pinnedTarget) {
+      const pinResult = await this.host.slotManager.ensureSlot(pinnedTarget.target.adapter, {
+        cwd: pinnedTarget.target.cwd,
+        instance: pinnedTarget.target.instance,
+        openVisible: true,
+        reuseExistingVisible: true,
+        activate: false,
+      });
+      if (!pinResult.activated) {
+        await this.host.queueMessage(
+          message.senderId,
+          this.describePinSwitchFailure(pinnedTarget.target, pinResult),
+        );
+        return;
+      }
+      const pinnedSlot = this.host.slotManager.getSlot(
+        pinnedTarget.target.cwd,
+        pinnedTarget.target.adapter,
+        pinnedTarget.target.instance,
+      )!;
+      this.bindCurrentConversation(pinnedSlot);
+      if (pinnedTarget.stripTag) {
+        // A tagged message is routed by its leading [tag] and the tag itself
+        // is removed before the prompt reaches the CLI.
+        const tagMatch = parseMessageTag(message.text)!;
+        message = { ...message, text: tagMatch.remainder };
+      }
+      const pinnedCommand = parseControlCommand(message.text, {
+        adapter: pinnedSlot.adapter,
+        hasPendingConfirmation: pinnedSlot.pendingConfirmations.length > 0,
+        hasPendingUserInput: Boolean(pinnedSlot.pendingUserInput),
+      });
+      await this.routeToSlot(message, pinnedSlot, pinnedCommand);
+      return;
+    }
+
     let slot = this.host.slotManager.getActiveSlot();
     if (!slot) {
       // Approvals and answers also work without a current terminal: the
@@ -477,84 +587,8 @@ export class InboundRouter {
     }
     this.bindCurrentConversation(slot);
 
-    const routeCurrentMessage = async (
-      currentSlot: DaemonSlot,
-      command: ReturnType<typeof parseControlCommand>,
-    ): Promise<void> => {
-      const previousTask = currentSlot.turns.activeTask;
-      await routeBridgeMessage({
-        message: toChannelInboundMessage(message),
-        authorized: true,
-        command,
-        adapterState: currentSlot.runtime.getState(),
-        hasPendingApproval: currentSlot.pendingConfirmations.length > 0,
-        hasPendingUserInput: Boolean(currentSlot.pendingUserInput),
-        shouldDefer: shouldDeferCodexInboundMessage({
-          adapter: currentSlot.adapter,
-          status: currentSlot.runtime.getState().status,
-          activeTurnOrigin: currentSlot.runtime.getState().activeTurnOrigin,
-          hasPendingConfirmation: currentSlot.pendingConfirmations.length > 0,
-          hasSystemCommand: Boolean(command),
-        }),
-        onUnauthorized: async () => undefined,
-        handleCommand: async (nextCommand) => {
-          await this.host.controls.handleSystemCommand(message, currentSlot, nextCommand);
-          return true;
-        },
-        remindPendingApproval: async () => {
-          await this.host.queueMessage(
-            message.senderId,
-            this.host.slotManager.prefix(
-              currentSlot,
-              formatPendingApprovalReminder(
-                currentSlot.pendingConfirmations[0]!,
-                currentSlot.runtime.getState(),
-              ),
-            ),
-          );
-          currentSlot.displayedApprovalRequestId = currentSlot.pendingConfirmations[0]?.requestId;
-        },
-        remindPendingUserInput: async () => {
-          await this.host.queueMessage(
-            message.senderId,
-            this.host.slotManager.prefix(
-              currentSlot,
-              currentSlot.pendingUserInput
-                ? formatPendingUserInputReminder(currentSlot.pendingUserInput, currentUserInputIndex(currentSlot))
-                : t("bridge.input.waiting", { adapter: currentSlot.adapter }),
-            ),
-          );
-        },
-        remindBusy: async () => {
-          await this.host.queueMessage(
-            message.senderId,
-            this.host.slotManager.prefix(
-              currentSlot,
-              t("bridge.busy.remote", { adapter: currentSlot.adapter }),
-            ),
-          );
-        },
-        defer: async () => {
-          await this.deferInput(
-            currentSlot,
-            message,
-            this.host.inboundConversationContext.get() ?? undefined,
-          );
-        },
-        dispatch: async () => {
-          await this.dispatchInboundText(message, currentSlot);
-        },
-      });
-      if (
-        this.host.driver.capabilities.multiConversation &&
-        this.host.inboundConversationContext.get() &&
-        currentSlot.turns.activeTask &&
-        currentSlot.turns.activeTask !== previousTask
-      ) {
-        const conversation = this.host.inboundConversationContext.get()!;
-        currentSlot.turns.bindConversation(conversation);
-      }
-    };
+    // Routing lives in routeToSlot; both the active-slot path and the pinned
+    // path share the exact command/approval/awaiting logic.
 
     const command = parseControlCommand(message.text, {
       adapter: slot.adapter,
@@ -568,7 +602,7 @@ export class InboundRouter {
       slot.pendingUserInput ||
       slotState.status === "awaiting_input"
     ) {
-      await routeCurrentMessage(slot, command);
+      await this.routeToSlot(message, slot, command);
       return;
     }
 
@@ -587,7 +621,517 @@ export class InboundRouter {
     }
     slot = this.host.slotManager.getActiveSlot() ?? slot;
     this.bindCurrentConversation(slot);
-    await routeCurrentMessage(slot, null);
+    await this.routeToSlot(message, slot, null);
+  }
+
+  /**
+   * Route one inbound message to a specific slot (active or pinned). This is
+   * the single routing funnel: control commands, pending approvals, pending
+   * user input and plain prompts are treated identically on both paths.
+   */
+  private async routeToSlot(
+    message: BridgeInboundMessage,
+    slot: DaemonSlot,
+    command: ReturnType<typeof parseControlCommand>,
+  ): Promise<void> {
+    const previousTask = slot.turns.activeTask;
+    await routeBridgeMessage({
+      message: toChannelInboundMessage(message),
+      authorized: true,
+      command,
+      adapterState: slot.runtime.getState(),
+      hasPendingApproval: slot.pendingConfirmations.length > 0,
+      hasPendingUserInput: Boolean(slot.pendingUserInput),
+      shouldDefer: shouldDeferCodexInboundMessage({
+        adapter: slot.adapter,
+        status: slot.runtime.getState().status,
+        activeTurnOrigin: slot.runtime.getState().activeTurnOrigin,
+        hasPendingConfirmation: slot.pendingConfirmations.length > 0,
+        hasSystemCommand: Boolean(command),
+      }),
+      onUnauthorized: async () => undefined,
+      handleCommand: async (nextCommand) => {
+        await this.host.controls.handleSystemCommand(message, slot, nextCommand);
+        return true;
+      },
+      remindPendingApproval: async () => {
+        await this.host.queueMessage(
+          message.senderId,
+          this.host.slotManager.prefix(
+            slot,
+            formatPendingApprovalReminder(
+              slot.pendingConfirmations[0]!,
+              slot.runtime.getState(),
+            ),
+          ),
+        );
+        slot.displayedApprovalRequestId = slot.pendingConfirmations[0]?.requestId;
+      },
+      remindPendingUserInput: async () => {
+        await this.host.queueMessage(
+          message.senderId,
+          this.host.slotManager.prefix(
+            slot,
+            slot.pendingUserInput
+              ? formatPendingUserInputReminder(slot.pendingUserInput, currentUserInputIndex(slot))
+              : t("bridge.input.waiting", { adapter: slot.adapter }),
+          ),
+        );
+      },
+      remindBusy: async () => {
+        await this.host.queueMessage(
+          message.senderId,
+          this.host.slotManager.prefix(
+            slot,
+            t("bridge.busy.remote", { adapter: slot.adapter }),
+          ),
+        );
+      },
+      defer: async () => {
+        await this.deferInput(
+          slot,
+          message,
+          this.host.inboundConversationContext.get() ?? undefined,
+        );
+      },
+      dispatch: async () => {
+        await this.dispatchInboundText(message, slot);
+      },
+    });
+    if (
+      this.host.driver.capabilities.multiConversation &&
+      this.host.inboundConversationContext.get() &&
+      slot.turns.activeTask &&
+      slot.turns.activeTask !== previousTask
+    ) {
+      const conversation = this.host.inboundConversationContext.get()!;
+      slot.turns.bindConversation(conversation);
+    }
+  }
+
+  /** Stable pin key of the current inbound conversation. */
+  private pinKeyOf(message: BridgeInboundMessage): string {
+    const conversation = this.host.inboundConversationContext.get();
+    return conversation
+      ? conversationPinKey(conversation.channelId, conversation.conversationId)
+      : conversationPinKey(this.host.channelId, message.sessionId || message.senderId);
+  }
+
+  /** The window this conversation (or its leading tag) is pinned to, if any. */
+  private resolvePinnedTarget(
+    message: BridgeInboundMessage,
+  ): { target: ConversationPinTarget; stripTag?: boolean } | undefined {
+    const tagMatch = parseMessageTag(message.text);
+    if (tagMatch) {
+      const tagged = this.host.pins.get(pinTagKey(this.pinKeyOf(message), tagMatch.tag));
+      if (tagged) {
+        return { target: tagged, stripTag: true };
+      }
+    }
+    const pinned = this.host.pins.get(this.pinKeyOf(message));
+    return pinned ? { target: pinned } : undefined;
+  }
+
+  private slotWindowName(target: ConversationPinTarget): string {
+    const slot = this.host.slotManager.getSlot(target.cwd, target.adapter, target.instance);
+    if (slot) {
+      return this.host.slotManager.slotSourceName(slot);
+    }
+    return target.instance > 1 ? `${target.adapter}-${target.instance}` : target.adapter;
+  }
+
+  private describePinSwitchFailure(
+    target: ConversationPinTarget,
+    result: EnsureSlotResult,
+  ): string {
+    const detail = result.refused
+      ? result.refused === "instance_mode_type_locked"
+        ? t("daemon.refused.instanceLocked", {
+          adapter: result.activeAdapter,
+          target: result.activeAdapter,
+          launcher: `${this.host.channelId}-${result.activeAdapter}`,
+        })
+        : t("daemon.refused.typeOpen", {
+          adapter: result.activeAdapter,
+          launcher: `${this.host.channelId}-${result.activeAdapter}`,
+        })
+      : formatDaemonSwitchResultDetail(result);
+    return t("pin.pinFailed", { window: this.slotWindowName(target), detail });
+  }
+
+  /**
+   * Ensure the window named by `/pin <window>` / `/pin [tag] <window>`.
+   * Reuses an existing window without touching the mode; opens a missing
+   * window through bridge admission (mode upgrades with the window), falling
+   * back to exact-instance creation when the requested number is a gap.
+   */
+  private async ensurePinWindow(
+    adapter: DaemonAdapterKind,
+    cwd: string,
+    instance: number,
+  ): Promise<EnsureSlotResult> {
+    const existing = this.host.slotManager.getSlot(cwd, adapter, instance);
+    if (existing) {
+      return this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        instance,
+        openVisible: true,
+        reuseExistingVisible: true,
+      });
+    }
+    const admission = admitWindow(
+      this.host.slotManager.mode,
+      this.host.slotManager.windows(),
+      { cwd, adapter },
+    );
+    return admission.admitted && admission.instance === instance
+      ? this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        newInstance: true,
+        openVisible: true,
+        reuseExistingVisible: true,
+      })
+      : this.host.slotManager.ensureSlot(adapter, {
+        cwd,
+        instance,
+        openVisible: true,
+        reuseExistingVisible: true,
+      });
+  }
+
+  private async handlePinCommand(
+    message: BridgeInboundMessage,
+    command: PinCommand,
+  ): Promise<void> {
+    const targetOverride = this.host.inboundConversationContext.get();
+    const queue = (text: string, context: ChannelSendKind = "notice") =>
+      this.host.queueMessage(message.senderId, text, context, targetOverride);
+    if (command.type === "list") {
+      const prefix = `${this.host.channelId}:`;
+      const pins = this.host.pins.list().filter((pin) => pin.key.startsWith(prefix));
+      await queue(formatPinsListMessage(pins, (target) => this.slotWindowName(target)));
+      return;
+    }
+    if (command.type === "unpin") {
+      const removed = this.host.pins.remove(this.pinKeyOf(message));
+      await queue(removed ? t("pin.unbound") : t("pin.notPinned"));
+      return;
+    }
+    if (command.type === "unpin-tag") {
+      const key = pinTagKey(this.pinKeyOf(message), command.tag);
+      const removed = this.host.pins.remove(key);
+      await queue(
+        removed
+          ? t("pin.tagUnbound", { tag: command.tag })
+          : t("pin.tagNotPinned", { tag: command.tag }),
+      );
+      return;
+    }
+    const cwd = this.host.slotManager.activeCwd;
+    if (command.type === "pin-to") {
+      const parsed = parsePinWindowName(command.window);
+      if (!parsed) {
+        await queue(t("pin.invalidWindow", { window: command.window }));
+        return;
+      }
+      const ensure = await this.ensurePinWindow(parsed.adapter, cwd, parsed.instance);
+      if (!ensure.activated) {
+        await queue(this.describePinSwitchFailure({ cwd, ...parsed }, ensure));
+        return;
+      }
+      await this.pinConversation(message, { cwd, ...parsed });
+      return;
+    }
+    if (command.type === "pin-tag") {
+      let target: ConversationPinTarget;
+      if (command.window) {
+        const parsed = parsePinWindowName(command.window);
+        if (!parsed) {
+          await queue(t("pin.invalidWindow", { window: command.window }));
+          return;
+        }
+        const ensure = await this.ensurePinWindow(parsed.adapter, cwd, parsed.instance);
+        if (!ensure.activated) {
+          await queue(this.describePinSwitchFailure({ cwd, ...parsed }, ensure));
+          return;
+        }
+        target = { cwd, ...parsed };
+      } else {
+        const slot = this.host.slotManager.getActiveSlot();
+        if (!slot) {
+          await queue(t("pin.noActiveSlot"));
+          return;
+        }
+        target = { cwd: slot.cwd, adapter: slot.adapter, instance: slot.instance };
+      }
+      await this.pinConversation(message, target, command.tag);
+      return;
+    }
+    const slot = this.host.slotManager.getActiveSlot();
+    if (!slot) {
+      await queue(t("pin.noActiveSlot"));
+      return;
+    }
+    await this.pinConversation(message, {
+      cwd: slot.cwd,
+      adapter: slot.adapter,
+      instance: slot.instance,
+    });
+  }
+
+  private async pinConversation(
+    message: BridgeInboundMessage,
+    target: ConversationPinTarget,
+    tag?: string,
+  ): Promise<void> {
+    const key = tag ? pinTagKey(this.pinKeyOf(message), tag) : this.pinKeyOf(message);
+    this.host.pins.set(key, target);
+    this.host.daemonLog(
+      `conversation_pinned: key=${key} window=${this.slotWindowName(target)}`,
+    );
+    await this.host.queueMessage(
+      message.senderId,
+      tag
+        ? t("pin.tagBound", { tag, window: this.slotWindowName(target) })
+        : t("pin.bound", { window: this.slotWindowName(target) }),
+      "notice",
+      this.host.inboundConversationContext.get(),
+    );
+  }
+
+  /**
+   * `/use [tag]`: make the tagged window the active one without sending a
+   * prompt. Only windows already running can be switched to; closed windows
+   * report back instead of silently opening a new one.
+   */
+  private async useTaggedWindow(
+    message: BridgeInboundMessage,
+    tag: string,
+  ): Promise<void> {
+    const pinned = this.host.pins.get(pinTagKey(this.pinKeyOf(message), tag));
+    if (!pinned) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notFound", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const slots = this.host.slotManager;
+    if (!slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance)) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notRunning", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const result = await slots.ensureSlot(pinned.adapter, {
+      cwd: pinned.cwd,
+      instance: pinned.instance,
+      openVisible: false,
+      reuseExistingVisible: true,
+    });
+    if (!result.activated) {
+      await this.host.queueMessage(
+        message.senderId,
+        t("daemon.use.notRunning", { name: tag }),
+        "notice",
+        this.host.inboundConversationContext.get(),
+      );
+      return;
+    }
+    const slot = slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance)!;
+    this.bindCurrentConversation(slot);
+    // Take over the chat routing: after /use [tag], untagged messages go to
+    // the tagged window instead of being hijacked by a stale conversation pin
+    // or the previous active window.
+    this.host.pins.set(this.pinKeyOf(message), {
+      cwd: pinned.cwd,
+      adapter: pinned.adapter,
+      instance: pinned.instance,
+    });
+    this.host.daemonLog(
+      `session_activated: tag=${tag} window=${this.slotWindowName(pinned)} conversation_pinned_to_window=true`,
+    );
+    await this.host.queueMessage(
+      message.senderId,
+      t("daemon.use.switched", {
+        name: tag,
+        window: slots.slotSourceName(slot),
+        cwd: slot.cwd,
+      }),
+      "notice",
+      this.host.inboundConversationContext.get(),
+    );
+  }
+
+
+  /**
+   * Session name for a window's auto-registered tag. A window that carries
+   * its own CLI session name (codex /rename, e.g. "paas-issues#96") uses that
+   * first; otherwise the sanitized cwd basename (max 20 chars, brackets
+   * stripped) with an instance suffix when the same directory runs several
+   * windows (codex-1, codex-2) or the plain name is already taken.
+   */
+  private pinTargetsSameSlot(left: ConversationPinTarget, right: ConversationPinTarget): boolean {
+    return (
+      left.cwd === right.cwd &&
+      left.adapter === right.adapter &&
+      left.instance === right.instance
+    );
+  }
+
+  sessionNameFor(slot: DaemonSlot): string {
+    const key = conversationPinKey(this.host.channelId, this.host.operatorId);
+    const raw =
+      (slot.sessionTitle || path.basename(slot.cwd))
+        .replace(/\[|\]/g, "")
+        .trim() || "cwd";
+    const base = raw.slice(0, 20);
+    const existing = this.host.pins.get(pinTagKey(key, base));
+    const ownsIt =
+      existing &&
+      existing.cwd === slot.cwd &&
+      existing.adapter === slot.adapter &&
+      existing.instance === slot.instance;
+    if (!existing || ownsIt) {
+      return base;
+    }
+    // Same directory running several windows (codex-1, codex-2) or the name
+    // already taken: make the session name unique per window. The full tag
+    // still has to fit the 20-char [tag] limit, so the suffix truncates it.
+    return `${raw.slice(0, 18)}-${slot.instance}`.slice(0, 20);
+  }
+
+  /**
+   * A brand-new window finished opening: register it in the operator's
+   * conversation as a cwd-named session tag, so `[name] 内容` routes straight
+   * to that window with zero configuration.
+   */
+  async autoRegisterSession(
+    slot: DaemonSlot,
+    info: { openedVisible: boolean; visibleReady: boolean },
+  ): Promise<void> {
+    const name = this.sessionNameFor(slot);
+    const key = conversationPinKey(this.host.channelId, this.host.operatorId);
+    const target: ConversationPinTarget = {
+      cwd: slot.cwd,
+      adapter: slot.adapter,
+      instance: slot.instance,
+    };
+    // The window changed its CLI session name (codex /rename read after the
+    // first registration): drop the cwd-basename tag this slot registered
+    // before, so one window ends up with exactly one auto tag.
+    const existingTag = this.host.pins.get(pinTagKey(key, name));
+    if (existingTag && this.pinTargetsSameSlot(existingTag, target)) {
+      this.host.daemonLog(
+        `auto_session_already_bound: name=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd}`,
+      );
+      return;
+    }
+    const newTagKey = pinTagKey(key, name);
+    for (const pinned of this.host.pins.list()) {
+      if (
+        pinned.key.startsWith(`${key}#`) &&
+        pinned.key !== newTagKey &&
+        this.pinTargetsSameSlot(pinned.target, target)
+      ) {
+        this.host.pins.remove(pinned.key);
+        this.host.daemonLog(
+          `auto_session_migrated: from=${pinned.key.slice(key.length + 1)} to=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd}`,
+        );
+      }
+    }
+    this.host.pins.set(newTagKey, target);
+    this.host.daemonLog(
+      `auto_session_registered: name=${name} window=${this.slotWindowName(target)} cwd=${slot.cwd} opened_visible=${info.openedVisible} visible_ready=${info.visibleReady}`,
+    );
+    if (this.host.isShuttingDown()) {
+      return;
+    }
+    await this.host.queueMessage(
+      this.host.operatorId,
+      t("session.registered", {
+        name,
+        window: this.slotWindowName(target),
+        cwd: slot.cwd,
+      }),
+      "notice",
+      this.host.fallbackConversation,
+    );
+  }
+
+  /** The window went away: drop its auto-registered session tag. */
+  async autoUnregisterSession(slot: DaemonSlot): Promise<void> {
+    const name = this.sessionNameFor(slot);
+    const tagKey = pinTagKey(
+      conversationPinKey(this.host.channelId, this.host.operatorId),
+      name,
+    );
+    const existing = this.host.pins.get(tagKey);
+    if (
+      !existing ||
+      existing.cwd !== slot.cwd ||
+      existing.adapter !== slot.adapter ||
+      existing.instance !== slot.instance
+    ) {
+      return;
+    }
+    this.host.pins.remove(tagKey);
+    this.host.daemonLog(
+      `auto_session_unregistered: name=${name} window=${this.slotWindowName(existing)} cwd=${slot.cwd}`,
+    );
+    if (this.host.isShuttingDown()) {
+      return;
+    }
+    await this.host.queueMessage(
+      this.host.operatorId,
+      t("session.unregistered", { name }),
+      "notice",
+      this.host.fallbackConversation,
+    );
+  }
+
+  /**
+   * The shortest conversation tag bound to this slot in the operator's
+   * conversation (an auto session or a manual `/pin [tag]`), or null. Used to
+   * prefix the slot's replies so the operator can tell windows apart. Auto
+   * session names are returned in their original case (`[daemon-pins]`, not
+   * the upper-cased pin key).
+   */
+  tagNameForSlot(slot: DaemonSlot): string | null {
+    const keyPrefix = `${conversationPinKey(this.host.channelId, this.host.operatorId)}#`;
+    let best: string | null = null;
+    for (const pin of this.host.pins.list()) {
+      if (!pin.key.startsWith(keyPrefix)) {
+        continue;
+      }
+      const target = pin.target;
+      if (
+        target.cwd !== slot.cwd ||
+        target.adapter !== slot.adapter ||
+        target.instance !== slot.instance
+      ) {
+        continue;
+      }
+      const tag = pin.key.slice(keyPrefix.length);
+      if (tag && (best === null || tag.length < best.length)) {
+        best = tag;
+      }
+    }
+    if (!best) {
+      return null;
+    }
+    // The pin store upper-cases tags; an auto session (the cwd-derived name)
+    // should display with its original case.
+    const autoName = this.sessionNameFor(slot);
+    if (best.toUpperCase() === autoName.toUpperCase()) {
+      return autoName;
+    }
+    return best;
   }
 
   async dispatchInboundText(

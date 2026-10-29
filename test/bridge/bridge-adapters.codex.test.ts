@@ -11,11 +11,63 @@ import {
   CodexPtyAdapter,
   isCodexVersionInCompatibilityRange,
   parseCodexCliVersion,
+  resolveAdoptableAppServer,
   shouldSuppressCodexTransportFatalError,
   shouldTreatCodexNativeExitAsExpected,
 } from "../../src/bridge/bridge-adapters.codex.ts";
 
 beforeEach(() => setLocale("en"));
+
+describe("app-server adoption after a daemon restart", () => {
+  const endpoint = {
+    protocolVersion: 2,
+    runtimeKind: "codex_runtime_host" as const,
+    instanceId: "45240-mvsygmx3",
+    kind: "codex" as const,
+    slotInstance: 2,
+    port: 52678,
+    token: "17305035fdea7610847a340780475be3a18c6ba1f123ecbb",
+    renderMode: "headless" as const,
+    bridgeOwnerPid: 45240,
+    serverPort: 52678,
+    serverUrl: "ws://127.0.0.1:52715",
+    remoteAuthTokenEnv: "WECHAT_BRIDGE_CODEX_REMOTE_AUTH_TOKEN",
+    cwd: "D:\\ts\\passt",
+    command: "codex",
+    companionPid: 16116,
+    companionConnectedAt: "2026-10-29T02:59:59.317Z",
+    companionStatus: "idle" as const,
+    companionLastStateAt: "2026-10-29T03:01:35.820Z",
+    companionWorkerPid: 69340,
+    codexControlPort: 52737,
+    codexControlToken: "64da5cce0206c67f1f3ba4ab67c31ca1becb9ad339d409f7",
+    startedAt: "2026-10-29T02:59:59.071Z",
+  };
+
+  test("adopts the persisted app-server while the companion is alive", () => {
+    expect(resolveAdoptableAppServer(endpoint, () => true)).toEqual({
+      port: 52678,
+      token: "17305035fdea7610847a340780475be3a18c6ba1f123ecbb",
+    });
+  });
+
+  test("refuses adoption when the companion (window) is dead", () => {
+    expect(resolveAdoptableAppServer(endpoint, () => false)).toBeNull();
+  });
+
+  test("refuses adoption when the endpoint lacks the app-server or companion", () => {
+    expect(resolveAdoptableAppServer(null, () => true)).toBeNull();
+    expect(
+      resolveAdoptableAppServer({ ...endpoint, companionPid: undefined }, () => true),
+    ).toBeNull();
+    expect(
+      resolveAdoptableAppServer({ ...endpoint, port: undefined }, () => true),
+    ).toBeNull();
+    expect(
+      resolveAdoptableAppServer({ ...endpoint, token: undefined }, () => true),
+    ).toBeNull();
+  });
+});
 
 describe("Codex version compatibility", () => {
   test("parses the installed Codex CLI version", () => {
