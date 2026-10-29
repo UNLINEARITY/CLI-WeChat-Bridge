@@ -455,6 +455,7 @@ export const messages: Record<string, string> = {
   "agentBus.prompt.failed": "[{target} 执行任务 {callId} 失败]\n{error}",
   "agentBus.prompt.interrupted": "[{target} 的任务 {callId} 已停止]",
   "agentBus.prompt.approval": "[{target} 执行任务 {callId} 需要审批]\n{summary}\n{command}\n可用 resolve_agent_approval 决定（confirm、deny 或 abort），也可以留给操作者处理。",
+  "agentBus.prompt.approvalOperatorOnly": "[{target} 执行任务 {callId} 需要审批]\n{summary}\n{command}\n这是高风险请求，只有操作者可以确认。你可以用 resolve_agent_approval 拒绝（deny）或拒绝并停止（abort），也可以留给操作者处理。",
   "agentBus.mirror.request": "来自 {caller} 的任务：\n{text}",
   "agentBus.mirror.approval.confirm": "{caller} 已批准：{command}",
   "agentBus.mirror.approval.deny": "{caller} 已拒绝：{command}",

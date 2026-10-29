@@ -122,7 +122,8 @@ export const AGENT_BUS_TOOLS = [
     name: "resolve_agent_approval",
     description:
       "Decide an approval the target agent is waiting on for a call you made: confirm, deny, or abort (deny and stop its turn). " +
-      "The operator can decide it too; whoever answers first wins.",
+      "High-risk requests (callerMayConfirm false in get_agent_call) can only be confirmed by the operator; you may still deny or abort them. " +
+      "The operator can decide any of them too; whoever answers first wins.",
     inputSchema: {
       type: "object" as const,
       properties: {

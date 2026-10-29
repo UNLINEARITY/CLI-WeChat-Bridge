@@ -166,7 +166,17 @@ export function evaluateApprovalPolicy(
   if (!isAutoApprovalEnabled(context.env ?? process.env)) {
     return { decision: "ask", reason: "auto-approval is off" };
   }
+  return evaluateApprovalRule(operation, context);
+}
 
+/**
+ * The rule itself, whether or not auto-approval is on. An operation it does
+ * not allow is high-risk: only a person may confirm it.
+ */
+export function evaluateApprovalRule(
+  operation: ApprovalOperation,
+  context: ApprovalPolicyContext,
+): ApprovalVerdict {
   switch (operation.kind) {
     case "command": {
       const command = operation.command.trim();

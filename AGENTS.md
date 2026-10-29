@@ -141,8 +141,7 @@ Visible CLI clients always start fresh sessions by default (`new`) in both daemo
 
 ## CLI Compatibility Maintenance
 The bridge tracks the latest stable CLI releases it depends on:
-- Codex validated range: 0.149.x through 0.161.x (see `isCodexVersionInCompatibilityRange`).
-- Claude Code, OpenCode, and Pi are validated against the latest stable releases via capability probes, not version ranges.
+- Codex, Claude Code, OpenCode, and Pi are validated against the latest stable releases via capability probes, not version ranges; the bridge only logs the detected Codex version. Add a range only after a release actually breaks.
 - Pi 0.85 requires Node.js >= 22.19.0; launchers and the daemon enforce this before starting the visible TUI.
 
 `.github/workflows/cli-compatibility.yml` runs every Monday 04:23 UTC (and on demand), installs the latest stable CLIs (plus pinned OpenCode 1.18), and runs `npm run smoke:cli-compat` (`scripts/smoke-cli-compatibility.mjs`) to verify Codex bridge schema fields and `--remote`, Claude `--settings`/`--resume`, OpenCode server health with bounded HTTP retries, and loading the real Pi bridge extension with model-list IPC. It is deliberately not a required check; triage failures by comparing the smoke output against `src/bridge/bridge-adapters.*.ts` usage.

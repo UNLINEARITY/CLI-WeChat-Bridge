@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   evaluateApprovalPolicy,
+  evaluateApprovalRule,
   getAutoApprovalOverride,
   isAutoApprovalEnabled,
   isPathInsideWorkspace,
@@ -27,6 +28,14 @@ const decide = (operation: ApprovalOperation) => evaluateApprovalPolicy(operatio
 const command = (text: string, cwd?: string) => decide({ kind: "command", command: text, cwd });
 
 describe("approval policy", () => {
+  test("applies the rule itself whether or not auto-approval is on", () => {
+    const strict = { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "1" } };
+    expect(evaluateApprovalPolicy({ kind: "command", command: "git status" }, strict).decision).toBe("ask");
+    expect(evaluateApprovalRule({ kind: "command", command: "git status" }, strict).decision).toBe("auto_allow");
+    expect(evaluateApprovalRule({ kind: "command", command: "rm -rf build" }, strict).decision).toBe("ask");
+    expect(evaluateApprovalRule({ kind: "mcp", tool: "github/create_pull_request" }, strict).decision).toBe("ask");
+  });
+
   test("allows ordinary commands and asks for dangerous ones", () => {
     for (const text of ["git status", "npm test", "rg TODO src", "ls /usr/include 2>/dev/null", "cat deploy.md", "git log --format=%H"]) {
       expect(command(text)).toBe("auto_allow");

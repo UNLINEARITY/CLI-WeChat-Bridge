@@ -455,6 +455,7 @@ export const messages: Record<string, string> = {
   "agentBus.prompt.failed": "[{target} failed task {callId}]\n{error}",
   "agentBus.prompt.interrupted": "[{target} task {callId} was stopped]",
   "agentBus.prompt.approval": "[{target} needs approval for task {callId}]\n{summary}\n{command}\nDecide with resolve_agent_approval (confirm, deny, or abort), or leave it to the operator.",
+  "agentBus.prompt.approvalOperatorOnly": "[{target} needs approval for task {callId}]\n{summary}\n{command}\nThis is a high-risk request: only the operator can confirm it. You may deny or abort it with resolve_agent_approval, or leave it to the operator.",
   "agentBus.mirror.request": "Task from {caller}:\n{text}",
   "agentBus.mirror.approval.confirm": "{caller} approved: {command}",
   "agentBus.mirror.approval.deny": "{caller} denied: {command}",

@@ -61,6 +61,11 @@ export type ApprovalRequest = {
   extraDecisions?: Array<"always" | "abort">;
   /** The CLI passes a rejection reason to the model. */
   denyReasonSupported?: boolean;
+  /**
+   * The shared approval rule allows it, so an agent that asked for the work
+   * may confirm it; without this only a person can.
+   */
+  agentConfirmable?: boolean;
 };
 
 export type PendingApproval = ApprovalRequest & {

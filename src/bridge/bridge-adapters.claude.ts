@@ -29,6 +29,7 @@ import {
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
   getClaudePermissionAutoResponse,
+  isClaudePermissionAgentConfirmable,
   getClaudeToolCallKey,
   getClaudeOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
@@ -1864,6 +1865,7 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
     const request = {
       ...buildClaudePermissionApprovalRequest(payload),
       requestId,
+      ...(isClaudePermissionAgentConfirmable(payload, { workspace: this.options.cwd }) ? { agentConfirmable: true } : {}),
     };
     this.pendingHookApprovals.set(requestId, {
       requestId,

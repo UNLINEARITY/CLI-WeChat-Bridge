@@ -37,6 +37,7 @@ import {
 } from "./outbound-attachments.ts";
 import {
   evaluateApprovalPolicy,
+  evaluateApprovalRule,
   toAutoApprovalKind,
   type ApprovalOperation,
   type ApprovalPolicyContext,
@@ -607,18 +608,34 @@ export function describeCodexApprovalOperation(
   };
 }
 
+/** Requests that are never confirmed automatically, whatever the rule says. */
+function isCodexApprovalExcludedFromRule(
+  method: CodexPendingApprovalRequest["method"],
+  params: Record<string, unknown>,
+): boolean {
+  if (method === "item/commandExecution/requestApproval") {
+    if (!commandApprovalAllowsAccept(params.availableDecisions)) return true;
+    if (containsHighRiskPermissionTarget(params.additionalPermissions)) return true;
+  }
+  return method === "item/fileChange/requestApproval" && containsHighRiskPermissionTarget(params.grantRoot);
+}
+
+/** An agent that asked for the work may confirm it (see ApprovalRequest.agentConfirmable). */
+export function isCodexApprovalAgentConfirmable(
+  method: CodexPendingApprovalRequest["method"],
+  params: Record<string, unknown>,
+  context: ApprovalPolicyContext,
+): boolean {
+  return !isCodexApprovalExcludedFromRule(method, params) &&
+    evaluateApprovalRule(describeCodexApprovalOperation(method, params), context).decision === "auto_allow";
+}
+
 export function getCodexApprovalAutoResponse(
   method: CodexPendingApprovalRequest["method"],
   params: Record<string, unknown>,
   context: ApprovalPolicyContext,
 ): CodexApprovalAutoResponse | null {
-  if (method === "item/commandExecution/requestApproval") {
-    if (!commandApprovalAllowsAccept(params.availableDecisions)) return null;
-    if (containsHighRiskPermissionTarget(params.additionalPermissions)) return null;
-  }
-  if (method === "item/fileChange/requestApproval" && containsHighRiskPermissionTarget(params.grantRoot)) {
-    return null;
-  }
+  if (isCodexApprovalExcludedFromRule(method, params)) return null;
 
   const operation = describeCodexApprovalOperation(method, params);
   const verdict = evaluateApprovalPolicy(operation, context);

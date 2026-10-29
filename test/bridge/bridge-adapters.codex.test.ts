@@ -9,7 +9,6 @@ import { setLocale } from "../../src/i18n/index.ts";
 
 import {
   CodexPtyAdapter,
-  isCodexVersionInCompatibilityRange,
   parseCodexCliVersion,
   shouldSuppressCodexTransportFatalError,
   shouldTreatCodexNativeExitAsExpected,
@@ -17,22 +16,9 @@ import {
 
 beforeEach(() => setLocale("en"));
 
-describe("Codex version compatibility", () => {
+describe("Codex version detection", () => {
   test("parses the installed Codex CLI version", () => {
     expect(parseCodexCliVersion("codex-cli 0.151.0\n")).toBe("0.151.0");
-  });
-
-  test("accepts the validated Codex 0.149 through 0.161 range", () => {
-    expect(isCodexVersionInCompatibilityRange("0.149.1")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.151.0")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.155.0")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.156.0")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.157.1")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.158.0")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.161.0")).toBe(true);
-    expect(isCodexVersionInCompatibilityRange("0.148.0")).toBe(false);
-    expect(isCodexVersionInCompatibilityRange("0.162.0")).toBe(false);
-    expect(isCodexVersionInCompatibilityRange("1.0.0")).toBe(false);
   });
 });
 

@@ -26,6 +26,7 @@ import {
   extractCodexUserMessageText,
   findRecentCodexSessionFileForCwd,
   getCodexApprovalAutoResponse,
+  isCodexApprovalAgentConfirmable,
   getCodexOutboundAttachmentDenyMessage,
   hasClaudeNoAltScreenOption,
   isClaudeInvalidResumeError,
@@ -583,6 +584,20 @@ describe("buildCodexApprovalRequest", () => {
       scope: "turn",
       strictAutoReview: true,
     });
+  });
+
+  test("lets a calling agent confirm only Codex requests the shared rule allows", () => {
+    const strict = { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "1" } };
+    const confirmable = (cmd: string, extra: Record<string, unknown> = {}) =>
+      isCodexApprovalAgentConfirmable("item/commandExecution/requestApproval",
+        { command: cmd, cwd: "/repo", availableDecisions: ["accept", "cancel"], ...extra }, strict);
+
+    expect(confirmable("rg \"TODO\" src")).toBe(true);
+    expect(confirmable("rm -rf build")).toBe(false);
+    expect(confirmable("git push origin main")).toBe(false);
+    expect(confirmable("git status", { availableDecisions: ["cancel"] })).toBe(false);
+    expect(confirmable("npm test", { additionalPermissions: { fileSystem: { write: ["/etc/hosts"] } } })).toBe(false);
+    expect(isCodexApprovalAgentConfirmable("item/fileChange/requestApproval", { grantRoot: "/Users/me" }, strict)).toBe(false);
   });
 
   test("auto-approves Codex requests through the shared policy", () => {

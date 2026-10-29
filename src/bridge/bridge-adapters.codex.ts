@@ -75,16 +75,6 @@ export function parseCodexCliVersion(output: string): string | null {
   return match?.[1] ?? null;
 }
 
-export function isCodexVersionInCompatibilityRange(version: string): boolean {
-  const parts = version.split(".").map((part) => Number(part));
-  if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) {
-    return false;
-  }
-  const major = parts[0] ?? -1;
-  const minor = parts[1] ?? -1;
-  return major === 0 && minor >= 149 && minor <= 161;
-}
-
 /**
  * Minimal socket surface the RPC client uses, satisfied by both the global
  * (Bun/Node) WebSocket against the owned app-server and the `ws` package
@@ -231,6 +221,7 @@ const {
   findRecentCodexSessionFileForCwd,
   getCodexRpcRequestId,
   getCodexApprovalAutoResponse,
+  isCodexApprovalAgentConfirmable,
   getCodexOutboundAttachmentDenyMessage,
   getNotificationThreadId,
   getNotificationTurnId,
@@ -413,12 +404,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     }
 
     this.codexCliVersion = this.detectCodexCliVersion();
-    const compatibility = this.codexCliVersion
-      ? isCodexVersionInCompatibilityRange(this.codexCliVersion)
-        ? `compatible=${this.codexCliVersion}`
-        : `outside-supported-range=${this.codexCliVersion}`
-      : "unknown-version";
-    this.setStatus("starting", `Codex protocol compatibility: ${compatibility}.`);
+    this.setStatus("starting", `Codex CLI version: ${this.codexCliVersion ?? "unknown"}.`);
 
     if (this.options.codexAttachDaemon) {
       await this.startDaemonAttach();
@@ -3078,7 +3064,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     const previousId = this.pendingApproval?.requestId;
     const requests = this.pendingApprovalRequests.flatMap((pending) => {
       const request = buildCodexApprovalRequest(pending.method, pending.params);
-      return request ? [{ ...request, requestId: this.rpcRequestKey(pending.requestId) }] : [];
+      if (!request) return [];
+      const agentConfirmable = isCodexApprovalAgentConfirmable(pending.method, pending.params, { workspace: this.options.cwd });
+      return [{ ...request, requestId: this.rpcRequestKey(pending.requestId), ...(agentConfirmable ? { agentConfirmable } : {}) }];
     });
     this.pendingApproval = requests[0] ?? null;
     this.state.pendingApproval = this.pendingApproval;

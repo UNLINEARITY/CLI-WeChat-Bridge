@@ -49,7 +49,7 @@ import type {
 } from "./bridge-types.ts";
 import { killProcessTreeSync } from "./bridge-process-reaper.ts";
 import { createOpenCodeV2CompatClient } from "./opencode-v2-compat.ts";
-import { evaluateApprovalPolicy, toAutoApprovalKind, type ApprovalOperation } from "./approval-policy.ts";
+import { evaluateApprovalPolicy, evaluateApprovalRule, toAutoApprovalKind, type ApprovalOperation } from "./approval-policy.ts";
 import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   OUTBOUND_ATTACHMENT_DENY_MESSAGE,
@@ -2130,6 +2130,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (verdict.decision === "auto_allow") {
       void this.autoApprovePermission(pendingPermission, verdict.reason, toAutoApprovalKind(operation.kind));
       return;
+    }
+    if (evaluateApprovalRule(operation, { workspace: this.options.cwd }).decision === "auto_allow") {
+      pendingPermission.request.agentConfirmable = true;
     }
     this.queuePendingPermission(pendingPermission);
   }

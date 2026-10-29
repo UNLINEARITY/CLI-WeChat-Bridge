@@ -61,6 +61,8 @@ export type AgentCallView = {
     requestId?: string;
     summary: string;
     commandPreview: string;
+    /** The caller may confirm it; a high-risk request waits for the operator. */
+    callerMayConfirm: boolean;
   };
   pendingUserInput?: { summary: string };
 };
@@ -309,6 +311,9 @@ export class AgentBus {
     if (params.requestId !== undefined && pending.requestId !== params.requestId) {
       return { resolved: false, call: this.view(call) };
     }
+    if (params.decision === "confirm" && !pending.agentConfirmable) {
+      throw new Error("Only the operator can confirm this high-risk approval; deny or abort it, or leave it to the operator.");
+    }
     if (params.decision === "abort" && !pending.extraDecisions?.includes("abort")) {
       throw new Error(`${slot.adapter} cannot stop the turn from an approval; use deny.`);
     }
@@ -472,7 +477,7 @@ export class AgentBus {
         ? slot.pendingConfirmations.find((request) => request.requestId === delivery.requestId) ?? slot.pendingConfirmations[0]
         : undefined;
       if (!pending) return null;
-      return t("agentBus.prompt.approval", {
+      return t(pending.agentConfirmable ? "agentBus.prompt.approval" : "agentBus.prompt.approvalOperatorOnly", {
         target,
         callId: call.callId,
         summary: pending.summary,
@@ -523,7 +528,12 @@ export class AgentBus {
       const approval = slot.pendingConfirmations[0];
       if (approval) {
         status = "awaiting_approval";
-        pendingApproval = { requestId: approval.requestId, summary: approval.summary, commandPreview: approval.commandPreview };
+        pendingApproval = {
+          requestId: approval.requestId,
+          summary: approval.summary,
+          commandPreview: approval.commandPreview,
+          callerMayConfirm: approval.agentConfirmable === true,
+        };
       } else if (slot.pendingUserInput) {
         status = "awaiting_input";
         pendingUserInput = { summary: slot.pendingUserInput.summary };

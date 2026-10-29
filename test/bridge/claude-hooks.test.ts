@@ -19,6 +19,7 @@ import {
   extractClaudeTranscriptFinalReply,
   findInjectedClaudePromptIndex,
   getClaudePermissionAutoResponse,
+  isClaudePermissionAgentConfirmable,
   getClaudeOutboundAttachmentDenyMessage,
   normalizeClaudeAssistantMessage,
   parseClaudeHookPayload,
@@ -260,6 +261,15 @@ describe("getClaudePermissionAutoResponse", () => {
   const context = { workspace: "/repo", env: {} };
   const auto = (tool_name: string, tool_input: Record<string, unknown>, extra: Partial<ClaudeHookPayload> = {}) =>
     getClaudePermissionAutoResponse({ tool_name, tool_input, ...extra }, context);
+
+  test("lets a calling agent confirm only requests the shared rule allows, even in strict mode", () => {
+    const strict = { workspace: "/repo", env: { CLI_BRIDGE_STRICT_APPROVAL: "1" } };
+    expect(isClaudePermissionAgentConfirmable({ tool_name: "Read", tool_input: { file_path: "/repo/note.md" } }, strict)).toBe(true);
+    expect(isClaudePermissionAgentConfirmable({ tool_name: "Bash", tool_input: { command: "rm -rf /tmp/demo" } }, strict)).toBe(false);
+    expect(isClaudePermissionAgentConfirmable({ tool_name: "Bash", tool_input: { command: "npm publish" } }, strict)).toBe(false);
+    expect(isClaudePermissionAgentConfirmable({ tool_name: "ExitPlanMode", tool_input: { plan: "do it" } }, strict)).toBe(false);
+    expect(isClaudePermissionAgentConfirmable({ tool_name: "AskUserQuestion", tool_input: { questions: [] } }, strict)).toBe(false);
+  });
 
   test("forwards everything to WeChat when strict approval mode is enabled", () => {
     const payload = { tool_name: "Read", tool_input: { file_path: "/repo/note.md" } };

@@ -14,6 +14,7 @@ import {
 } from "./outbound-attachments.ts";
 import {
   evaluateApprovalPolicy,
+  evaluateApprovalRule,
   toAutoApprovalKind,
   type ApprovalOperation,
   type ApprovalPolicyContext,
@@ -391,6 +392,16 @@ export function describeClaudePermissionOperation(payload: ClaudeHookPayload): A
   // Approving a plan is the operator's call, like answering a question.
   if (toolName === "ExitPlanMode") return { kind: "user_decision", label: "plan approval" };
   return { kind: "read", target: toolName };
+}
+
+/** An agent that asked for the work may confirm it (see ApprovalRequest.agentConfirmable). */
+export function isClaudePermissionAgentConfirmable(
+  payload: ClaudeHookPayload,
+  context: ApprovalPolicyContext,
+): boolean {
+  const toolName = typeof payload.tool_name === "string" ? payload.tool_name.trim() : "";
+  return Boolean(toolName) && toolName !== "AskUserQuestion" &&
+    evaluateApprovalRule(describeClaudePermissionOperation(payload), context).decision === "auto_allow";
 }
 
 export function getClaudePermissionAutoResponse(

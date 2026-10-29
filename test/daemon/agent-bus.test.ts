@@ -212,9 +212,19 @@ const deployApproval: PendingApproval = {
   createdAt: "2026-06-01T00:00:00.000Z",
 };
 
-async function emitApproval(runtime: FakeRuntime): Promise<void> {
-  runtime.state = { ...runtime.state, status: "awaiting_approval", pendingApproval: deployApproval };
-  runtime.emit({ type: "approval_required", request: deployApproval, timestamp: new Date().toISOString() });
+/** A request the shared approval rule allows; the caller may confirm it. */
+const testApproval: PendingApproval = {
+  source: "cli",
+  summary: "Run the tests?",
+  commandPreview: "npm test",
+  requestId: "approval-2",
+  agentConfirmable: true,
+  createdAt: "2026-06-01T00:00:00.000Z",
+};
+
+async function emitApproval(runtime: FakeRuntime, request: PendingApproval = deployApproval): Promise<void> {
+  runtime.state = { ...runtime.state, status: "awaiting_approval", pendingApproval: request };
+  runtime.emit({ type: "approval_required", request, timestamp: new Date().toISOString() });
   await tick(6);
 }
 
@@ -282,12 +292,12 @@ describe("agent bus calls", () => {
   test("lets only the direct caller decide the callee's approval", async () => {
     const env = new Env();
     await env.open("claude", "codex", "opencode");
-    const call = await env.call("claude", "codex", "deploy");
-    await emitApproval(env.runtime("codex"));
+    const call = await env.call("claude", "codex", "run the tests");
+    await emitApproval(env.runtime("codex"), testApproval);
 
     const waiting = await env.get(call.callId);
     expect(waiting.status).toBe("awaiting_approval");
-    expect(waiting.pendingApproval?.commandPreview).toBe("npm run deploy");
+    expect(waiting.pendingApproval).toMatchObject({ commandPreview: "npm test", callerMayConfirm: true });
     expect(env.runtime("claude").inputs.at(-1)).toContain(`[codex needs approval for task ${call.callId}]`);
 
     await expect(env.request({
@@ -306,7 +316,28 @@ describe("agent bus calls", () => {
     expect(result.resolved).toBe(true);
     expect(env.runtime("codex").approvals).toEqual(["confirm"]);
     await tick();
-    expect(env.notices().some((text) => text.includes("claude approved: npm run deploy"))).toBe(true);
+    expect(env.notices().some((text) => text.includes("claude approved: npm test"))).toBe(true);
+  });
+
+  test("leaves confirming a high-risk approval to the operator", async () => {
+    const env = new Env();
+    await env.open("claude", "codex");
+    const call = await env.call("claude", "codex", "deploy");
+    await emitApproval(env.runtime("codex"));
+
+    expect((await env.get(call.callId)).pendingApproval?.callerMayConfirm).toBe(false);
+    expect(env.runtime("claude").inputs.at(-1)).toContain("only the operator can confirm it");
+    const decide = (decision: "confirm" | "deny") => env.request<{ resolved: boolean }>({
+      command: "agent_approve",
+      callId: call.callId,
+      caller: { cwd: TEST_CWD, adapter: "claude" },
+      decision,
+    });
+
+    await expect(decide("confirm")).rejects.toThrow("Only the operator can confirm");
+    expect(env.runtime("codex").approvals).toEqual([]);
+    expect((await decide("deny")).resolved).toBe(true);
+    expect(env.runtime("codex").approvals).toEqual(["deny"]);
   });
 
   test("fails pending calls when the target closes and tells the caller", async () => {
