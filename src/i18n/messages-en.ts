@@ -169,7 +169,7 @@ export const messages: Record<string, string> = {
   "session.registered": "Auto session [{name}] registered → {window} ({cwd}). Send [name] plus content in this chat to drive that window.",
   "session.unregistered": "Auto session [{name}] unregistered (window closed).",
   "session.status": "[{name}] → {window} ({cwd}). Window online; send [name] plus content to drive it.",
-  "daemon.use.switched": "Switched to [{name}] → {window} ({cwd}). Replies from this window carry the [{name}] prefix; send [name] plus content to drive it.",
+  "daemon.use.switched": "Switched to [{name}] → {window} ({cwd}). This chat now drives that window: replies carry the [{name}] prefix and untagged messages go to it.",
   "daemon.use.notFound": "No window is bound to tag [{name}]. Pin one with /pin [name] codex-N, or open a window in that directory to register it automatically.",
   "daemon.use.notRunning": "[{name}] is bound to a window that is not running; cannot switch.",
 

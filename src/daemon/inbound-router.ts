@@ -937,8 +937,16 @@ export class InboundRouter {
     }
     const slot = slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance)!;
     this.bindCurrentConversation(slot);
+    // Take over the chat routing: after /use [tag], untagged messages go to
+    // the tagged window instead of being hijacked by a stale conversation pin
+    // or the previous active window.
+    this.host.pins.set(this.pinKeyOf(message), {
+      cwd: pinned.cwd,
+      adapter: pinned.adapter,
+      instance: pinned.instance,
+    });
     this.host.daemonLog(
-      `session_activated: tag=${tag} window=${this.slotWindowName(pinned)}`,
+      `session_activated: tag=${tag} window=${this.slotWindowName(pinned)} conversation_pinned_to_window=true`,
     );
     await this.host.queueMessage(
       message.senderId,

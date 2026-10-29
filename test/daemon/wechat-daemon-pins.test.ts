@@ -748,6 +748,21 @@ describe("auto sessions", () => {
     expect(env.runtime("codex", 2).inputs).not.toContain("tagged task");
   });
 
+  test("/use takes over the chat so untagged messages reach the tagged window", async () => {
+    const env = new FakeDaemonEnvironment();
+    const daemon = env.buildDaemon();
+
+    await send(daemon, "/codex", OPERATOR_ID); // window 1 active
+    await send(daemon, "/pin [A] codex-1", OPERATOR_ID); // tag A -> window 1
+    await send(daemon, "/pin codex-2", OPERATOR_ID); // stale conversation pin -> window 2 (opened)
+    await send(daemon, "/use [A]", OPERATOR_ID); // switch to A and take over the chat
+
+    // An untagged message must follow the /use takeover, not the stale pin.
+    await send(daemon, "keep working", OPERATOR_ID);
+    expect(env.runtime("codex", 1).inputs).toContain("keep working");
+    expect(env.runtime("codex", 2).inputs).not.toContain("keep working");
+  });
+
   test("/use reports when the tag or its window is missing", async () => {
     const env = new FakeDaemonEnvironment();
     const daemon = env.buildDaemon();

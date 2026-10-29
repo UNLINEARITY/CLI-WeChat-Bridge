@@ -169,7 +169,7 @@ export const messages: Record<string, string> = {
   "session.registered": "已注册自动会话 [{name}] → {window}（{cwd}）。在这个聊天里发 [name] 加内容即可直达该窗口派活。",
   "session.unregistered": "自动会话 [{name}] 已注销（窗口已关闭）。",
   "session.status": "[{name}] → {window}（{cwd}）。窗口在线，发送 [name] 加内容即可派活。",
-  "daemon.use.switched": "已切换到 [{name}] → {window}（{cwd}）。该窗口的回复会带 [{name}] 前缀；发 [name] 加内容即可派活。",
+  "daemon.use.switched": "已切换到 [{name}] → {window}（{cwd}）。本聊天后续直接驱动该窗口：回复带 [{name}] 前缀，不带标签的消息也会发到它。",
   "daemon.use.notFound": "没有绑定标签 [{name}]。用 /pin [name] codex-N 绑定，或打开对应目录窗口会自动注册。",
   "daemon.use.notRunning": "[{name}] 绑定的窗口没有在运行，无法切换。",
 
