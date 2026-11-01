@@ -43,6 +43,11 @@ export type DaemonSlot = {
   attached: boolean;
   /** When the slot was created (ms). */
   createdAtMs: number;
+  /**
+   * The window's own session name when the CLI exposes one (Codex /rename):
+   * preferred over the cwd basename for the auto-registered [tag].
+   */
+  sessionTitle?: string;
   /** When the operator last switched to this slot (ms); 0 if never. */
   activatedAtMs: number;
   /** A window has been seen connected for this slot. */

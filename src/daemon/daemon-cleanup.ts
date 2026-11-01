@@ -15,7 +15,7 @@ import {
 } from "../bridge/bridge-process-reaper.ts";
 import { formatDuration, truncatePreview } from "../bridge/bridge-utils.ts";
 import { BRIDGE_LOCK_FILE } from "../wechat/channel-config.ts";
-import { clearLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
+import { clearLocalCompanionEndpoint, readLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
 import {
   clearDaemonEndpoint,
   isPidAlive,
@@ -63,6 +63,13 @@ type DaemonCleanupDeps = {
 
 function clearDaemonWorkspaceEndpoints(endpoint: DaemonEndpoint): void {
   for (const adapter of DAEMON_ADAPTERS) {
+    // A companion endpoint with a live window must survive startup cleanup:
+    // the codex adapter adopts it to reuse the app-server that is running the
+    // task after a daemon restart. Only dead leftovers are cleared.
+    const existing = readLocalCompanionEndpoint(endpoint.cwd, { adapter });
+    if (existing?.companionPid && isPidAlive(existing.companionPid)) {
+      continue;
+    }
     clearLocalCompanionEndpoint(endpoint.cwd, undefined, { adapter });
   }
 }
@@ -130,13 +137,40 @@ async function stopDaemonPeerProcesses(params: {
   return stoppedPids;
 }
 
+/**
+ * Kill only daemon processes (this pid plus any wechat-daemon descendants).
+ * Companion/TUI windows and the codex app-server — the process actually
+ * running the task — are deliberately left alive, so a restarted daemon can
+ * adopt the surviving app-server instead of interrupting long tasks.
+ */
+function killWechatDaemonProcesses(pid: number): void {
+  const pending: number[] = [pid];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (current === undefined) {
+      break;
+    }
+    try {
+      process.kill(current, "SIGTERM");
+    } catch {
+      // Process already exited.
+    }
+    const children = listWechatDaemonProcesses({ cwd: undefined }).filter(
+      (record) => record.parentPid === current,
+    );
+    for (const child of children) {
+      pending.push(child.pid);
+    }
+  }
+}
+
 export async function cleanupDaemonBeforeStart(
   deps: DaemonCleanupDeps = {},
 ): Promise<DaemonCleanupResult> {
   const readEndpoint = deps.readEndpoint ?? readDaemonEndpoint;
   const isAlive = deps.isAlive ?? isPidAlive;
   const sendRequest = deps.sendRequest ?? sendDaemonRequest;
-  const killProcess = deps.killProcess ?? killProcessTreeSync;
+  const killProcess = deps.killProcess ?? killWechatDaemonProcesses;
   const clearEndpoint = deps.clearEndpoint ?? clearDaemonEndpoint;
   const clearWorkspaceEndpoints =
     deps.clearWorkspaceEndpoints ?? clearDaemonWorkspaceEndpoints;

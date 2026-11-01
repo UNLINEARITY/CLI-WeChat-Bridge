@@ -76,6 +76,7 @@ export const INBOUND_ATTACHMENTS_DIR = path.join(
   "inbound-attachments",
 );
 export const EMOJI_BINDINGS_FILE = path.join(CHANNEL_DATA_DIR, "emoji-bindings.json");
+export const PIN_BINDINGS_FILE = path.join(CHANNEL_DATA_DIR, "pins.json");
 export const LANGUAGE_FILE = path.join(CHANNEL_DATA_DIR, "language.json");
 
 initLocaleFromEnv(process.env, readLocalePreference(LANGUAGE_FILE) ?? "zh");
