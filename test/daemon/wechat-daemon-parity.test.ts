@@ -29,6 +29,7 @@ import type {
   WeChatTransport,
 } from "../../src/wechat/wechat-transport.ts";
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
+import { createMemorySlotPins } from "../../src/daemon/slot-pins.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -188,6 +189,9 @@ class Env {
       this.exitCodes.push(code);
     },
     slotSessions: this.sessions,
+    // Auto sessions register into the pin store; keep each env's store private
+    // so parallel test files never share ~/.cli-bridge/pins.json.
+    slotPins: createMemorySlotPins(),
   };
   readonly exitCodes: number[] = [];
 
@@ -259,13 +263,14 @@ describe("daemon behaviors kept after the standalone merge", () => {
 
     claude.emit(event("final_reply", { text: "Tests pass now." }));
     await tick(20);
-    expect(env.texts()).toEqual(["Tests pass now."]);
+    // A single window still registers its cwd-named session tag.
+    expect(env.texts()).toEqual(["[daemon-parity]\nTests pass now."]);
 
     await send(daemon, "/codex");
     env.wechat.sent.length = 0;
     claude.emit(event("final_reply", { text: "Still green." }));
     await tick(20);
-    expect(env.texts()).toEqual(["[claude]\nStill green."]);
+    expect(env.texts()).toEqual(["[daemon-parity]\nStill green."]);
   });
 
   test("disposes a slot after a fatal error and rebuilds it on the next switch", async () => {
@@ -428,10 +433,10 @@ describe("multi-directory daemon", () => {
     env.runtimeIn(TEST_CWD, "claude").emit(event("final_reply", { text: "Tests pass." }));
     await tick(20);
 
-    // With two workspaces listed, every message names its directory.
+    // With two workspaces listed, every message names its session tag.
     expect(env.texts()).toEqual([
-      "[other-app/codex]\nBuild finished.",
-      "[daemon-parity/claude]\nTests pass.",
+      "[other-app]\nBuild finished.",
+      "[daemon-parity]\nTests pass.",
     ]);
     expect(daemon.getStatus().cwd).toBe(TEST_CWD);
   });
@@ -456,7 +461,7 @@ describe("multi-directory daemon", () => {
 
     await send(daemon, "/confirm 1");
     expect(codex.approvals).toEqual(["confirm"]);
-    expect(env.texts().at(-1)).toContain("[other-app/codex]");
+    expect(env.texts().at(-1)).toContain("[other-app]");
   });
 
   test("a legacy six-digit approval code still confirms the current request", async () => {
@@ -857,7 +862,9 @@ describe("progressive bridge modes", () => {
 
     expect(other.refused).toBeUndefined();
     expect(status(daemon)).toBe("multi_workspace");
-    expect(env.texts().at(-1)).toContain("other-app/codex joined");
+    // The upgrade notice is sent fire-and-forget; let it flush before reading.
+    await tick();
+    expect(env.texts().some((text) => text.includes("other-app/codex joined"))).toBe(true);
   });
 
   test("closing windows never steps down; a resident daemon left empty starts over", async () => {
@@ -922,7 +929,7 @@ describe("remote commands per bridge mode", () => {
     env.wechat.sent.length = 0;
     second.emit(event("final_reply", { text: "Done." }));
     await tick(20);
-    expect(env.texts()).toEqual(["[pi-2]\nDone."]);
+    expect(env.texts()).toEqual(["[daemon-parity-2]\nDone."]);
   });
 
   test("multi-instance mode refuses switching to another CLI type", async () => {
@@ -1088,7 +1095,7 @@ describe("Telegram final replies through the daemon", () => {
     await tick(30);
 
     expect(telegram.texts.filter((entry) => entry.text.includes("Report ready."))).toEqual([
-      { conversationId: "chat-1", text: "[codex]\nReport ready." },
+      { conversationId: "chat-1", text: "[daemon-parity]\nReport ready." },
     ]);
     expect(telegram.attachments).toEqual([{ conversationId: "chat-1", path: "/tmp/report.pdf" }]);
   });

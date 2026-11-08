@@ -36,6 +36,7 @@ import type { WeChatTransport } from "../../src/wechat/wechat-transport.ts";
 import type { PendingMessageStore } from "../../src/core/pending-message-store.ts";
 import type { ChannelSendKind } from "../../src/channels/wechat/wechat-forwarding.ts";
 import type { SlotSessionRecord, SlotSessionStore } from "../../src/daemon/slot-session-store.ts";
+import { createMemorySlotPins } from "../../src/daemon/slot-pins.ts";
 
 beforeEach(() => setLocale("en"));
 
@@ -293,6 +294,9 @@ class FakeDaemonEnvironment {
     visibleClientConnectTimeoutMs: 50,
     fatalNoticeGraceMs: 0,
     slotSessions: new MemorySessionStore(),
+    // Auto sessions register into the pin store; keep it private per env so
+    // tests never write the user's real ~/.cli-bridge/pins.json.
+    slotPins: createMemorySlotPins(),
   };
 
   buildDaemon(channelId: "wecom" | "wechat" = "wecom"): BridgeDaemon {
@@ -1096,13 +1100,16 @@ describe("wechat-daemon handlers: state machine", () => {
     expect(result.reason).toBe("pending_approval");
     expect(result.message).toContain(pendingApproval.commandPreview);
     expect(env.runtime("codex").inputs).toHaveLength(1);
+    // Auto-session registration notices ride along the same queue; filter them
+    // out so the reminder assertions stay about the reminders.
+    const sent = env.wecom.sent.filter((m) => !m.text.includes("registered"));
     // sent[0] is the approval event itself, routed to the slot's own
     // conversation; the reminder for the second request goes to its own.
-    expect(env.wecom.sent).toHaveLength(2);
-    expect(env.wecom.sent[0]!.target.conversationId).toBe("conv-1");
-    expect(env.wecom.sent[0]!.kind).toBe("approval_required");
-    expect(env.wecom.sent[1]!.target.conversationId).toBe("conv-2");
-    expect(env.wecom.sent[1]!.kind).toBe("approval_required");
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.target.conversationId).toBe("conv-1");
+    expect(sent[0]!.kind).toBe("approval_required");
+    expect(sent[1]!.target.conversationId).toBe("conv-2");
+    expect(sent[1]!.kind).toBe("approval_required");
     // A declined forward must not claim the slot's conversation refs.
     expect(daemon.getSlotState("codex")?.activeConversationId).toBe("conv-1");
   });
@@ -1133,12 +1140,14 @@ describe("wechat-daemon handlers: state machine", () => {
     expect(result.message).toContain("waiting for an answer to Environment");
     expect(env.runtime("codex").inputs).toHaveLength(1);
     // sent[0] is the user-input event itself (slot's conversation); the
-    // reminder reaches the requesting conversation.
-    expect(env.wecom.sent).toHaveLength(2);
-    expect(env.wecom.sent[0]!.target.conversationId).toBe("conv-1");
-    expect(env.wecom.sent[0]!.kind).toBe("user_input_required");
-    expect(env.wecom.sent[1]!.target.conversationId).toBe("conv-2");
-    expect(env.wecom.sent[1]!.kind).toBe("user_input_required");
+    // reminder reaches the requesting conversation. Registration notices are
+    // filtered out.
+    const sent = env.wecom.sent.filter((m) => !m.text.includes("registered"));
+    expect(sent).toHaveLength(2);
+    expect(sent[0]!.target.conversationId).toBe("conv-1");
+    expect(sent[0]!.kind).toBe("user_input_required");
+    expect(sent[1]!.target.conversationId).toBe("conv-2");
+    expect(sent[1]!.kind).toBe("user_input_required");
   });
 
   test("reminds that the adapter is busy", async () => {
@@ -1161,8 +1170,9 @@ describe("wechat-daemon handlers: state machine", () => {
     expect(result.reason).toBe("busy");
     expect(result.message).toContain("is still working");
     expect(env.runtime("codex").inputs).toHaveLength(1);
-    expect(env.wecom.sent).toHaveLength(1);
-    expect(env.wecom.sent[0]!.target.conversationId).toBe("conv-2");
+    const busySent = env.wecom.sent.filter((m) => !m.text.includes("registered"));
+    expect(busySent).toHaveLength(1);
+    expect(busySent[0]!.target.conversationId).toBe("conv-2");
     expect(daemon.getSlotState("codex")?.activeConversationId).toBe("conv-1");
   });
 

@@ -4,6 +4,7 @@
 // This file is part of CLI-WeChat-Bridge. Modifications and derivative works
 // must be released under AGPL-3.0-or-later with full source code; see
 // LICENSE.txt. Network services built on it must offer source to users.
+import path from "node:path";
 import {
   sameSlotSession,
   toSlotSessionRecord,
@@ -23,7 +24,6 @@ import { TurnCoordinator } from "../core/turn-coordinator.ts";
 import { invalidateModelSnapshot } from "../bridge/adapter-control.ts";
 import type { BridgeChannelId, ChannelConversationRef } from "../core/channel-types.ts";
 import {
-  clearLocalCompanionEndpoint,
   readLocalCompanionEndpoint,
 } from "../companion/local-companion-link.ts";
 import type { DaemonAdapterKind } from "./daemon-link.ts";
@@ -83,9 +83,26 @@ export type SlotManagerHost = {
   isEphemeral: () => boolean;
   /** Called after a slot left the map (released or dead). */
   onSlotRemoved?: (slot: DaemonSlot) => void;
+  /** A brand-new window finished opening (activated); register it for routing. */
+  onSlotCreated?: (
+    slot: DaemonSlot,
+    info: { openedVisible: boolean; visibleReady: boolean },
+  ) => void;
   /** A new slot moved the bridge up a mode; tell the operator what opened up. */
   onModeUpgraded?: (mode: BridgeModeKind, slot: DaemonSlot) => void;
+  /**
+   * Shortest conversation tag currently bound to this slot (auto session or
+   * manual `/pin [tag]`), used to prefix its replies, or null.
+   */
+  sessionTagForSlot?: (slot: DaemonSlot) => string | null;
   daemonLog: (message: string) => void;
+  /**
+   * Long-running progress heartbeat: while a slot stays busy, a short
+   * "still working" summary is pushed to the operator every interval.
+   * Both are ms; defaults are 10 min and 5 min.
+   */
+  progressHeartbeatIntervalMs?: number;
+  progressHeartbeatMinBusyMs?: number;
 };
 
 /** How long a window-bound slot waits for its window to connect. */
@@ -121,12 +138,18 @@ export class SlotManager {
   private activeAdapterVersion = 0;
   takenOverAdapter?: DaemonAdapterKind;
   private readonly host: SlotManagerHost;
+  private readonly progressHeartbeatIntervalMs: number;
+  private readonly progressHeartbeatMinBusyMs: number;
+  private readonly heartbeatTimers = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly lastHeartbeatAt = new Map<string, number>();
 
   constructor(host: SlotManagerHost) {
     this.host = host;
     this.currentCwd = host.cwd;
     this.home = host.cwd;
     this.registeredWorkspaces.push(host.cwd);
+    this.progressHeartbeatIntervalMs = host.progressHeartbeatIntervalMs ?? 600_000;
+    this.progressHeartbeatMinBusyMs = host.progressHeartbeatMinBusyMs ?? 300_000;
   }
 
   /** Current workspace; falls back to the startup workspace once it is gone. */
@@ -235,11 +258,13 @@ export class SlotManager {
   }
 
   /**
-   * Prefix slot output with its source, e.g. `[codex]`, `[pi-1]`, or
-   * `[my-app/codex]`; a single bridge adds none.
+   * Prefix slot output with its source, e.g. `[codex]`, `[pi-1]`,
+   * `[my-app/codex]`, or `[passt-2]` when the slot has a conversation tag
+   * (auto session or `/pin [tag]`); a single bridge adds none.
    */
   prefix(slot: DaemonSlot, text: string): string {
-    const source = windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd));
+    const tag = this.host.sessionTagForSlot?.(slot) ?? null;
+    const source = tag ?? windowSourceName(this.mode, slot, this.allSlots(), (cwd) => this.workspaceLabel(cwd));
     return source ? prefixSourceMessage(source, text) : text;
   }
 
@@ -283,6 +308,7 @@ export class SlotManager {
       return; // Already replaced by a newer ensureSlot run.
     }
     this.slotMap.delete(key);
+    this.stopProgressHeartbeat(slot);
     if (
       this.activeAdapter === slot.adapter &&
       this.activeInstance === slot.instance &&
@@ -585,6 +611,9 @@ export class SlotManager {
     this.host.daemonLog(
       `switch_adapter: adapter=${adapter} instance=${instance} created=${created} opened_visible=${openedVisible} visible_connected=${visibleConnected} visible_ready=${visibleReady} activated=${activated} previous_active=${previousActiveAdapter ?? "(none)"} cwd=${cwd} session_start_mode=${sessionStartMode}`,
     );
+    if (created && activated) {
+      this.host.onSlotCreated?.(slot, { openedVisible, visibleReady });
+    }
     return {
       activeAdapter: adapter,
       cwd,
@@ -615,7 +644,10 @@ export class SlotManager {
       codexAttach?: { threadId?: string };
     },
   ): Promise<DaemonSlot> {
-    clearLocalCompanionEndpoint(cwd, undefined, { adapter, instance });
+    // Keep any persisted companion endpoint: the codex adapter reads it in
+    // startAppServer to adopt a surviving app-server (daemon restart) instead
+    // of spawning a second runtime. Dead endpoints are cleaned up by
+    // isVisibleClientAlive / the adapter's own companion-liveness check.
     // An explicit restore resumes the session this slot followed last time.
     const restored = options.sessionStartMode === "restore"
       ? this.host.sessions.read(cwd, adapter, instance)
@@ -684,7 +716,97 @@ export class SlotManager {
     this.host.daemonLog(
       `slot_started: adapter=${adapter} instance=${instance} command=${resolveDefaultAdapterCommand(adapter)} cwd=${cwd} session_start_mode=${options.sessionStartMode ?? "restore"}`,
     );
+    this.startProgressHeartbeat(slot);
+    void this.hydrateSlotSessionTitle(slot);
     return slot;
+  }
+
+  /**
+   * A window may carry its own session name (codex /rename). Read it once the
+   * window is connected and, when it differs from the cwd basename, re-run the
+   * auto-session registration so the [tag] follows the CLI's own name.
+   */
+  private async hydrateSlotSessionTitle(slot: DaemonSlot): Promise<void> {
+    const runtime = slot.runtime as { readCodexThreadTitle?: () => Promise<string | null> };
+    if (typeof runtime.readCodexThreadTitle !== "function") {
+      return;
+    }
+    try {
+      const title = await runtime.readCodexThreadTitle();
+      const cleaned = title?.replace(/\[|\]/g, "").trim();
+      if (!cleaned || cleaned === path.basename(slot.cwd)) {
+        return;
+      }
+      slot.sessionTitle = cleaned.slice(0, 20);
+      this.host.onSlotCreated?.(slot, { openedVisible: false, visibleReady: true });
+    } catch {
+      // Best effort: keep the cwd-basename tag when the title cannot be read.
+    }
+  }
+
+  /**
+   * A compact progress snapshot for one slot: how long the current run has
+   * been going and the most recent output summary. Used by status queries
+   * (`[tag]` bare lookups) and by the long-task heartbeat.
+   */
+  slotProgressSummary(slot: DaemonSlot): { runningForMs: number; recentText: string } {
+    const state = slot.runtime.getState();
+    const startedAtMs = state.startedAt ? Date.parse(state.startedAt) : slot.createdAtMs;
+    const runningForMs = Number.isFinite(startedAtMs) ? Math.max(0, Date.now() - startedAtMs) : 0;
+    return {
+      runningForMs,
+      recentText: slot.outputBatcher.getRecentSummary(140),
+    };
+  }
+
+  private startProgressHeartbeat(slot: DaemonSlot): void {
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    if (this.heartbeatTimers.has(key)) {
+      return;
+    }
+    const timer = setInterval(() => this.maybeSendProgressHeartbeat(slot), this.progressHeartbeatIntervalMs);
+    // setInterval returns a NodeJS.Timer on Node and a number in the DOM; keep
+    // whatever unref-style unwrapping the runtime expects. Do not unref here:
+    // the daemon must stay alive to deliver the heartbeat.
+    this.heartbeatTimers.set(key, timer);
+  }
+
+  private stopProgressHeartbeat(slot: DaemonSlot): void {
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    const timer = this.heartbeatTimers.get(key);
+    if (timer) {
+      clearInterval(timer);
+      this.heartbeatTimers.delete(key);
+      this.lastHeartbeatAt.delete(key);
+    }
+  }
+
+  private maybeSendProgressHeartbeat(slot: DaemonSlot): void {
+    const state = slot.runtime.getState();
+    if (state.status !== "busy") {
+      return;
+    }
+    const { runningForMs, recentText } = this.slotProgressSummary(slot);
+    if (runningForMs < this.progressHeartbeatMinBusyMs) {
+      return;
+    }
+    const key = slotKey(slot.cwd, slot.adapter, slot.instance);
+    const last = this.lastHeartbeatAt.get(key) ?? 0;
+    if (Date.now() - last < this.progressHeartbeatIntervalMs) {
+      return;
+    }
+    this.lastHeartbeatAt.set(key, Date.now());
+    void this.host.queueMessage(
+      this.host.operatorId,
+      this.prefix(
+        slot,
+        t("daemon.heartbeat", {
+          runningFor: formatDuration(runningForMs),
+          recentText: recentText || t("daemon.heartbeat.noRecent"),
+        }),
+      ),
+      "message",
+    );
   }
 
   async startFreshSlotSession(slot: DaemonSlot): Promise<void> {
