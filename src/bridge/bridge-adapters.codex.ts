@@ -43,6 +43,26 @@ import {
   type LocalClientEndpoint,
 } from "../runtime/runtime-types.ts";
 
+/**
+ * An app-server persisted by a previous daemon can be adopted (port/token
+ * reused, no new runtime spawned) only while its window's companion is still
+ * alive: the companion is the client keeping the app-server's task running,
+ * so a dead companion means the task process is gone and a fresh runtime is
+ * required.
+ */
+export function resolveAdoptableAppServer(
+  endpoint: LocalClientEndpoint | null,
+  isAlive: (pid: number) => boolean,
+): { port: number; token: string } | null {
+  if (!endpoint?.port || !endpoint.token || !endpoint.companionPid) {
+    return null;
+  }
+  if (!isAlive(endpoint.companionPid)) {
+    return null;
+  }
+  return { port: endpoint.port, token: endpoint.token };
+}
+
 type AdapterOptions = shared.AdapterOptions;
 type CodexActiveTurn = shared.CodexActiveTurn;
 type CodexPendingApprovalRequest = shared.CodexPendingApprovalRequest;
@@ -383,6 +403,18 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private resumeThreadId: string | null;
   private codexCliVersion: string | null = null;
   private readonly localClientInstanceId = `${process.pid}-${Date.now().toString(36)}`;
+  /**
+   * When set, dispose() detaches instead of tearing down: the app-server (the
+   * process actually running the task) and the visible companion survive so a
+   * daemon restart does not interrupt long tasks. The next daemon adopts the
+   * app-server from the persisted endpoint.
+   */
+  private detachOnDispose = false;
+  /**
+   * True when this adapter adopted an app-server spawned by a previous daemon
+   * (no owned child process; must never be killed or have its token deleted).
+   */
+  private detachedAppServer = false;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -396,9 +428,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       // persisted session ids must not leak into the attach target.
       this.resumeThreadId = options.codexAttachThreadId?.trim() || null;
     }
-    if (this.resumeThreadId && options.renderMode !== "panel") {
-      this.state.sharedSessionId = this.resumeThreadId;
+    if (this.resumeThreadId && options.renderMode !== "panel") {      this.state.sharedSessionId = this.resumeThreadId;
       this.state.sharedThreadId = this.resumeThreadId;
+    }
+  }
+
+  /** Ask this adapter to detach on dispose (daemon shutdown path). */
+  setDetachOnDispose(value: boolean): void {
+    this.detachOnDispose = value;
+  }
+
+  private isProcessAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "EPERM";
     }
   }
 
@@ -672,6 +717,28 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return { model: thread.model, effort: thread.reasoningEffort, collaborationMode: thread.collaborationMode };
   }
 
+  /**
+   * The window's own session name (set with codex /rename), or null when the
+   * running thread has no explicit name. Only the `name` field counts: the
+   * thread `preview` fallback would turn a [tag] into a moving content
+   * excerpt, which makes a terrible session label.
+   */
+  async readCodexThreadTitle(): Promise<string | null> {
+    if (!this.sharedThreadId || !this.usesRpcTurnTransport()) {
+      return null;
+    }
+    try {
+      const response = await this.sendRpcRequest("thread/read", {
+        threadId: this.sharedThreadId,
+        includeTurns: false,
+      });
+      const thread = isRecord(response) && isRecord(response.thread) ? response.thread : null;
+      return thread && typeof thread.name === "string" ? normalizeOutput(thread.name).trim() || null : null;
+    } catch {
+      return null;
+    }
+  }
+
   override async interrupt(): Promise<boolean> {
     if (this.usesRpcTurnTransport()) {
       return await this.interruptPanelTurn();
@@ -741,6 +808,13 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async dispose(): Promise<void> {
+    if (this.detachOnDispose) {
+      // Daemon shutdown: leave the window (companion/TUI) and its app-server
+      // running so long tasks survive the bridge restart. The next daemon
+      // adopts the app-server from the persisted endpoint.
+      this.detachOnDispose = false;
+      return;
+    }
     await this.shutdownVisibleClient();
     this.resetTurnTracking({ preserveThread: false });
     if (this.isEmbeddedCliMode()) {
@@ -1779,6 +1853,33 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   private async startAppServer(): Promise<void> {
     if (this.appServer) {
+      return;
+    }
+
+    // Adopt a surviving app-server from a previous daemon: when the window's
+    // companion is still alive it is connected to the app-server that is
+    // actually running the task, so reuse its port/token instead of spawning a
+    // second runtime (which would orphan the running task).
+    const existing = readLocalCompanionEndpoint(this.options.cwd, {
+      adapter: "codex",
+      instance: this.options.slotInstance,
+    });
+    const adopt = resolveAdoptableAppServer(existing, (pid) => this.isProcessAlive(pid));
+    appendBridgeLog(
+      BRIDGE_LOG_FILE,
+      `[codex-adopt] cwd=${this.options.cwd} instance=${this.options.slotInstance ?? 1} ` +
+        `endpoint=${existing ? JSON.stringify({ port: existing.port, companionPid: existing.companionPid }) : "null"} ` +
+        `companionAlive=${existing?.companionPid ? this.isProcessAlive(existing.companionPid) : "n/a"} adopt=${adopt ? "yes" : "no"}\n`,
+    );
+    if (adopt) {
+      this.appServerPort = adopt.port;
+      this.appServerAuthToken = adopt.token;
+      this.appServer = null;
+      this.detachedAppServer = true;
+      this.appServerShuttingDown = false;
+      this.appServerLog = "";
+      // The token file belongs to the surviving runtime; never delete it.
+      this.appServerAuthTokenFilePath = null;
       return;
     }
 
@@ -4215,6 +4316,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async stopAppServer(): Promise<void> {
+    if (this.detachedAppServer) {
+      // Adopted from a surviving window: keep the process and its token file
+      // so the next daemon restart can adopt it again. Only drop this
+      // adapter's handle on them.
+      this.detachedAppServer = false;
+      this.appServerPort = null;
+      this.appServerAuthToken = null;
+      this.appServerAuthTokenFilePath = null;
+      return;
+    }
     const visibleThreadProxy = this.visibleThreadProxy;
     this.visibleThreadProxy = null;
     await visibleThreadProxy?.close();
