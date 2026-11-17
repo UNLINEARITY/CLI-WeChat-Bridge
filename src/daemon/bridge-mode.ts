@@ -9,13 +9,13 @@ import { isSameWorkspace } from "./daemon-slot.ts";
 
 /**
  * How much of the multi-bridge surface the daemon exposes. A bridge starts
- * clean (`single`) and only ever moves up, until the daemon exits:
+ * clean (`single`) and follows the windows that remain open:
  * - `single` (L0): one window; no addressing, no prefix.
  * - `multi_type` (L1): several CLI types in the anchor workspace, one each.
  * - `multi_instance` (L2): several windows of one CLI type in the anchor
  *   workspace, addressed by number.
  * - `multi_workspace` (L3): no limits; workspace, CLI type, and number.
- * L1 and L2 never mix; a window in another workspace leads to L3.
+ * L1 and L2 do not mix; a window in another workspace leads to L3.
  */
 export type BridgeMode =
   | { kind: "none" }
@@ -118,16 +118,29 @@ export function admitWindow(
   }
 }
 
-/**
- * Mode once a window closed. Modes never step down while the daemon runs;
- * only a resident daemon whose last window closed starts over.
- */
+/** Recompute the mode from remaining windows, including in-flight opens. */
 export function modeAfterWindowClosed(
   mode: BridgeMode,
-  remainingWindows: number,
+  windows: readonly BridgeWindow[],
   resident: boolean,
 ): BridgeMode {
-  return resident && remainingWindows === 0 ? NO_BRIDGE_MODE : mode;
+  const first = windows[0];
+  if (!first) return resident ? NO_BRIDGE_MODE : mode;
+  if (windows.some((window) => !isSameWorkspace(window.cwd, first.cwd))) {
+    return { kind: "multi_workspace" };
+  }
+  if (windows.length === 1) {
+    return { kind: "single", anchorCwd: first.cwd, adapter: first.adapter };
+  }
+  if (windows.every((window) => window.adapter === first.adapter)) {
+    return { kind: "multi_instance", anchorCwd: first.cwd, adapter: first.adapter };
+  }
+  // L3 may have admitted several types and repeated instances in one cwd.
+  // Keep its addressing until that combination can fit L1 or L2 again.
+  if (new Set(windows.map((window) => window.adapter)).size < windows.length) {
+    return { kind: "multi_workspace" };
+  }
+  return { kind: "multi_type", anchorCwd: first.cwd };
 }
 
 export type ModeCommand = "cd" | "all" | "instance" | "open";

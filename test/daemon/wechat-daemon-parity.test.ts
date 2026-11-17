@@ -17,6 +17,7 @@ import type {
   BridgeEvent,
 } from "../../src/bridge/bridge-types.ts";
 import type { DaemonAdapterKind } from "../../src/daemon/daemon-link.ts";
+import type { SlotManager } from "../../src/daemon/slot-manager.ts";
 import {
   BridgeDaemon,
   type BridgeDaemonDeps,
@@ -103,7 +104,9 @@ class FakeRuntime implements BridgeAdapter {
     return [];
   }
 
-  async resumeSession(): Promise<void> {}
+  async resumeSession(sessionId: string): Promise<void> {
+    this.state = { ...this.state, sharedThreadId: sessionId };
+  }
 
   async interrupt(): Promise<boolean> {
     return true;
@@ -287,7 +290,7 @@ describe("daemon behaviors kept after the standalone merge", () => {
     expect(env.latest()).not.toBe(first);
   });
 
-  test("keeps a persistent daemon running when a slot requests shutdown", async () => {
+  test("releases a remotely opened window on shutdown while keeping the resident daemon running", async () => {
     const env = new Env();
     const daemon = env.buildDaemon();
     await send(daemon, "/claude");
@@ -303,7 +306,7 @@ describe("daemon behaviors kept after the standalone merge", () => {
       slots: Map<DaemonAdapterKind, unknown>;
     };
     expect(internal.shutdownPromise).toBeNull();
-    expect(internal.slots.has("claude")).toBe(true);
+    expect(internal.slots.has("claude")).toBe(false);
   });
 
   test("answers an unauthorized sender without dispatching", async () => {
@@ -860,28 +863,49 @@ describe("progressive bridge modes", () => {
     expect(env.texts().at(-1)).toContain("other-app/codex joined");
   });
 
-  test("closing windows never steps down; a resident daemon left empty starts over", async () => {
+  test("closing other CLI types restores single mode and /open; a resident daemon left empty starts over", async () => {
     const env = new Env();
     env.allAlive = false;
     const daemon = env.buildDaemon();
-    await launcherSlot(daemon, TEST_CWD, "pi");
-    env.alive.add(`${TEST_CWD}|pi`);
-    await launcherSlot(daemon, TEST_CWD, "codex");
-    env.alive.add(`${TEST_CWD}|codex`);
-    const slots = (daemon as unknown as {
-      slotManager: { releaseClosedWindows(nowMs?: number): void };
-    }).slotManager;
+    await send(daemon, "/pi");
+    await send(daemon, "/codex");
+    const slots = (daemon as unknown as { slotManager: SlotManager }).slotManager;
     slots.releaseClosedWindows();
 
     env.alive.delete(`${TEST_CWD}|codex`);
     slots.releaseClosedWindows();
     slots.releaseClosedWindows();
-    expect(status(daemon)).toBe("multi_type");
+    expect(status(daemon)).toBe("single");
+    expect(daemon.getStatus().activeAdapter).toBe("pi");
+    await send(daemon, "/open");
+    expect(status(daemon)).toBe("multi_instance");
+    expect(env.latest().state.kind).toBe("pi");
+    slots.releaseSlot(slots.getActiveSlot()!);
+    await tick(20);
+    expect(status(daemon)).toBe("single");
 
     env.alive.delete(`${TEST_CWD}|pi`);
     slots.releaseClosedWindows();
     slots.releaseClosedWindows();
     expect(status(daemon)).toBe("none");
+  });
+
+  test("closing the last other workspace restores numbered mode and keeps the remaining workspace active", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    await send(daemon, "/open");
+    await launcherSlot(daemon, OTHER_CWD, "codex");
+    const other = env.latest();
+    await send(daemon, "/cd other-app");
+    expect(status(daemon)).toBe("multi_workspace");
+    windowClosed(other);
+    await tick(20);
+    expect(status(daemon)).toBe("multi_instance");
+    expect(daemon.getStatus().cwd).toBe(TEST_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("pi");
+    await send(daemon, "/1 task after downgrade");
+    expect(env.created[0]!.inputs).toEqual(["task after downgrade"]);
   });
 });
 
@@ -978,6 +1002,238 @@ describe("remote commands per bridge mode", () => {
     expect(status).toContain("Mode: single bridge");
     expect(status).toContain("pi: ");
     expect(status).not.toContain("codex");
+  });
+});
+
+describe("pin the current window", () => {
+  test("requires a current window, rejects arguments, and allows repeated unpin", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pin");
+    expect(env.texts().at(-1)).toContain("No active terminal");
+    for (const command of ["/pin codex-2", "/pin [A]", "/unpin extra"]) {
+      await send(daemon, command);
+      expect(env.texts().at(-1)).toContain("Neither command takes arguments");
+    }
+    await send(daemon, "/unpin");
+    await send(daemon, "/unpin");
+    expect(env.texts().at(-1)).toContain("Unpinned");
+    expect(env.created).toEqual([]);
+  });
+
+  test("keeps the numbered window across local switches; unpin follows the active workspace", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const first = env.latest();
+    await send(daemon, "/open");
+    const pinned = env.latest();
+    await send(daemon, " /PIN ");
+    expect(env.texts().at(-1)).toContain("Pinned to pi-2");
+
+    await openWorkspaceSlot(daemon, OTHER_CWD, "claude");
+    const other = env.latest();
+    (daemon as unknown as { slotManager: SlotManager }).slotManager.switchWorkspace(OTHER_CWD);
+    await send(daemon, "/pin");
+    expect(env.texts().at(-1)).toContain("pi-2");
+    await send(daemon, "stay here");
+    expect(pinned.inputs).toEqual(["stay here"]);
+    expect(first.inputs).toEqual([]);
+    expect(other.inputs).toEqual([]);
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("claude");
+
+    pinned.emit(event("final_reply", { text: "Pinned reply." }));
+    await tick(20);
+    expect(env.texts().at(-1)).toBe("[daemon-parity/pi-2]\nPinned reply.");
+
+    await send(daemon, "/UNPIN");
+    await send(daemon, "follow active");
+    expect(other.inputs).toEqual(["follow active"]);
+    expect(pinned.inputs).toEqual(["stay here"]);
+  });
+
+  test("numbered messages override the pin for one message; bare switches leave the pin unchanged", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const pinned = env.latest();
+    await send(daemon, "/pin");
+    await send(daemon, "/open");
+    const second = env.latest();
+    await send(daemon, "/2 task for second");
+    expect(second.inputs).toEqual(["task for second"]);
+    expect(pinned.inputs).toEqual([]);
+    await send(daemon, "/1");
+    expect(daemon.getStatus().activeInstance ?? 1).toBe(1);
+    await send(daemon, "/2");
+    expect(daemon.getStatus().activeInstance).toBe(2);
+    await send(daemon, "default task");
+    expect(pinned.inputs).toEqual(["default task"]);
+    expect(second.inputs).toEqual(["task for second"]);
+    second.emit(event("task_complete", {}));
+    await tick(20);
+    await send(daemon, "/2 another task while the pin is busy");
+    expect(second.inputs.at(-1)).toBe("another task while the pin is busy");
+    expect(pinned.inputs).toEqual(["default task"]);
+    await send(daemon, "/3 missing target");
+    expect(env.texts().at(-1)).toContain("There is no pi-3");
+    expect(env.created).toHaveLength(2);
+  });
+
+  test("numbered control commands apply to the explicit window while plain controls use the pin", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const pinned = env.latest();
+    await send(daemon, "/pin");
+    await send(daemon, "/open");
+    const second = env.latest();
+    second.state = { ...second.state, pendingApproval: approvalRequest, status: "awaiting_approval" };
+    second.emit(event("approval_required", { request: approvalRequest }));
+    await tick(20);
+    await send(daemon, "/2 /confirm");
+    expect(second.approvals).toEqual(["confirm"]);
+    expect(pinned.approvals).toEqual([]);
+    let pinnedStopped = false;
+    pinned.interrupt = async () => { pinnedStopped = true; return true; };
+    await send(daemon, "/stop");
+    expect(pinnedStopped).toBe(true);
+  });
+
+  test("CLI and emoji destinations, workspace switching and broadcast remain available while pinned", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const pinned = env.latest();
+    await send(daemon, "/pin");
+    await send(daemon, "/claude task for Claude");
+    const claude = env.latest();
+    expect(claude.inputs).toEqual(["task for Claude"]);
+    expect(pinned.inputs).toEqual([]);
+    claude.emit(event("task_complete", {}));
+    await tick(20);
+    await send(daemon, "[拥抱] emoji task");
+    expect(claude.inputs).toEqual(["task for Claude", "emoji task"]);
+    claude.emit(event("task_complete", {}));
+    await tick(20);
+    await send(daemon, "/all shared task");
+    expect(claude.inputs.at(-1)).toBe("shared task");
+    expect(pinned.inputs).toEqual(["shared task"]);
+    pinned.emit(event("task_complete", {}));
+    await tick(20);
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    const other = env.latest();
+    await send(daemon, "/cd other-app");
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    await send(daemon, "/codex task in other workspace");
+    expect(other.inputs).toEqual(["task in other workspace"]);
+    await send(daemon, "back to pin");
+    expect(pinned.inputs.at(-1)).toBe("back to pin");
+    expect(other.inputs).toEqual(["task in other workspace"]);
+  });
+
+  test("approvals and answers use the pinned window after a local switch", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/claude");
+    const pinned = env.latest();
+    await send(daemon, "/pin");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "codex");
+    const other = env.latest();
+    (daemon as unknown as { slotManager: SlotManager }).slotManager.switchWorkspace(OTHER_CWD);
+
+    pinned.state = { ...pinned.state, pendingApproval: approvalRequest, status: "awaiting_approval" };
+    pinned.emit(event("approval_required", { request: approvalRequest }));
+    await tick(20);
+    await send(daemon, "/confirm");
+    expect(pinned.approvals).toEqual(["confirm"]);
+    expect(other.approvals).toEqual([]);
+
+    pinned.state = { ...pinned.state, pendingUserInput: questionRequest, status: "awaiting_input" };
+    pinned.emit(event("user_input_required", { request: questionRequest }));
+    await tick(20);
+    await send(daemon, "/answer staging");
+    expect(pinned.answers).toEqual([{ env: ["staging"] }]);
+    expect(other.answers).toEqual([]);
+  });
+
+  test("a closed pin does not target a replacement window with the same number", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    const original = env.latest();
+    await send(daemon, "/pin");
+    windowClosed(original);
+    await tick(20);
+    await launcherSlot(daemon, TEST_CWD, "pi");
+    const replacement = env.latest();
+
+    await send(daemon, "/pi explicitly addressed");
+    expect(replacement.inputs).toEqual(["explicitly addressed"]);
+    replacement.emit(event("task_complete", {}));
+    await tick(20);
+    await send(daemon, "do not misroute");
+    expect(env.texts().at(-1)).toContain("this message was not forwarded");
+    expect(original.inputs).toEqual([]);
+    expect(replacement.inputs).toEqual(["explicitly addressed"]);
+    await send(daemon, "resend after notice");
+    expect(replacement.inputs).toEqual(["explicitly addressed", "resend after notice"]);
+  });
+
+  test("Codex resume and stop target the pinned instance without moving the active workspace", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/codex");
+    const first = env.latest();
+    await send(daemon, "/open");
+    const pinned = env.latest();
+    await send(daemon, "/pin");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "claude");
+    (daemon as unknown as { slotManager: SlotManager }).slotManager.switchWorkspace(OTHER_CWD);
+    let interrupted = false;
+    pinned.interrupt = async () => { interrupted = true; return true; };
+
+    await send(daemon, "/resume saved-thread");
+    expect(pinned.state.sharedThreadId).toBe("saved-thread");
+    expect(first.state.sharedThreadId).toBe("thread-visible");
+    expect(env.created).toHaveLength(3);
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    expect(daemon.getStatus().activeAdapter).toBe("claude");
+    await send(daemon, "/stop");
+    expect(interrupted).toBe(true);
+  });
+
+  test("unauthorized senders cannot pin or unpin", async () => {
+    const env = new Env();
+    const daemon = env.buildDaemon();
+    await send(daemon, "/pi");
+    const first = env.latest();
+    await send(daemon, "/pin", "stranger");
+    await openWorkspaceSlot(daemon, OTHER_CWD, "claude");
+    const pinned = env.latest();
+    await send(daemon, "/cd other-app");
+    expect(daemon.getStatus().cwd).toBe(OTHER_CWD);
+    await send(daemon, "/pin");
+    await send(daemon, "/unpin", "stranger");
+    (daemon as unknown as { slotManager: SlotManager }).slotManager.switchWorkspace(TEST_CWD);
+    await send(daemon, "authorized task");
+    expect(pinned.inputs).toEqual(["authorized task"]);
+    expect(first.inputs).toEqual([]);
+  });
+
+  test("pinning an attached Codex slot does not open a visible client", async () => {
+    const env = new Env();
+    env.allAlive = false;
+    const daemon = env.buildDaemon();
+    await daemon.handleDaemonRequest({
+      command: "ensure_slot", adapter: "codex", cwd: TEST_CWD,
+      openVisible: false, codexAttach: { threadId: "attached-thread" },
+    });
+    await send(daemon, "/pin");
+    await send(daemon, "attached task");
+    expect(env.latest().inputs).toEqual(["attached task"]);
+    expect(env.opened).toEqual([]);
   });
 });
 

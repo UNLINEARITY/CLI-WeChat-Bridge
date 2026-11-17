@@ -39,7 +39,7 @@ function fakeRuntime(options: AdapterOptions): BridgeAdapter {
   } as unknown as BridgeAdapter;
 }
 
-function buildManager() {
+function buildManager(onVisibleProbe?: (manager: SlotManager) => void) {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "slot-instances-"));
   tempDirectories.push(cwd);
   const created: AdapterOptions[] = [];
@@ -52,7 +52,10 @@ function buildManager() {
       created.push(options);
       return fakeRuntime(options);
     },
-    isVisibleClientAlive: () => true,
+    isVisibleClientAlive: () => {
+      onVisibleProbe?.(manager);
+      return true;
+    },
     openVisibleClient: () => ({ command: "fake", args: [] }),
     queueMessage: async () => true,
     resolveSlotOutputTarget: () => ({ channelId: "wechat", conversationId: "operator" }) as never,
@@ -71,6 +74,23 @@ function buildManager() {
 }
 
 describe("SlotManager numbered instances", () => {
+  test("a window closing during another open counts the opening slot only once", async () => {
+    let closeOther = false;
+    const { cwd, manager } = buildManager((slots) => {
+      if (!closeOther) return;
+      closeOther = false;
+      expect(slots.windows()).toHaveLength(2);
+      slots.releaseSlot(slots.getSlot(slots.activeCwd, "claude")!);
+      expect(slots.mode.kind).toBe("single");
+    });
+    await manager.ensureSlot("claude", { cwd, openVisible: false });
+    closeOther = true;
+    await manager.ensureSlot("pi", { cwd, openVisible: false });
+    expect(manager.windows()).toEqual([{ cwd, adapter: "pi", instance: 1 }]);
+    expect(manager.mode.kind).toBe("single");
+    expect(manager.getActiveSlot()?.adapter).toBe("pi");
+  });
+
   test("keeps two instances of one adapter side by side", async () => {
     const { cwd, manager, created } = buildManager();
     const first = await manager.ensureSlot("pi", { cwd, openVisible: false });

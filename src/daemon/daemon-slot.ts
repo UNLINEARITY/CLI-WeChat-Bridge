@@ -41,7 +41,7 @@ export type DaemonSlot = {
   instance: number;
   /** First thread seen for this slot; its opening is not announced. */
   knownThreadId?: string;
-  /** The slot ends when its visible window closes (launcher or ephemeral daemon). */
+  /** The slot ends when its visible window closes. */
   boundToWindow: boolean;
   /** Attached to a live Codex shared-daemon thread; the owning TUI keeps it. */
   attached: boolean;

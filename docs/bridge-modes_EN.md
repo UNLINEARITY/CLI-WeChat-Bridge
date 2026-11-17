@@ -23,9 +23,14 @@ stateDiagram-v2
     L0 --> L3: another directory
     L1 --> L3: another directory
     L2 --> L3: another directory
+    L1 --> L0: one window left
+    L2 --> L0: one window left
+    L3 --> L0: one window left
+    L3 --> L1: one directory, one of each type
+    L3 --> L2: one directory, one type
 ```
 
-The diagram shows three rules: L1 and L2 are two directions out of L0 and never turn into each other; any level moves to L3 once a window opens in another directory; every arrow points up, so there is no step down.
+L1 and L2 are two directions out of L0. Opening a window in another directory leads to L3. Closing windows adjusts the mode: one remaining window returns to L0, and one remaining directory returns to L1 or L2 when those addressing rules fit.
 
 ## L0 single bridge
 
@@ -136,7 +141,7 @@ Replies are labeled `[directory/CLI]`, with a number when one directory runs a C
 | L2 | Open another CLI type | Refused; the terminal suggests another directory, or closing those windows first |
 | Any | Open a window in another directory | Allowed; moves to L3 |
 
-**One-way upgrades.** Closing windows never steps the bridge down, so the commands and labels you see in the chat do not keep changing. With one window left in L2, replies still read `[pi-1]`.
+**Automatic downgrade.** One remaining window returns to L0, with bare replies and `/open` available again. Several windows of one type in one directory return to L2; different types with one window each return to L1. If one directory still holds several CLI types and repeated instances, L3 keeps its unrestricted addressing until L1 or L2 fits. Window numbers stay unchanged. Closing the active window selects a remaining window automatically.
 
 **The lifecycle decides when to start over.**
 

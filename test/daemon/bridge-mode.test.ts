@@ -101,14 +101,25 @@ describe("nextInstance", () => {
 });
 
 describe("modeAfterWindowClosed", () => {
-  test("never steps down while windows remain", () => {
-    expect(modeAfterWindowClosed(multiInstance, 1, false)).toEqual(multiInstance);
-    expect(modeAfterWindowClosed(multiType, 1, true)).toEqual(multiType);
+  test("one remaining window returns to single mode without renumbering it", () => {
+    const windows: BridgeWindow[] = [{ cwd: A, adapter: "pi", instance: 2 }];
+    expect(modeAfterWindowClosed(multiInstance, windows, false)).toEqual(single);
+    expect(modeAfterWindowClosed(multiType, windows, true)).toEqual(single);
+  });
+
+  test("remaining windows select multi-instance, multi-CLI or multi-workspace addressing", () => {
+    const pi: BridgeWindow = { cwd: A, adapter: "pi", instance: 1 };
+    const pi2: BridgeWindow = { ...pi, instance: 2 };
+    const codex: BridgeWindow = { cwd: A, adapter: "codex", instance: 1 };
+    expect(modeAfterWindowClosed(multiWorkspace, [pi, pi2], true)).toEqual(multiInstance);
+    expect(modeAfterWindowClosed(multiWorkspace, [pi, codex], true)).toEqual(multiType);
+    expect(modeAfterWindowClosed(multiWorkspace, [pi, pi2, codex], true)).toEqual(multiWorkspace);
+    expect(modeAfterWindowClosed(multiWorkspace, [pi, { ...codex, cwd: B }], true)).toEqual(multiWorkspace);
   });
 
   test("a resident daemon starts over once its last window closed", () => {
-    expect(modeAfterWindowClosed(multiWorkspace, 0, true)).toEqual(NO_BRIDGE_MODE);
-    expect(modeAfterWindowClosed(multiWorkspace, 0, false)).toEqual(multiWorkspace);
+    expect(modeAfterWindowClosed(multiWorkspace, [], true)).toEqual(NO_BRIDGE_MODE);
+    expect(modeAfterWindowClosed(multiWorkspace, [], false)).toEqual(multiWorkspace);
   });
 });
 

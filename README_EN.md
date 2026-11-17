@@ -53,7 +53,7 @@ The local CLI remains the primary workspace:
 
 ### Progressive bridge modes
 
-The bridge starts as a clean single bridge: with one CLI, replies carry no labels and the chat shows only single-CLI commands. It then grows with the windows you open on your computer: another CLI type in the same directory leads to L1 several CLIs, the same CLI again to L2 several windows of one CLI, and a window in another directory to L3 several directories; upgrades never step back down. See [Progressive bridge modes](docs/bridge-modes_EN.md) for each level's diagram, commands, and rules, and [section 6](#progressive-modes) for a quick reference.
+The bridge starts as a clean single bridge: with one CLI, replies carry no labels and the chat shows only single-CLI commands. It then grows with the windows you open on your computer: another CLI type in the same directory leads to L1 several CLIs, the same CLI again to L2 several windows of one CLI, and a window in another directory to L3 several directories; closing windows adjusts the mode to the windows that remain. See [Progressive bridge modes](docs/bridge-modes_EN.md) for each level's diagram, commands, and rules, and [section 6](#progressive-modes) for a quick reference.
 
 ```mermaid
 stateDiagram-v2
@@ -428,6 +428,7 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/all <prompt>` | Daemon (several CLIs, several windows, several directories) | Send the same prompt to every started window in the current directory; unstarted CLIs are skipped, and the whole dispatch is canceled if any window is busy |
 | `/open` | Daemon (single bridge, several windows, several directories) | Open another window of the current CLI in the current directory |
 | `/1`, `/2`, … (optional prompt) | Daemon (several windows, several directories) | Switch to that numbered window of the current CLI; an optional prompt is forwarded after the switch |
+| `/pin`, `/unpin` | Direct launch, daemon | `/pin` fixes one default window per bridge for messages and controls without an explicit destination. `/2 <prompt>`, `/codex <prompt>`, and similar commands still reach the specified window; subsequent plain messages keep using the pin. Switching windows, opening windows, and `/all` remain available. Repeating `/pin` keeps the pin; `/unpin` follows the active window again. Pins do not survive daemon restart. If the pinned window closes, the next message without a destination clears the pin with a notice and is not forwarded; resend it after selecting a window |
 | `/status` | Direct launch, daemon | Show bridge, daemon, adapter, and workspace state |
 | `/lang`, `/lang zh`, `/lang en` | Direct launch, daemon | View or switch Chinese/English bridge messages; applies immediately and saves the preference. `/language` is an alias |
 | `/model`, `/model <number>` | Codex, Claude Code, OpenCode, Pi | List and switch models for the current session; numbered lists expire after 5 minutes |

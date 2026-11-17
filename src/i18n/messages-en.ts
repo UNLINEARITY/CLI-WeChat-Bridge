@@ -102,6 +102,10 @@ export const messages: Record<string, string> = {
   "daemon.welcome.single": "{channel} bridge ready.\nCWD: {cwd}\n\nCommands: /stop, /status, /model, /plan, /resume, /new, /confirm, /deny, /answer, /auto, /lang [zh|en]",
   "daemon.welcome.service": "{channel} service ready.\nCWD: {cwd}\n\nSend /codex, /claude, /opencode, or /pi to open a CLI in that directory, or run a {launcher} command in any directory on this computer.\nCommands: /stop, /status, /model, /plan, /resume, /new, /confirm, /deny, /answer, /auto, /lang [zh|en]",
   "daemon.noActiveAdapter": "No active terminal is selected. Send /codex, /claude, /opencode, or /pi to start one.",
+  "daemon.pin.set": "Pinned to {source}.\nCWD: {cwd}\nMessages without a destination go here. /1, /2, and other explicit destinations still work. Send /unpin to follow the active window again.",
+  "daemon.pin.cleared": "Unpinned. Messages now follow the active window.",
+  "daemon.pin.closed": "The pinned window closed. The pin was cleared; this message was not forwarded. Select a window and resend it.",
+  "daemon.pin.usage": "Use /pin to pin the current window, or /unpin to follow the active window. Neither command takes arguments.",
   "daemon.switchResult.new": "Started a new visible CLI.",
   "daemon.switchResult.reused": "Reused the existing visible CLI.",
 

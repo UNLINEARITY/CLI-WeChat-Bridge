@@ -76,6 +76,7 @@ export type InboundRouterHost = {
 /** Routes inbound channel messages and forwarded input to daemon slots. */
 export class InboundRouter {
   private readonly host: InboundRouterHost;
+  private pinnedSlot: DaemonSlot | null = null;
 
   constructor(host: InboundRouterHost) {
     this.host = host;
@@ -290,6 +291,35 @@ export class InboundRouter {
     });
   }
 
+  /** One in-memory pin per bridge; never reuse a replacement slot's identity. */
+  private async handlePinCommand(message: BridgeInboundMessage): Promise<boolean> {
+    const text = message.text.trim();
+    const command = text.match(/^\/(pin|unpin)(?:\s+([\s\S]+))?$/i);
+    if (!command) return false;
+    if (command[2]) {
+      await this.host.queueMessage(message.senderId, t("daemon.pin.usage"));
+      return true;
+    }
+    if (command[1]?.toLowerCase() === "unpin") {
+      this.pinnedSlot = null;
+      await this.host.queueMessage(message.senderId, t("daemon.pin.cleared"));
+      return true;
+    }
+
+    const slots = this.host.slotManager;
+    const pinned = this.pinnedSlot;
+    const slot = pinned && slots.getSlot(pinned.cwd, pinned.adapter, pinned.instance) === pinned
+      ? pinned : slots.getActiveSlot();
+    this.pinnedSlot = slot;
+    if (slot) {
+      this.bindCurrentConversation(slot);
+    }
+    await this.host.queueMessage(message.senderId, slot
+      ? t("daemon.pin.set", { source: slots.slotSourceName(slot), cwd: slot.cwd })
+      : formatNoActiveAdapterMessage());
+    return true;
+  }
+
   /**
    * `/open` opens another window of the current CLI in the current
    * directory; `/2` switches to that numbered window. Returns the message to
@@ -359,12 +389,18 @@ export class InboundRouter {
 
     this.logInboundCommand(message.text);
 
+    if (await this.handlePinCommand(message)) {
+      return;
+    }
+
     const languageCommand = parseBridgeControlCommand(message.text);
     if (languageCommand?.type === "language") {
       await this.host.controls.handleLanguageCommand(message.senderId, languageCommand.target);
       return;
     }
 
+    // An explicit destination applies to this message without changing the pin.
+    let addressedSlot: DaemonSlot | null = null;
     const emojiMatch = resolveEmojiCommand(message.text);
     if (emojiMatch) {
       const switchTarget = parseDaemonSwitchCommand(emojiMatch.command);
@@ -374,7 +410,8 @@ export class InboundRouter {
           reuseExistingVisible: true,
         });
         if (result.activated) {
-          this.bindCurrentConversation(this.host.slotManager.getActiveSlot());
+          addressedSlot = this.host.slotManager.getActiveSlot();
+          this.bindCurrentConversation(addressedSlot);
           message = { ...message, text: emojiMatch.remainder };
         } else {
           await this.host.queueMessage(
@@ -396,6 +433,7 @@ export class InboundRouter {
       return;
     }
     if (afterInstanceCommand) {
+      addressedSlot = this.host.slotManager.getActiveSlot();
       message = afterInstanceCommand;
     }
 
@@ -412,6 +450,7 @@ export class InboundRouter {
       const detail = formatDaemonSwitchResultDetail(result);
       this.bindCurrentConversation(this.host.slotManager.getActiveSlot());
       if (switchDirective.remainder) {
+        addressedSlot = this.host.slotManager.getActiveSlot();
         message = { ...message, text: switchDirective.remainder };
       } else {
         await this.host.queueMessage(
@@ -463,7 +502,13 @@ export class InboundRouter {
       return;
     }
 
-    let slot = this.host.slotManager.getActiveSlot();
+    const pinned = this.pinnedSlot;
+    if (!addressedSlot && pinned && this.host.slotManager.getSlot(pinned.cwd, pinned.adapter, pinned.instance) !== pinned) {
+      this.pinnedSlot = null;
+      await this.host.queueMessage(message.senderId, t("daemon.pin.closed"));
+      return;
+    }
+    let slot = addressedSlot ?? pinned ?? this.host.slotManager.getActiveSlot();
     if (!slot) {
       // Approvals and answers also work without a current terminal: the
       // request may be waiting in another workspace.
@@ -566,7 +611,8 @@ export class InboundRouter {
       command ||
       slot.pendingConfirmations.length > 0 ||
       slot.pendingUserInput ||
-      slotState.status === "awaiting_input"
+      slotState.status === "awaiting_input" ||
+      this.pinnedSlot
     ) {
       await routeCurrentMessage(slot, command);
       return;

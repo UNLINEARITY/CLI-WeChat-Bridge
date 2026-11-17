@@ -113,7 +113,7 @@ export class SlotManager {
   private readonly reservedWindows: BridgeWindow[] = [];
   /** Worker instance numbers whose slot is still being created. */
   private readonly reservedWorkers: BridgeWindow[] = [];
-  /** How much of the multi-bridge surface is exposed; only moves up. */
+  /** Addressing mode for the windows currently held or opening. */
   mode: BridgeMode = NO_BRIDGE_MODE;
   private currentCwd: string;
   /** Home workspace: the current one while no window is open. */
@@ -178,7 +178,7 @@ export class SlotManager {
   windows(): BridgeWindow[] {
     return [
       ...this.allSlots().map(({ cwd, adapter, instance }) => ({ cwd, adapter, instance })),
-      ...this.reservedWindows,
+      ...this.reservedWindows.filter(({ cwd, adapter, instance }) => !this.getSlot(cwd, adapter, instance)),
     ];
   }
 
@@ -317,13 +317,19 @@ export class SlotManager {
       this.activeAdapter = null;
     }
     this.host.daemonLog(`${event}: adapter=${slot.adapter} instance=${slot.instance} cwd=${slot.cwd}`);
-    const mode = slot.worker ? this.mode : modeAfterWindowClosed(this.mode, this.windows().length, !this.host.isEphemeral());
-    if (mode !== this.mode) {
-      // A resident daemon left without windows starts over from its home.
-      this.host.daemonLog(`bridge_mode_reset: from=${this.mode.kind}`);
+    if (!slot.worker) {
+      const mode = modeAfterWindowClosed(this.mode, this.windows(), !this.host.isEphemeral());
+      if (mode.kind !== this.mode.kind) {
+        this.host.daemonLog(`bridge_mode_changed: from=${this.mode.kind} to=${mode.kind}`);
+      }
       this.mode = mode;
-      this.currentCwd = this.home;
-      this.activeAdapter = null;
+      if (mode.kind === "none") {
+        this.currentCwd = this.home;
+        this.activeAdapter = null;
+      } else if (!this.getActiveSlot()) {
+        const remaining = this.slotsIn(this.currentCwd)[0] ?? this.allSlots()[0];
+        if (remaining) this.switchWorkspace(remaining.cwd);
+      }
     }
     this.host.onSlotRemoved?.(slot);
     void (async () => {
@@ -423,7 +429,7 @@ export class SlotManager {
       this.reservedWindows.splice(this.reservedWindows.indexOf(reserved), 1);
       if (!this.getSlot(cwd, adapter, slotInstance)) {
         // The window never got a slot; a resident daemon left empty starts over.
-        this.mode = modeAfterWindowClosed(this.mode, this.windows().length, !this.host.isEphemeral());
+        this.mode = modeAfterWindowClosed(this.mode, this.windows(), !this.host.isEphemeral());
       }
     }
   }
@@ -496,7 +502,7 @@ export class SlotManager {
         // window; a worker ends with its window when it has one.
         boundToWindow: options.worker
           ? options.openVisible !== false
-          : !options.codexAttach && (options.boundToWindow === true || this.host.isEphemeral()),
+          : !options.codexAttach && (options.openVisible !== false || options.boundToWindow === true || this.host.isEphemeral()),
         codexAttach: options.codexAttach,
         worker: options.worker,
       });
@@ -600,6 +606,7 @@ export class SlotManager {
       }
     }
 
+    if (visibleConnected && !slot.attached && !slot.worker) slot.boundToWindow = true;
     let visibleReady = visibleConnected;
     if (adapter === "codex" && visibleConnected && !sharedSessionBeforeVisible) {
       const visibleThreadId = await waitForCodexVisibleThread({

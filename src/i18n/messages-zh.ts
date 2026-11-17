@@ -102,6 +102,10 @@ export const messages: Record<string, string> = {
   "daemon.welcome.single": "{channel} 桥接就绪。\n工作目录: {cwd}\n\n命令: /stop, /status, /model, /plan, /resume, /new, /confirm, /deny, /answer, /auto, /lang [zh|en]",
   "daemon.welcome.service": "{channel} 服务就绪。\n工作目录: {cwd}\n\n发送 /codex、/claude、/opencode 或 /pi 在该目录打开一个 CLI；也可以在本机任意目录运行 {launcher} 命令。\n命令: /stop, /status, /model, /plan, /resume, /new, /confirm, /deny, /answer, /auto, /lang [zh|en]",
   "daemon.noActiveAdapter": "未选择活跃终端。发送 /codex、/claude、/opencode 或 /pi 启动一个。",
+  "daemon.pin.set": "已固定到 {source}。\n工作目录：{cwd}\n未指定目标的消息发到此窗口；/1、/2 等显式指定目标的命令仍可使用。发送 /unpin 恢复跟随活动窗口。",
+  "daemon.pin.cleared": "已取消固定，消息恢复跟随活动窗口。",
+  "daemon.pin.closed": "固定的窗口已关闭，已取消固定，本条消息未转发。请选择窗口后重新发送。",
+  "daemon.pin.usage": "发送 /pin 固定当前窗口，或 /unpin 恢复跟随活动窗口。两个命令均不接受参数。",
   "daemon.switchResult.new": "已启动新的可见 CLI。",
   "daemon.switchResult.reused": "已复用现有的可见 CLI。",
 

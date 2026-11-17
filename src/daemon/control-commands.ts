@@ -163,13 +163,16 @@ export class DaemonControlCommands {
           let resumeSlot = activeSlot;
           if (activeSlot.adapter === "codex" && command.target) {
             const visible = await this.host.ensureSlot("codex", {
+              cwd: activeSlot.cwd,
+              instance: activeSlot.instance,
+              activate: false,
               openVisible: true,
               reuseExistingVisible: true,
             });
             if (!visible.activated) {
               throw new Error(formatDaemonSwitchResultDetail(visible));
             }
-            resumeSlot = this.host.slotManager.getSlot(activeSlot.cwd, "codex") ?? activeSlot;
+            resumeSlot = this.host.slotManager.getSlot(activeSlot.cwd, "codex", activeSlot.instance) ?? activeSlot;
           }
           if (command.target) {
             await resumeSlot.outputBatcher.flushNow();
