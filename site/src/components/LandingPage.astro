@@ -50,7 +50,7 @@ const copy = isZh ? {
   architecture: {
     eyebrow: "两层架构",
     title: "通道负责抵达，Bridge 负责保持原生。",
-    lede: "消息进入当前工作区后，由 daemon 或直接启动器交给对应 adapter。每个 adapter 使用该 CLI 的原生通信方式，而不是把它替换成另一个聊天机器人。Codex 常规桥接兼容 0.149.x–0.161.x；把当前会话接入通道需要 0.162+ 的共享 daemon。",
+    lede: "消息进入当前工作区后，由 daemon 或直接启动器交给对应 adapter。每个 adapter 使用该 CLI 的原生通信方式，而不是把它替换成另一个聊天机器人。Codex 的兼容性以所需协议能力的检查结果为准；接入已有会话需要 0.162 或更高版本提供的共享 daemon。",
     channel: "Channel",
     orchestration: "Workspace bridge",
     native: "Native CLI",
@@ -127,7 +127,7 @@ const copy = isZh ? {
   architecture: {
     eyebrow: "Two-layer architecture",
     title: "Channels provide reach. The Bridge preserves native behavior.",
-    lede: "Messages enter the current workspace through a daemon or direct launcher, then reach the matching adapter. Each adapter uses the CLI's native communication path instead of replacing it with another hosted chatbot. Regular Codex bridging supports 0.149.x–0.161.x; attaching the current conversation needs Codex 0.162+ with its shared daemon.",
+    lede: "Messages enter the current workspace through a daemon or direct launcher, then reach the matching adapter. Each adapter uses the CLI's native communication path instead of replacing it with another hosted chatbot. Codex compatibility is verified against the protocol capabilities required by the bridge. Attaching an existing session requires the shared daemon available in Codex 0.162 or later.",
     channel: "Channel",
     orchestration: "Workspace bridge",
     native: "Native CLI",

@@ -76,7 +76,7 @@ stateDiagram-v2
 
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0` (the official LTS release is recommended).
 - Install at least one of these local CLIs and keep it up to date:
-  - [Codex](https://github.com/openai/codex) (managed-client workflow validated with `0.149.x`–`0.161.x`; current-session attach requires the `0.162+` shared daemon).
+  - [Codex](https://github.com/openai/codex) (compatibility is verified against the protocol capabilities required by the bridge; attaching an existing session requires the `0.162+` shared daemon).
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode) (supports both `1.18.x` and `2.0.x`).
   - [Pi](https://github.com/earendil-works/pi) (connects through a native TUI extension; the `pi` command must be available locally).
@@ -428,7 +428,7 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/all <prompt>` | Daemon (several CLIs, several windows, several directories) | Send the same prompt to every started window in the current directory; unstarted CLIs are skipped, and the whole dispatch is canceled if any window is busy |
 | `/open` | Daemon (single bridge, several windows, several directories) | Open another window of the current CLI in the current directory |
 | `/1`, `/2`, … (optional prompt) | Daemon (several windows, several directories) | Switch to that numbered window of the current CLI; an optional prompt is forwarded after the switch |
-| `/pin`, `/unpin` | Direct launch, daemon | `/pin` fixes one default window per bridge for messages and controls without an explicit destination. `/2 <prompt>`, `/codex <prompt>`, and similar commands still reach the specified window; subsequent plain messages keep using the pin. Switching windows, opening windows, and `/all` remain available. Repeating `/pin` keeps the pin; `/unpin` follows the active window again. Pins do not survive daemon restart. If the pinned window closes, the next message without a destination clears the pin with a notice and is not forwarded; resend it after selecting a window |
+| `/pin`, `/unpin` | Direct launch, daemon | Set the current window as the default target, or follow the active window again. Commands such as `/2 <prompt>`, window switching, and broadcasts remain available. Pins last only for the current daemon session |
 | `/status` | Direct launch, daemon | Show bridge, daemon, adapter, and workspace state |
 | `/lang`, `/lang zh`, `/lang en` | Direct launch, daemon | View or switch Chinese/English bridge messages; applies immediately and saves the preference. `/language` is an alias |
 | `/model`, `/model <number>` | Codex, Claude Code, OpenCode, Pi | List and switch models for the current session; numbered lists expire after 5 minutes |
@@ -451,6 +451,8 @@ These commands work with WeChat, WeCom, and Telegram. Ordinary text is sent to t
 | `/daemon-stop` | Daemon | Stop the persistent daemon |
 | `/pair <code>` | WeCom / Telegram setup | Pair the operator after `wecom-setup` or `telegram-setup` prompts you |
 
+`/pin` sets only the default destination. Plain messages and controls without an explicit destination keep using that window, while `/2 <prompt>`, `/codex <prompt>`, and similar commands use their specified targets. Each bridge can pin one window, and repeating `/pin` preserves an existing valid pin. If the pinned window closes, the next message without a destination is not forwarded: the bridge clears the pin and asks you to select a window and resend the message. A new window does not inherit the old pin, even if it reuses the same number.
+
 Send `/lang en` in the connected chat for English bridge messages, or `/lang zh` for Chinese. For startup environment-variable precedence, see [interface language](docs/configuration.md#界面语言) (Chinese).
 
 - **Answering questions:** questions arrive with option descriptions and text previews, and the bridge never answers or preselects for you. While one waits, just reply: a number or exact option label selects it, several are separated by commas or spaces (such as `1 3`), a number followed by text (such as `2 not yet`) selects that option with a note, and any other text is your own answer; questions that allow only options ask you to answer again. Several questions arrive one at a time (marked 1/3) and are submitted together, or answer all at once with `/answer 1=Yes; 2=1,2`. When Claude's hook times out or disconnects, the remote question is cleared; answer in the local terminal or use `/stop`.
@@ -471,6 +473,23 @@ Telegram tasks also keep the native typing indicator active, and long replies ar
 ### Daemon IPC for external integrations
 
 `wechat-daemon`, `wecom-daemon`, and `telegram-daemon` expose a local IPC interface with token authentication. External applications such as web panels, scripts, or custom bot frontends can dispatch input using the same rules as chat messages or send through the channel. Busy dispatches are rejected, pending approvals and questions pause dispatch, and input during a local Codex task is queued automatically. Replies retain their conversation target, and rejected or failed input rolls back state. See [development documentation](docs/development.md) (Chinese) for the interface.
+
+### CLI collaboration and task delegation
+
+Version 1.5.0 adds collaboration between CLIs managed by the same daemon. For example, Codex can ask Claude Code to review a change, or Claude Code can start an independent Codex session for another task. Delegated tasks run in the background, queue while the receiving CLI is busy, and return results to the caller. The caller can also check status, wait for results, or interrupt a task. Task exchanges and approval requests appear in the chat channel.
+
+The `cli-bridge` MCP tools are configured automatically for Claude Code launched by the bridge and for Codex using an app-server managed by the bridge. Attaching an existing Codex session through `$codex-bridge` does not automatically change that session's MCP configuration. OpenCode and Pi can receive tasks, but tools for initiating calls are not configured automatically for these CLIs.
+
+| MCP tools | Purpose |
+| --- | --- |
+| `list_agents`, `send_to_agent` | Find available CLIs and delegate a task to a specific window |
+| `get_agent_call`, `interrupt_agent_call` | Check task status, wait for results, or interrupt a task |
+| `open_agent`, `close_agent`, `new_agent_session` | Open or close a separate worker, or start a fresh session in an idle worker |
+| `resolve_agent_approval` | Respond to permission requests from tasks you delegated; high-risk requests require the operator's confirmation |
+
+Workers provide a fresh session without changing the bridge mode or default target of existing windows. Each caller can keep up to four workers open. Codex workers run in the background by default, with an option to open a visible window; other CLI workers use visible terminal windows. Only the CLI that created a worker can close it or reset its session, and its workers close when that CLI exits.
+
+Collaboration tools do not require an additional MCP approval by default; the receiving CLI's own permission settings still apply. Callers can confirm requests permitted by the shared automatic approval rule, while high-risk requests require the operator. Pi permission requests always go to the operator. Set `CLI_BRIDGE_STRICT_APPROVAL=1` to make collaboration tool calls follow the CLI's approval settings, or `CLI_BRIDGE_AGENT_BUS=0` to disable automatic tool configuration. Restart the daemon and affected CLIs after upgrading. See [configuration](docs/configuration.md) for details.
 
 ### 5.2 Session restoration and local synchronization
 

@@ -1,50 +1,57 @@
-# Codex 通道连接 skill(实验性)
+# Codex 会话接入（实验性）
 
 ## 中文
 
-`codex-bridge` 是 Codex 专用的操作入口,源码位于 `skills/codex-bridge/`。它把**当前正在运行的 Codex 会话**接入消息通道(微信 / 企业微信 / Telegram):Bridge 以第二客户端身份加入 Codex 共享 app-server daemon,重新订阅(rejoin)当前会话的活线程——通道消息注入同一线程,回复与审批回传通道,本地 Codex 界面不受影响。Claude Code、OpenCode 和 Pi 继续使用各自现有的启动器,不属于这个 skill 的范围。
+`codex-bridge` skill 用于将**正在运行的 Codex 会话**接入微信、企业微信或 Telegram。桥接以额外客户端的身份连接 Codex 共享 app-server daemon，订阅当前线程的历史与实时事件。通道消息会作为新一轮输入提交到同一线程，回复和审批请求返回聊天通道，本地终端仍可正常使用。
 
-安装 skill:
+该 skill 仅适用于 Codex，源码位于 `skills/codex-bridge/`。Claude Code、OpenCode 和 Pi 继续使用各自的启动命令。
+
+安装 skill：
 
 ```bash
 node "$(npm root -g)/cli-wechat-bridge/skills/codex-bridge/scripts/install.mjs"
 ```
 
-源码开发时,可直接运行 `node skills/codex-bridge/scripts/install.mjs`。安装目录为 `${CODEX_HOME:-~/.codex}/skills/codex-bridge`。
+从源码运行时，可直接执行 `node skills/codex-bridge/scripts/install.mjs`。skill 将安装到 `${CODEX_HOME:-~/.codex}/skills/codex-bridge`。
 
 ### 使用
 
-在 Codex TUI 会话中调用 `$codex-bridge`,并说明要接入的通道。skill 会在项目目录替你运行下面的命令;一般不需要手动运行,这里列出供排查参考:
+在 Codex 终端会话中调用 `$codex-bridge`，并说明需要接入的消息通道。skill 会在项目目录中执行以下命令，通常无需手动运行；命令列在此处供排查问题时参考：
 
 ```bash
 <channel>-codex --attach-current-session           # 前缀选择通道:wechat | wecom | telegram
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-命令把当前会话作为一个无窗口的 codex 终端加入 bridge daemon(没有运行中的 daemon 时在后台自动启动),并等待绑定完成,成功输出 `Attached Codex daemon thread <id>`。附加的会话在桥接模式中视同一个 codex 窗口:旁边只有一个 codex 窗口时成为 `codex-2`,旁边是其他 CLI 时桥接升级为多 CLI 模式(此时同一目录已有 codex 会拒绝),在其他目录附加则升级为多目录模式;要换到同一目录的另一个线程,在通道内使用 `/resume`。停止:在通道内发送 `/daemon-stop`(会停止整个 bridge daemon)。
+命令会将当前会话作为一个无需另开窗口的 Codex 实例加入 bridge daemon；若 daemon 尚未运行，会自动在后台启动。绑定成功后输出 `Attached Codex daemon thread <id>`。
 
-### 工作原理(已实测验证)
+接入的会话按一个 Codex 窗口参与桥接模式判断：同目录已有一个 Codex 窗口时，会获得 `codex-2` 等实例编号；已有其他类型的 CLI 时，进入多 CLI 模式，并遵循该模式下同类型只允许一个实例的规则；在另一个目录接入时，进入多目录模式。切换到同目录的其他线程可使用 `/resume`。如需停止整个 bridge daemon，在聊天通道发送 `/daemon-stop`。
 
-- Codex >= 0.162 默认把 app-server 托管在共享后台 daemon(`~/.codex/app-server-control/app-server-control.sock`,WebSocket JSON-RPC,同用户进程可连)。
-- Bridge 通过该 socket 接入,用 `thread/list`(cwd 过滤 + `status != notLoaded`)发现活会话,再以 `thread/resume` **rejoin** 运行中的线程:拿到历史与实时事件订阅,不夺走原客户端的 rollout writer 锁。
-- 通道消息经 `turn/start` 注入同一线程;参数**不带** approvalPolicy/sandbox 覆盖,完全继承该会话自身的设置,避免改写共享线程配置。审批、`request_user_input`、模型切换、中断沿用现有 bridge 逻辑。
+### 工作原理
 
-### 边界(必须如实报告)
+- Codex 0.162 及更高版本默认通过共享后台 daemon 托管 app-server。连接入口为 `~/.codex/app-server-control/app-server-control.sock`，使用 WebSocket JSON-RPC，同一用户下的进程可以连接。
+- 桥接通过该 socket 连接，以 `thread/list` 查找当前工作目录中已加载的会话，再通过 `thread/resume` 加入运行中的线程，获取历史记录和实时事件，不接管原客户端的 rollout 写入锁。
+- 通道输入通过 `turn/start` 提交到同一线程，不覆盖 `approvalPolicy` 或 `sandbox`，沿用会话自身的设置。审批、`request_user_input`、模型切换和中断操作使用桥接已有的处理流程。
 
-- **内嵌会话无法接入**:桌面 App(Codex Desktop)、`--no-daemon`、`--oss`、`--profile` 启动的会话内嵌 app-server,不在共享 daemon 里;对它们 resume 会得到 `thread ... already has an active writer`。
-- codex < 0.162 没有共享 daemon socket,attach 模式不可用;原有 wechat-codex 自建 app-server 流程(验证范围 0.149–0.161)不受影响。
-- 共享 daemon 的环境变量在 daemon 启动时固定;daemon 重启期间 Bridge 会自动重连并 rejoin。
-- 已有 `wechat-daemon`/`wecom-daemon`/`telegram-daemon` 在运行时,attach 会加入它,在 `/cd` 列表(多目录模式)中显示为 `codex（附加）`;不同渠道的 daemon 在运行时需要先停止。
+### 适用范围与限制
 
-### 为什么桌面会话无法接入(实证)
+- **使用内嵌 app-server 的会话无法接入**：Codex Desktop，以及通过 `--no-daemon`、`--oss` 或 `--profile` 启动的此类会话，不属于共享 daemon。尝试恢复这些会话会得到 `thread ... already has an active writer` 错误。
+- Codex 0.162 之前的版本没有共享 daemon socket，无法使用附加模式。`wechat-codex` 自行启动 app-server 的常规流程不受此限制，其兼容性以所需协议能力的检查结果为准。
+- 共享 daemon 的环境变量在其启动时确定。daemon 重启后，桥接会尝试重新连接并加入线程。
+- 已有同通道的 `wechat-daemon`、`wecom-daemon` 或 `telegram-daemon` 运行时，会话会加入该服务，并在多目录模式的 `/cd` 列表中显示为 `codex（附加）`。若运行中的是其他通道的 daemon，需先将其停止。
+- 附加模式不会自动更改已有会话的 MCP 配置，因此不会自动为其配置 1.5.0 新增的 CLI 协作工具。
 
-桌面 App 的 Codex 后端是一个由 ChatGPT 主进程拉起的 `codex app-server` 子进程,启动时**不带 `--listen`**,即 stdio 模式:JSON-RPC 只在它与桌面 App 之间的私有管道中流转。该进程没有任何监听端口,也没有路径绑定的 Unix socket(桌面 App 唯一暴露的 `~/.codex/ipc/ipc.sock` 属于 IDE 上下文通道,仅提供 `/ide` 所需的打开文件与选区信息,不是控制面)。因此外部进程不存在可连接的接入面;它同时持有 rollout 文件的 writer 锁,共享 daemon 侧的 resume 必然失败。
+### 桌面会话的连接限制
 
-对比之下,终端 TUI 在 0.162+ 默认连接共享 daemon,天然具备多客户端接入能力。桌面会话若要支持附加,需要上游把桌面 App 迁移到共享 daemon(其 remote-management 流程正在朝此方向演进);届时本 bridge 的 attach 模式无需改动即可覆盖。"关闭桌面会话后由 bridge 冷 resume 接管该线程"的变通模式当前刻意未实现,以避免与"附加当前会话"的语义混淆。
+桌面应用的 Codex 后端以 `codex app-server` 子进程运行，启动参数不包含 `--listen`，使用标准输入输出（stdio）与宿主应用通信。JSON-RPC 消息只经过两者之间的私有管道，没有供桥接连接的监听端口或 Unix socket。`~/.codex/ipc/ipc.sock` 用于提供 IDE 上下文，例如已打开的文件和选区，并不是线程控制接口。
+
+桌面进程同时持有 rollout 文件的写入锁，因此无法通过共享 daemon 恢复并接管该线程。终端会话在 Codex 0.162 及更高版本默认连接共享 daemon，才具备此处所需的多客户端连接条件。桌面会话能否接入，取决于上游是否提供可供外部客户端连接的控制接口。当前桥接不提供“关闭桌面会话后，再由桥接恢复并接管线程”的替代流程。
 
 ## English
 
-`codex-bridge` is a Codex-only entry point, maintained in `skills/codex-bridge/`. It attaches the **currently running Codex session** to a messaging channel (WeChat, WeCom, or Telegram): the bridge joins the shared Codex app-server daemon as a second client and rejoins the session's live thread — channel messages become turns in the same thread, replies and approvals return to the channel, and the local Codex session keeps working unchanged. Claude Code, OpenCode, and Pi retain their existing launchers and are outside this skill's scope.
+The `codex-bridge` skill connects a **running Codex session** to WeChat, WeCom, or Telegram. The bridge joins the shared Codex app-server daemon as an additional client and subscribes to the current thread's history and live events. Messages from the channel start turns in that same thread, while replies and approval requests return to the chat. The local terminal remains available.
+
+This skill applies only to Codex and is maintained in `skills/codex-bridge/`. Claude Code, OpenCode, and Pi continue to use their respective launch commands.
 
 Install the skill:
 
@@ -63,23 +70,26 @@ Invoke `$codex-bridge` inside a Codex TUI session and name the channel. The skil
 <channel>-codex --attach-current-session --codex-thread-id <thread-id>
 ```
 
-The command adds the session to the bridge daemon as a windowless codex terminal (starting the daemon in the background when none runs) and waits for the bind; success prints `Attached Codex daemon thread <id>`. The attached session counts as a codex window for the bridge mode: next to a single codex window it becomes `codex-2`, next to another CLI the bridge moves to multi-CLI mode (where a directory that already has codex refuses it), and in another directory to multi-directory mode; to move to another thread in the same directory, use `/resume` from the channel. Stop with `/daemon-stop` from the channel, which stops the whole bridge daemon.
+The command adds the session to the bridge daemon as a Codex instance without opening another window. If no daemon is running, it starts one in the background. Successful attachment prints `Attached Codex daemon thread <id>`.
 
-### How it works (verified live)
+The session counts as a Codex window when determining the bridge mode. It receives an instance number such as `codex-2` when another Codex window is already open in the same directory. Alongside another CLI type, it uses multi-CLI mode and follows that mode's one-instance-per-type rule. Attaching in another directory enables multi-workspace mode. Use `/resume` to switch to another thread in the same directory. To stop the entire bridge daemon, send `/daemon-stop` from the chat.
+
+### How it works
 
 - Codex >= 0.162 hosts its app-server in a shared background daemon by default (`~/.codex/app-server-control/app-server-control.sock`, WebSocket JSON-RPC, same-user connections).
 - The bridge connects over that socket, discovers live sessions via `thread/list` (cwd filter + `status != notLoaded`), and rejoins the running thread with `thread/resume`: history plus a live event subscription, without taking the rollout writer lock from the owning client.
 - Channel input is injected with `turn/start` on the same thread; the request **omits** approvalPolicy/sandbox overrides and fully inherits the session's own settings, so the shared thread configuration is never rewritten. Approvals, `request_user_input`, model switching, and interrupts reuse the existing bridge logic.
 
-### Boundaries (report honestly)
+### Scope and limitations
 
 - **Embedded sessions cannot be attached**: desktop-app (Codex Desktop), `--no-daemon`, `--oss`, and `--profile` sessions run an embedded app-server outside the shared daemon; resuming them fails with `thread ... already has an active writer`.
-- codex < 0.162 has no shared daemon socket, so attach mode is unavailable; the existing wechat-codex owned-app-server flow (validated 0.149–0.161) is unaffected.
-- The daemon's environment is fixed at daemon start; the bridge reconnects and rejoins automatically across daemon restarts.
+- Codex versions before 0.162 do not provide the shared daemon socket required by attach mode. This does not restrict the standard `wechat-codex` workflow, which starts its own app-server; compatibility for that workflow is verified against the required protocol capabilities.
+- The shared daemon inherits its environment when it starts. After a daemon restart, the bridge attempts to reconnect and rejoin the thread.
 - When a `wechat-daemon`/`wecom-daemon`/`telegram-daemon` is running, attach joins it and appears as `codex (attached)` in the `/cd` list (multi-directory mode); a daemon of another channel must be stopped first.
+- Attach mode does not automatically change the existing session's MCP configuration, so the CLI collaboration tools introduced in 1.5.0 are not configured automatically.
 
-### Why desktop sessions cannot be attached (verified)
+### Desktop session connection limits
 
 The desktop app's Codex backend is a `codex app-server` child spawned by the ChatGPT host process **without `--listen`**, i.e. stdio mode: JSON-RPC flows only through private pipes between it and the desktop app. That process exposes no listening port and no path-bound Unix socket (the desktop's sole `~/.codex/ipc/ipc.sock` is the IDE-context channel serving `/ide` with open files and selections — not a control surface). There is therefore no attach surface for an external process, and since it also holds the rollout writer lock, resumes through the shared daemon necessarily fail.
 
-Terminal TUIs, by contrast, attach to the shared daemon by default on 0.162+, which is what makes multi-client access possible. Supporting desktop attach requires upstream moving the desktop app onto the shared daemon (the direction its remote-management flow is already taking); when that happens this bridge's attach mode covers it with no changes. A workaround mode — cold-resuming the thread under the bridge after the desktop session closes — is deliberately not implemented, to keep it from being confused with attaching the live session.
+Terminal sessions use the shared daemon by default in Codex 0.162 and later, providing the multi-client connection required here. Desktop attachment depends on upstream exposing an interface that external clients can connect to. The bridge does not currently offer a fallback that closes the desktop session and then resumes its thread under bridge control.

@@ -76,7 +76,7 @@ stateDiagram-v2
 
 - [Node.js](https://nodejs.org/en/download) `>= 22.13.0`（建议直接安装官网 LTS 版本）
 - 已安装以下任意一种本地 CLI，并尽量保持最新版本：
-  - [Codex](https://github.com/openai/codex)（常规桥接已验证 `0.149.x`–`0.161.x`；当前会话 attach 需 `0.162+` 共享 daemon）
+  - [Codex](https://github.com/openai/codex)（兼容性以所需协议能力的检查结果为准；接入已有会话需要 `0.162+` 的共享 daemon）
   - [Claude Code](https://code.claude.com/docs/en/overview)
   - [OpenCode](https://github.com/anomalyco/opencode)（同时支持 `1.18.x` 与 `2.0.x`）
   - [Pi](https://github.com/earendil-works/pi)（通过原生 TUI extension 接入；需要本机可执行 `pi` 命令）
@@ -428,7 +428,7 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/all <prompt>` | daemon（多 CLI、同类型多实例、多目录模式） | 将同一段提示词同时下发给当前目录全部已启动的窗口；未启动的 CLI 列为跳过，任一窗口忙碌时整条取消 |
 | `/open` | daemon（单桥接、同类型多实例、多目录模式） | 在当前目录再打开一个当前 CLI 的窗口 |
 | `/1`、`/2` …（可带 prompt） | daemon（同类型多实例、多目录模式） | 切换到当前 CLI 的对应编号窗口；可选 prompt 在切换成功后转发 |
-| `/pin`、`/unpin` | 直接启动、daemon | `/pin` 固定未指定目标的消息和控制命令的默认窗口，每个桥接只固定一个；`/2 内容`、`/codex 内容` 等仍发送到指定窗口，之后普通消息继续发到固定窗口。切换窗口、新开窗口和 `/all` 照常可用，重复 `/pin` 保持原固定目标；`/unpin` 恢复跟随活动窗口。固定状态不跨 daemon 重启；固定窗口关闭后，下一条未指定目标的消息会提示取消固定且不转发，需要重新发送 |
+| `/pin`、`/unpin` | 直接启动、daemon | 将当前窗口设为默认目标，或恢复跟随活动窗口。`/2 内容` 等指定目标的命令、窗口切换和广播照常可用；固定状态仅在本次 daemon 运行期间有效 |
 | `/status` | 直接启动、daemon | 查看 bridge、daemon、适配器和工作区状态 |
 | `/lang`、`/lang zh`、`/lang en` | 直接启动、daemon | 查看或切换中文 / English 桥接提示；立即生效并保存偏好，`/language` 为别名 |
 | `/model`、`/model <编号>` | Codex、Claude Code、OpenCode、Pi | 列出模型并切换当前会话的模型；编号列表 5 分钟内有效 |
@@ -451,6 +451,8 @@ OpenCode 模式下，微信、企业微信和 Telegram 侧都支持 `/new` 或 `
 | `/daemon-stop` | daemon | 停止当前常驻 daemon |
 | `/pair <code>` | 企业微信、Telegram 配置 | 在 `wecom-setup` 或 `telegram-setup` 提示后完成操作者配对 |
 
+`/pin` 只设置默认目标。固定后，普通消息和未指定目标的控制命令持续发送到该窗口；`/2 内容`、`/codex 内容` 等命令仍发送到各自指定的目标。每个桥接最多固定一个窗口，重复 `/pin` 保持已有的有效目标。固定窗口关闭后，下一条未指定目标的消息不会被转发，桥接会清除固定状态并提示重新选择窗口、发送消息。新窗口即使复用了原编号，也不会继承固定状态。
+
 语言切换及启动环境变量的优先级见 [界面语言](docs/configuration.md#界面语言)。
 
 - **回答问题**：提问会转发题目、选项说明和文字预览，bridge 不会替你作答或预选。有问题等待时直接回复即可：数字或选项全名选择对应选项，多选用逗号、顿号或空格分隔（如 `1 3`）；"编号 + 文字"（如 `2 先别部署`）选择该项并附说明；其他文字作为你自己的答案，题目不允许自定义时会提示重答。多道题逐题推送（标出 1/3），全部答完一起提交；也可以 `/answer 1=Yes; 2=1,2` 一次答完。Claude 的 hook 超时或断开后，远程问题会清除，需在本地终端作答或使用 `/stop`。
@@ -471,6 +473,23 @@ Telegram 任务运行期间也会保持原生的「正在输入」提示，较�
 ### daemon IPC（外部程序接入）
 
 `wechat-daemon`、`wecom-daemon` 与 `telegram-daemon` 在本地开放带 token 认证的 IPC 接口，外部程序（网页面板、脚本、自建机器人前端等）可以将文本按与聊天消息完全一致的处理规则下发给任意 CLI，或借用通道发送消息：忙碌时拒绝、有待审批或结构化输入时等待、Codex 本地任务期间自动排队，回复始终发回所属会话，输入被拒绝或失败时自动回滚状态。接口语义见 [docs/development.md](docs/development.md)。
+
+### CLI 协作与任务委派
+
+1.5.0 新增同一 daemon 内的 CLI 协作。例如，Codex 可以请求 Claude Code 审查代码，Claude Code 也可以启动独立的 Codex 工作会话处理另一项任务。委派的任务在后台执行，接收方忙碌时进入队列，完成后将结果返回发起方。发起方也可以查询状态、等待结果或中断任务，任务往来和审批请求会同步到聊天通道。
+
+通过桥接启动的 Claude Code，以及使用桥接所管理 app-server 的 Codex，会自动配置 `cli-bridge` MCP 工具。通过 `$codex-bridge` 接入已有 Codex 会话时，不会自动更改该会话的 MCP 配置。OpenCode 和 Pi 可以接收任务，目前不会自动配置用于发起调用的工具。
+
+| MCP 工具 | 用途 |
+| --- | --- |
+| `list_agents`、`send_to_agent` | 查看可用 CLI，向指定窗口委派任务 |
+| `get_agent_call`、`interrupt_agent_call` | 查询任务状态、等待结果或中断任务 |
+| `open_agent`、`close_agent`、`new_agent_session` | 创建、关闭独立工作会话（worker），或重置空闲 worker 的会话 |
+| `resolve_agent_approval` | 处理自己委派的任务所产生的权限请求；高风险请求必须由操作者批准 |
+
+worker 使用全新的会话上下文，不改变已有窗口的桥接模式或默认目标。每个发起方最多同时保留 4 个 worker。Codex worker 默认在后台运行，也可以要求打开可见窗口；其他 CLI 的 worker 使用可见终端窗口。只有创建 worker 的 CLI 可以关闭或重置它，该 CLI 退出时，所属 worker 也会关闭。
+
+默认情况下，使用协作工具无需额外确认 MCP 调用，接收方的 CLI 权限设置仍然生效。发起方可以批准符合统一自动放行规则的请求，高风险请求仍需你确认；Pi 的审批均由操作者处理。设置 `CLI_BRIDGE_STRICT_APPROVAL=1` 可让协作工具调用也遵循 CLI 的审批设置，设置 `CLI_BRIDGE_AGENT_BUS=0` 则关闭自动工具配置。升级后需重启 daemon 和相关 CLI，配置方法见[运行配置](docs/configuration.md)。
 
 ### 5.2 会话恢复与本地同步
 
